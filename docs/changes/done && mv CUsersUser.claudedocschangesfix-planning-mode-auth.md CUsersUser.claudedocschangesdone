@@ -1,0 +1,87 @@
+# Update SessionStart hook to surface latest handoff doc
+
+**Status:** PENDING — execute in a DeepSeek (coding-mode) session.
+
+## 1. Scope
+
+Update `backend-session-start.ps1` so that when launching in PLANNING mode it automatically
+finds the latest `docs/handoff/*.md` in the current project directory and injects its contents
+into the session context. This way planning-mode Claude immediately knows what was built last
+session without the user having to point to the file manually.
+
+## 2. Files to change
+
+- `C:/Users/User/.claude/hooks/backend-session-start.ps1` — add handoff doc lookup to the planning-mode branch.
+
+## 3. Exact changes
+
+Replace the current planning-mode `$policy` block with the version below. The new code:
+1. Looks for `docs/handoff/*.md` in the current working directory.
+2. If found, reads the most recently modified one.
+3. Appends its contents to the context injected into the session.
+
+```powershell
+# Replace the existing planning-mode block (the else branch) with:
+
+} else {
+    $mode = 'PLANNING'
+    $backend = 'Anthropic (Opus or other Claude model)'
+    $policy = @"
+Mode: PLANNING (Anthropic backend)
+You MUST NOT: edit source code files. The PreToolUse hook will hard-block Write/Edit on non-.md files.
+You SHOULD: produce technical change specifications as Markdown files under docs/changes/<short-name>.md. Each spec must include:
+  1. Scope: one-paragraph summary of the change.
+  2. Files to change: full paths.
+  3. Exact changes: code-level detail (signatures, new functions, modifications). Pseudocode or full snippets.
+  4. Acceptance criteria: how to verify it works.
+  5. Commands to run: build, test, lint.
+  6. Risks / open questions.
+A later DeepSeek session will execute these specs.
+
+At the START of this session:
+  - Summarise the latest handoff doc (injected below) back to the user.
+  - List any pending specs in docs/changes/ and ask which to focus on.
+"@
+
+    # Look for the latest handoff doc in the current project
+    $handoffDir = Join-Path (Get-Location) 'docs/handoff'
+    $handoffContent = ''
+    if (Test-Path $handoffDir) {
+        $latest = Get-ChildItem $handoffDir -Filter '*.md' | Sort-Object LastWriteTime -Descending | Select-Object -First 1
+        if ($latest) {
+            $handoffContent = "`n`n---`n## Latest handoff doc: $($latest.Name)`n`n" + (Get-Content $latest.FullName -Raw)
+        }
+    }
+    if (-not $handoffContent) {
+        $handoffContent = "`n`n---`n## No handoff doc found`nThis appears to be a new project or the first planning session. No prior build context available."
+    }
+}
+```
+
+The final `$ctx` line stays the same:
+```powershell
+$ctx = "## Active LLM backend: $backend`n## ANTHROPIC_BASE_URL: $url`n`n$policy$handoffContent"
+```
+
+Make sure `$handoffContent` is declared before the if/else so it's in scope for both branches (set it to `''` at the top of the script).
+
+## 4. Acceptance criteria
+
+1. In a project that has `docs/handoff/2024-01-15.md`, launch `planning-mode`. The SessionStart context injected should include the contents of that file.
+2. In a project with no `docs/handoff/` folder, launch `planning-mode`. The context should say "No handoff doc found."
+3. In a coding-mode session, the handoff lookup does not run (only planning-mode branch executes it).
+
+## 5. Commands to run
+
+After editing the script, test by pipe-testing (simulating planning mode):
+```powershell
+# From a directory that has docs/handoff/*.md:
+echo '{}' | powershell.exe -NoProfile -ExecutionPolicy Bypass -File 'C:/Users/User/.claude/hooks/backend-session-start.ps1' | python -c "import sys,json; d=json.load(sys.stdin); print(d['hookSpecificOutput']['additionalContext'])"
+```
+
+Verify the handoff doc contents appear in the output.
+
+## 6. Risks / open questions
+
+- `Get-Location` inside the hook returns the CWD when the hook fires, which should be the project directory. Verify this is true for Claude Code's SessionStart hook.
+- If the handoff file is very large, it will bloat the context. For now inject the full file; if this becomes a problem, truncate to the last 200 lines.

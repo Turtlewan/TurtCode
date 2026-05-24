@@ -1,0 +1,203 @@
+# CLAUDE.md
+
+Behavioral guidelines to reduce common LLM coding mistakes. Merge with project-specific instructions as needed.
+
+**Tradeoff:** These guidelines bias toward caution over speed. For trivial tasks, use judgment.
+
+## 1. Think Before Coding
+
+**Don't assume. Don't hide confusion. Surface tradeoffs.**
+
+Before implementing:
+- State your assumptions explicitly. If uncertain, ask.
+- If multiple interpretations exist, present them - don't pick silently.
+- If a simpler approach exists, say so. Push back when warranted.
+- If something is unclear, stop. Name what's confusing. Ask.
+
+## 2. Simplicity First
+
+**Minimum code that solves the problem. Nothing speculative.**
+
+- No features beyond what was asked.
+- No abstractions for single-use code.
+- No "flexibility" or "configurability" that wasn't requested.
+- No error handling for impossible scenarios.
+- If you write 200 lines and it could be 50, rewrite it.
+
+Ask yourself: "Would a senior engineer say this is overcomplicated?" If yes, simplify.
+
+## 3. Surgical Changes
+
+**Touch only what you must. Clean up only your own mess.**
+
+When editing existing code:
+- Don't "improve" adjacent code, comments, or formatting.
+- Don't refactor things that aren't broken.
+- Match existing style, even if you'd do it differently.
+- If you notice unrelated dead code, mention it - don't delete it.
+
+When your changes create orphans:
+- Remove imports/variables/functions that YOUR changes made unused.
+- Don't remove pre-existing dead code unless asked.
+
+The test: Every changed line should trace directly to the user's request.
+
+## 4. Goal-Driven Execution
+
+**Define success criteria. Loop until verified.**
+
+Transform tasks into verifiable goals:
+- "Add validation" → "Write tests for invalid inputs, then make them pass"
+- "Fix the bug" → "Write a test that reproduces it, then make it pass"
+- "Refactor X" → "Ensure tests pass before and after"
+
+For multi-step tasks, state a brief plan:
+
+```
+1. [Step] → verify: [check]
+2. [Step] → verify: [check]
+3. [Step] → verify: [check]
+```
+
+
+Strong success criteria let you loop independently. Weak criteria ("make it work") require constant clarification.
+
+---
+
+**These guidelines are working if:** fewer unnecessary changes in diffs, fewer rewrites due to overcomplication, and clarifying questions come before implementation rather than after mistakes.
+
+---
+
+## APEX — Default App Building System
+
+APEX is active in every session in every project. The orchestrator runs first, before anything else.
+
+### Session Start (all projects)
+
+1. Check for `docs/status.md` in the current project directory
+   - Not found → invoke `apex-init` to bootstrap the project, then continue
+   - Found → read it: extract token_profile, autonomy_level, specialists_default, In-Flight table
+
+2. Surface in-flight work
+   - If In-Flight table has rows: "You were in the middle of [what]. Continue or set aside?"
+   - If empty: proceed
+
+3. Detect mode from ANTHROPIC_BASE_URL
+   - Unset or api.anthropic.com → planning mode → route to `apex-plan`
+   - Contains "deepseek" → coding mode → route to `apex-code`
+
+4. State active context
+   - Always output: "Running at L{n} | Profile: {profile} | Mode: {planning/coding}"
+
+### Skill locations
+
+All APEX skills live at `~/.claude/skills/apex-*/SKILL.md`.
+Registry files at `~/.claude/registry/`.
+Templates at `~/.claude/skills/apex-orchestrate/templates/`.
+
+### Pause and resume
+
+Pause signals: "stopping for now", "pausing", "I'll continue later", "taking a break", "pause"
+Resume signals: "resuming", "picking up", "continue where we left off", "back", "resume build"
+
+On pause: run the pause workflow in apex-orchestrate for the current mode.
+On resume: read docs/status.md In-Flight table, surface what was in progress, continue.
+
+---
+
+## 5. Backend-Gated Workflow (DeepSeek vs Anthropic)
+
+This machine runs Claude Code against two backends, switched via `ANTHROPIC_BASE_URL`. Each backend has a distinct role. A SessionStart hook surfaces the active backend; a PreToolUse hook hard-blocks code edits when the backend is wrong.
+
+### The Loop
+
+```
+planning-mode ──► docs/changes/*.md ──► coding-mode ──► docs/handoff/*.md ──► planning-mode ──► ...
+```
+
+Every project should have this folder structure:
+
+```
+docs/
+  changes/        # Specs written by planning mode for coding mode to execute
+    <name>.md
+    done/         # Move completed specs here after coding mode finishes them
+  handoff/        # Summaries written by coding mode for planning mode to read
+    YYYY-MM-DD.md
+```
+
+---
+
+**DeepSeek backend → CODING mode**
+- `ANTHROPIC_BASE_URL` contains `deepseek`
+- `Write`/`Edit` on source files is allowed
+
+**At the start of a coding session:**
+1. Check `docs/changes/` for pending specs. List them and confirm with the user which to work on.
+2. Check `docs/handoff/` for the latest handoff doc to understand where things left off.
+
+**During the coding session:**
+- Implement specs from `docs/changes/`. After completing each one, move it to `docs/changes/done/`.
+
+**Commit discipline (per-spec):**
+After completing each spec and moving it to `done/`:
+1. Update the handoff doc's files table — add a `Status` column if not present. Mark every file changed by this spec as `🟡 uncommitted`.
+2. Prompt the user: "**[spec-name]** is done — [N] files changed. Commit now? I'll draft the message."
+3. If user agrees:
+   a. Run `git diff --stat` to confirm scope.
+   b. Stage the relevant files by name only (never `git add -A` or `git add .`).
+   c. Draft a commit message: `feat: <brief description matching spec title>` (or `fix:` / `chore:` as appropriate).
+   d. Show the message and ask for approval before committing.
+   e. Commit. Record the short SHA (`git rev-parse --short HEAD`).
+   f. Update the handoff doc: change `🟡 uncommitted` → `✅ <sha>` for those files.
+4. If user declines: leave as `🟡 uncommitted` and continue to the next spec.
+
+**Commit discipline (session end):**
+When the user signals they are finishing the session (any of: "done", "wrap up", "end session", "let's commit", "I'm done", "closing", "that's it for today"):
+1. Run `git status` to identify remaining uncommitted changes.
+2. If no uncommitted changes: confirm "All changes committed — ready to close." Then write the handoff doc.
+3. If uncommitted changes remain: list them and propose a single commit covering all remaining specs done this session. Offer a draft commit message.
+4. After the final commit: update any remaining `🟡 uncommitted` entries in the handoff doc to `✅ <sha>`.
+5. Then write / finalise the handoff doc as normal.
+
+**At the end of every coding session** (before the user closes the terminal), write a handoff doc to `docs/handoff/YYYY-MM-DD.md` (use today's date) containing:
+  1. **What was built** — summary of everything implemented this session.
+  2. **Files changed** — list of files modified/created. Use a table with three columns: `| File | What changed | Status |`. Status values: `🟡 uncommitted` (done, not yet committed) or `✅ <short-sha>` (committed). Add the Status column from the moment a spec completes; update it when the commit lands.
+  3. **Current state** — does it build? Do tests pass? Any known issues?
+  4. **Specs completed** — which `docs/changes/` specs were finished.
+  5. **What's next** — suggested next steps or open questions for planning mode.
+
+If the session ends without a handoff doc, the next planning session has no context. Always write it.
+
+---
+
+**Anthropic backend → PLANNING mode**
+- `ANTHROPIC_BASE_URL` is unset or points to `api.anthropic.com`
+- `Write`/`Edit` on non-`.md`/`.markdown`/`.txt` files is blocked by the harness
+
+**At the start of a planning session:**
+1. Read `docs/status.md` to understand the current project state — completed work, current state, pending specs, and open questions. If `docs/status.md` does not exist, fall back to reading the latest `docs/handoff/*.md` and scanning `docs/changes/*.md`.
+2. Summarise your understanding back to the user before planning anything new.
+
+**During the planning session:**
+- Produce technical change specs as `docs/changes/<short-name>.md` containing:
+  1. **Scope** — one-paragraph summary.
+  2. **Files to change** — full paths.
+  3. **Exact changes** — code-level detail: signatures, new functions, modifications. Pseudocode or full snippets.
+  4. **Acceptance criteria** — how to verify it works.
+  5. **Commands to run** — build, test, lint.
+  6. **Risks / open questions**.
+
+**At the end of every planning session** (before the user closes the terminal), update `docs/status.md`:
+1. Read the current `docs/status.md`. If it does not exist, create it using the initial template from the `## Status update` section of `~/.claude/agents/doc-writer.md` — leave the CODING block with empty Completed table and `unknown` state fields.
+2. Rewrite everything between `<!-- PLANNING:START -->` and `<!-- PLANNING:END -->` (inclusive of the markers):
+   - **Pending table:** scan `docs/changes/*.md` (not `done/`). List each spec with a one-line summary in alphabetical order by filename.
+   - **Open questions:** carry over unresolved questions from the previous PLANNING block, add new unresolved questions from this session, remove any that were resolved.
+3. Update the `_Last updated by planning mode:_` line (near the top of the file, above the CODING:START marker) to today's date.
+4. Write the file back.
+
+If `docs/status.md` exists but the `<!-- PLANNING:START -->` / `<!-- PLANNING:END -->` markers are missing (e.g. due to manual editing), append a fresh PLANNING block from the template to the end of the file instead of rewriting in place.
+
+**If the hook blocks you:** read the block reason, then write a `.md` spec instead. Don't retry the code edit.
+
+**If the user wants to override the policy for a one-off:** they can (a) restart with the other backend or (b) temporarily remove the PreToolUse hook from `~/.claude/settings.json`.
