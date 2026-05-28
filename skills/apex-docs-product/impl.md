@@ -1,7 +1,8 @@
 ---
 skill: apex-docs-product
+backend: deepseek
 version: 1.0.0
-last_updated: 2026-05-24
+last_updated: 2026-05-28
 sources:
   - Keep a Changelog — keepachangelog.com
 staleness_threshold: 30d

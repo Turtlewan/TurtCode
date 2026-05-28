@@ -1,7 +1,8 @@
 ---
 skill: apex-performance
+backend: claude
 version: 1.1.0
-last_updated: 2026-05-24
+last_updated: 2026-05-28
 sources:
   - Web Vitals — web.dev/vitals
   - Prisma Performance — prisma.io/docs/guides/performance-and-optimization

@@ -1,7 +1,8 @@
 ---
 skill: apex-handoff
+backend: claude
 version: 1.1.0
-last_updated: 2026-05-24
+last_updated: 2026-05-28
 sources:
   - APEX Design Specification 2026-05-24
   - Planning with Files (OthmanAdi) — github.com/OthmanAdi/planning-with-files

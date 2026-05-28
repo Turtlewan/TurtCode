@@ -1,7 +1,8 @@
 ---
 skill: apex-design-system
+backend: claude
 version: 1.0.0
-last_updated: 2026-05-24
+last_updated: 2026-05-28
 sources:
   - shadcn/ui — github.com/shadcn-ui/ui
   - Radix Primitives — github.com/radix-ui/primitives

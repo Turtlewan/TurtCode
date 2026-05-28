@@ -1,7 +1,8 @@
 ---
 skill: apex-accessibility
+backend: claude
 version: 1.1.0
-last_updated: 2026-05-24
+last_updated: 2026-05-28
 sources:
   - WCAG 2.2 — w3.org/TR/WCAG22
   - ARIA APG — w3.org/WAI/ARIA/apg

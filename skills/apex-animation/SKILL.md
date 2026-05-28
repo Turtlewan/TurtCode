@@ -1,7 +1,8 @@
 ---
 skill: apex-animation
+backend: claude
 version: 1.0.0
-last_updated: 2026-05-24
+last_updated: 2026-05-28
 sources:
   - Motion (motiondivision) — github.com/motiondivision/motion
   - GSAP — github.com/greensock/gsap

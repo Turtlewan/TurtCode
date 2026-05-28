@@ -1,7 +1,8 @@
 ---
 skill: apex-devops
+backend: deepseek
 version: 1.0.0
-last_updated: 2026-05-24
+last_updated: 2026-05-28
 sources:
   - Docker Best Practices — docs.docker.com/develop/dev-best-practices
   - GitHub Actions Docs — docs.github.com/en/actions

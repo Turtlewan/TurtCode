@@ -1,7 +1,8 @@
 ---
 skill: apex-data
+backend: deepseek
 version: 1.0.0
-last_updated: 2026-05-24
+last_updated: 2026-05-28
 sources:
   - Prisma Migrations — prisma.io/docs/guides/database/developing-with-prisma-migrate
 staleness_threshold: 30d

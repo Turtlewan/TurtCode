@@ -1,7 +1,8 @@
 ---
 skill: apex-architecture
+backend: claude
 version: 1.0.0
-last_updated: 2026-05-24
+last_updated: 2026-05-28
 sources:
   - Clean Architecture — Robert Martin
   - Twelve-Factor App — 12factor.net

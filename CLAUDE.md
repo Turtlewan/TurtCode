@@ -14,6 +14,10 @@ Before implementing:
 - If a simpler approach exists, say so. Push back when warranted.
 - If something is unclear, stop. Name what's confusing. Ask.
 
+> **Pipeline enforcement:** planning mode states interpretations explicitly before writing specs
+> (apex-plan); coding mode verifies every `## Assumptions` item against the codebase before
+> executing (apex-code Karpathy Pre-Flight step a).
+
 ## 2. Simplicity First
 
 **Minimum code that solves the problem. Nothing speculative.**
@@ -23,6 +27,10 @@ Before implementing:
 - No "flexibility" or "configurability" that wasn't requested.
 - No error handling for impossible scenarios.
 - If you write 200 lines and it could be 50, rewrite it.
+
+> **Pipeline enforcement:** planning mode runs a complexity challenge gate before finalising
+> any spec (apex-plan readiness gate); coding mode prefers simpler implementations if
+> acceptance criteria are still met (apex-code Karpathy Pre-Flight step b).
 
 Ask yourself: "Would a senior engineer say this is overcomplicated?" If yes, simplify.
 
@@ -42,6 +50,10 @@ When your changes create orphans:
 
 The test: Every changed line should trace directly to the user's request.
 
+> **Pipeline enforcement:** coding mode maintains a surgical scope lock for the entire build —
+> any file not listed in the spec's `## Files to Change` is a blocked action
+> (apex-code Karpathy Pre-Flight step c).
+
 ## 4. Goal-Driven Execution
 
 **Define success criteria. Loop until verified.**
@@ -58,6 +70,9 @@ For multi-step tasks, state a brief plan:
 2. [Step] → verify: [check]
 3. [Step] → verify: [check]
 ```
+
+> **Pipeline enforcement:** specs use step→verify acceptance criteria format; coding mode
+> states done-criteria before each task and verifies after (apex-code Karpathy Pre-Flight step d).
 
 
 Strong success criteria let you loop independently. Weak criteria ("make it work") require constant clarification.
@@ -181,12 +196,12 @@ If the session ends without a handoff doc, the next planning session has no cont
 
 **During the planning session:**
 - Produce technical change specs as `docs/changes/<short-name>.md` containing:
-  1. **Scope** — one-paragraph summary.
-  2. **Files to change** — full paths.
-  3. **Exact changes** — code-level detail: signatures, new functions, modifications. Pseudocode or full snippets.
-  4. **Acceptance criteria** — how to verify it works.
-  5. **Commands to run** — build, test, lint.
-  6. **Risks / open questions**.
+  1. **Files to change** — full paths and operations (create / modify / delete).
+  2. **Exact changes** — code-level detail: signatures, new functions, modifications. Pseudocode or full snippets.
+  3. **Acceptance criteria** — one runnable check per task.
+  4. **Commands to run** — exact commands with flags.
+- Resolve all risks and open questions before the spec moves to `docs/changes/`. Do not include a Risks section in the ready spec.
+- Split rule: if a spec touches more than 3 files or has more than 2 logical phases, split it into separate specs.
 
 **At the end of every planning session** (before the user closes the terminal), update `docs/status.md`:
 1. Read the current `docs/status.md`. If it does not exist, create it using the initial template from the `## Status update` section of `~/.claude/agents/doc-writer.md` — leave the CODING block with empty Completed table and `unknown` state fields.

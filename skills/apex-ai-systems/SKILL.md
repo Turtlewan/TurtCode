@@ -1,7 +1,8 @@
 ---
 skill: apex-ai-systems
+backend: claude
 version: 1.0.0
-last_updated: 2026-05-24
+last_updated: 2026-05-28
 sources:
   - Anthropic API Docs — docs.anthropic.com
   - LlamaIndex Docs — docs.llamaindex.ai

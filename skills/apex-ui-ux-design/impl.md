@@ -1,7 +1,8 @@
 ---
 skill: apex-ui-ux-design
+backend: deepseek
 version: 1.0.0
-last_updated: 2026-05-24
+last_updated: 2026-05-28
 sources:
   - Vercel Design Guidelines — vercel.com/design
   - WCAG 2.2 — w3.org/TR/WCAG22
@@ -95,7 +96,7 @@ function validate(value: string) {
 - [ ] Check: empty state and error state defined for all dynamic content
 - [ ] Test at 375px — no horizontal scroll, no truncated text
 
-## Flag for Claude review
+## Flag for planning-mode review
 
 - Product category ambiguous — ask user before choosing information density and visual tone
 - Dark mode required but tokens not defined — flag to apex-design-system

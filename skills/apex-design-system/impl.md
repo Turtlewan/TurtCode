@@ -1,7 +1,8 @@
 ---
 skill: apex-design-system
+backend: deepseek
 version: 1.0.0
-last_updated: 2026-05-24
+last_updated: 2026-05-28
 sources:
   - shadcn/ui — ui.shadcn.com
   - Radix Primitives — radix-ui.com/primitives
@@ -85,7 +86,7 @@ export function Button({ variant = 'default', size = 'md', className, ...props }
 - [ ] Check: all interactive components use Radix primitive as base
 - [ ] Check: `cn()` used for all conditional class merging
 
-## Flag for Claude review
+## Flag for planning-mode review
 
 - Figma design uses tokens not yet defined in `@theme` — define before implementing
 - New chart component needed — flag apex-data (Recharts vs Tremor decision)

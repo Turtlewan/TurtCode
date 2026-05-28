@@ -1,7 +1,8 @@
 ---
 skill: apex-accessibility
+backend: deepseek
 version: 1.0.0
-last_updated: 2026-05-24
+last_updated: 2026-05-28
 sources:
   - WCAG 2.1 — w3.org/TR/WCAG21
   - ARIA APG — w3.org/WAI/ARIA/apg

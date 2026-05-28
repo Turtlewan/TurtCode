@@ -1,7 +1,8 @@
 ---
 skill: apex-testing
+backend: deepseek
 version: 1.0.0
-last_updated: 2026-05-24
+last_updated: 2026-05-28
 sources:
   - Vitest Docs — vitest.dev
   - Playwright Docs — playwright.dev

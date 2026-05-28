@@ -1,7 +1,8 @@
 ---
 skill: apex-backend
+backend: deepseek
 version: 1.0.0
-last_updated: 2026-05-24
+last_updated: 2026-05-28
 sources:
   - Fastify Docs — fastify.dev
   - Prisma Docs — prisma.io/docs

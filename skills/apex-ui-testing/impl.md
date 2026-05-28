@@ -1,7 +1,8 @@
 ---
 skill: apex-ui-testing
+backend: deepseek
 version: 1.0.0
-last_updated: 2026-05-24
+last_updated: 2026-05-28
 sources:
   - Playwright Docs — playwright.dev
   - Storybook — storybook.js.org
@@ -80,7 +81,7 @@ test('contact page has no a11y violations', async ({ page }) => {
 - [ ] Check: `@storybook/addon-a11y` shows 0 violations for new components
 - [ ] Check: no `.waitForTimeout()` calls in test files
 
-## Flag for Claude review
+## Flag for planning-mode review
 
 - Visual regression baseline unclear — first run always needs human approval in Chromatic
 - E2E tests failing due to auth — flag to apex-backend for session fixture setup

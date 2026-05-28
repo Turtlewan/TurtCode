@@ -1,7 +1,8 @@
 ---
 skill: apex-ui-ux-design
+backend: claude
 version: 1.0.0
-last_updated: 2026-05-24
+last_updated: 2026-05-28
 sources:
   - UI UX Pro Max (nextlevelbuilder) — github.com/nextlevelbuilder/ui-ux-pro-max-skill
   - Vercel Web Design Guidelines — github.com/vercel-labs/agent-skills

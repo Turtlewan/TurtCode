@@ -1,7 +1,8 @@
 ---
 skill: apex-code
-version: 1.1.0
-last_updated: 2026-05-24
+backend: claude
+version: 1.2.0
+last_updated: 2026-05-28
 sources:
   - APEX Design Specification 2026-05-24
   - GSD (Get Shit Done) — github.com/gsd-build/get-shit-done
@@ -15,12 +16,13 @@ and completely. Questions belong in planning — execution is silent.
 
 ## Session start
 
-1. Read docs/status.md:
-   - Check In-Flight table for any interrupted builds
-   - Note active token profile and autonomy level
-2. List docs/changes/*.md — these are ready specs
-3. Read latest docs/handoff/*.md — prior context and flags
+1. Run `git log --oneline -10` — see what landed recently without loading prose docs
+2. Read docs/status.md — check In-Flight table and note token_profile + autonomy_level only. Stop at the CODING block; do not read the PLANNING block.
+3. List docs/changes/*.md — these are ready specs
 4. Report: "Ready specs: {list or 'none'}. In-progress: {spec name and progress, or 'none'}."
+
+**Context discipline:** When executing a spec, read only that spec and the files it explicitly lists.
+Never load docs/handoff/, other pending specs, or ambient project documentation.
 
 If no ready specs: "No specs in docs/changes/. Switch to planning mode to create one."
 
@@ -40,8 +42,42 @@ Pre-flight:
    verify the name is correct (typosquat check) and the package is actively maintained.
    If uncertain: log to Blocked Actions, do not install, flag for human review.
 
+6. **Karpathy Pre-Flight** — runs before any task is started:
+
+   **a. Assumption verification (Think Before Coding)**
+   Read every item in `## Assumptions`. For each:
+   - Verify it against the codebase now (read the relevant file or run a check command)
+   - If assumption holds → proceed
+   - If assumption is wrong AND impact is `Stop` → halt, log to decisions table, report to user:
+     "Pre-flight failed: assumption '{X}' is wrong. Spec needs revision. Stopping build."
+   - If assumption is wrong AND impact is `Caution` → log to decisions table, note the deviation, proceed
+   - If assumption is wrong AND impact is `Low` → log, proceed
+   - If ## Assumptions section is missing → note it in decisions log, proceed (spec was written before this rule)
+
+   **b. Simplicity sweep (Simplicity First)**
+   For each task in ## Tasks, before implementing:
+   - Estimate: could this task be done with significantly less code than the spec implies?
+   - If yes: implement the simpler version. Log the decision:
+     "Task N: simplified from [spec approach] to [simpler approach] — same acceptance criteria met."
+   - Simpler is always preferred if acceptance criteria are still satisfied.
+   - If spec says 200 lines and 50 lines does the job: write 50. Document why.
+
+   **c. Surgical scope lock (Surgical Changes)**
+   List every file you intend to touch. Cross-reference against ## Files to Change.
+   - File in spec AND you need to touch it → proceed
+   - File NOT in spec AND you need to touch it → log to blocked actions, do NOT touch it,
+     flag in handoff as "needed but out of spec scope"
+   - File in spec BUT you don't need to touch it → skip it (don't touch files that don't need changing)
+   This scope lock persists for the entire build. Re-check before touching any file.
+
+   **d. Per-task done-criteria (Goal-Driven Execution)**
+   Before starting each task, state the done-criteria from the spec's "done when:" clause.
+   If "done when:" is missing from the task: derive it from the acceptance criteria.
+   After completing the task: verify the criterion before checking it off. No exceptions.
+   "The task is done when it's verified, not when the code is written."
+
 Context note: each worker agent starts with a fresh ~200k context scoped to its assigned tasks.
-The main window stays lean. All shared state flows through spec files and handoff docs — not conversation memory.
+The main window stays lean. All shared state flows through spec files and git history — not handoff docs or conversation memory.
 
 During execution:
 - Work through ## Tasks in order (respecting any dependency notes)
@@ -63,6 +99,14 @@ During execution:
 Triggered by: direct instruction without a spec (small fix, quick change)
 
 - Single sequential execution — no parallel workers
+
+**Karpathy check for Edit Mode (runs before any file is touched):**
+- State your interpretation of the edit request explicitly. If ambiguous, ask once.
+- State the minimum change: "The smallest edit that achieves this is: ___"
+- Confirm: every file you intend to touch is directly required by the edit.
+- State what "done" looks like: "This edit is done when: [observable outcome]"
+- After completing: verify the done-criteria before reporting finished.
+
 - One clarifying question allowed before proceeding on ambiguous tasks
 - Explicit confirmation required for critical files: *.env, migration files, auth middleware, CI/CD configs
 - No spec required — work from the direct instruction

@@ -1,7 +1,8 @@
 ---
 skill: apex-figma
+backend: claude
 version: 1.0.0
-last_updated: 2026-05-24
+last_updated: 2026-05-28
 sources:
   - Figma MCP Server Guide — github.com/figma/mcp-server-guide
   - Figma Context MCP (GLips/Framelink) — github.com/GLips/Figma-Context-MCP

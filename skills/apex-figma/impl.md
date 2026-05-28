@@ -1,7 +1,8 @@
 ---
 skill: apex-figma
+backend: deepseek
 version: 1.0.0
-last_updated: 2026-05-24
+last_updated: 2026-05-28
 sources:
   - Figma MCP Server — github.com/figma/mcp-server-guide
   - Figma Context MCP (Framelink) — github.com/GLips/Figma-Context-MCP
@@ -70,7 +71,7 @@ staleness_threshold: 30d
 - [ ] MCP screenshot compared to rendered output — no major deviations
 - [ ] Component re-uses existing shadcn/Radix base where applicable
 
-## Flag for Claude review
+## Flag for planning-mode review
 
 - Figma uses a token not defined in the project `@theme` — define it before implementing
 - Figma layout cannot be reproduced with Flexbox/Grid — flag for CSS Grid subgrid discussion

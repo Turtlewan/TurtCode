@@ -1,7 +1,8 @@
 ---
 skill: apex-frontend
+backend: deepseek
 version: 1.0.0
-last_updated: 2026-05-24
+last_updated: 2026-05-28
 sources:
   - Next.js Docs — nextjs.org/docs
   - Web Vitals — web.dev/vitals

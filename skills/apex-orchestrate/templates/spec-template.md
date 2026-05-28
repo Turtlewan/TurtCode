@@ -7,8 +7,17 @@ autonomy_level: L2
 
 # Spec: {title}
 
-## Scope
-One paragraph. What this changes and why.
+<!-- Split rule: if this spec touches >3 files OR has >2 logical phases, split it into separate specs. -->
+
+## Assumptions
+<!-- Planning mode fills this. Coding mode verifies each item before executing. -->
+<!-- Format: assumption → impact if wrong (Stop | Caution | Low) -->
+- {Assumption 1} → impact: {Stop | Caution | Low}
+- {Assumption 2} → impact: {Stop | Caution | Low}
+
+<!-- Simplicity check (planning fills this): -->
+<!-- "Is there a simpler spec? ___. Why this version: ___." -->
+Simplicity check: {considered simpler approach? yes/no — if yes, why this version instead}
 
 ## Prerequisites
 - Specs that must be complete first (or "none")
@@ -20,9 +29,9 @@ One paragraph. What this changes and why.
 | {full/path/to/file.ts} | create \| modify \| delete | {what changes} |
 
 ## Tasks
-- [ ] Task 1: {description} — acceptance: {concrete criterion}
-- [ ] Task 2: {description} — acceptance: {concrete criterion}
-- [ ] Task 3: {description} — acceptance: {concrete criterion}
+- [ ] Task 1: {description} — done when: {observable outcome}
+- [ ] Task 2: {description} — done when: {observable outcome}
+- [ ] Task 3: {description} — done when: {observable outcome}
 
 ## Permissions
 
@@ -76,11 +85,10 @@ Approving this spec approves all of them.
 | ADR | docs/technical/adr/ADR-{NNN}-{title}.md | Write (if architectural decision) |
 
 ## Acceptance Criteria
-- [ ] {criterion 1}
-- [ ] {criterion 2}
-
-## Risks / Open Questions
-(Must be empty before spec passes readiness gate)
+<!-- Use step→verify format. "Done" must be observable, not vague. -->
+- [ ] {Step 1} → verify: {what to check — specific, observable}
+- [ ] {Step 2} → verify: {what to check — specific, observable}
+- [ ] {Step 3} → verify: {what to check — specific, observable}
 
 ## Progress
 _(Coding mode writes here — do not edit manually)_

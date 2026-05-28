@@ -1,7 +1,8 @@
 ---
 skill: apex-animation
+backend: deepseek
 version: 1.0.0
-last_updated: 2026-05-24
+last_updated: 2026-05-28
 sources:
   - Motion — motion.dev
   - GSAP — gsap.com/docs
@@ -87,7 +88,7 @@ if (!window.matchMedia("(prefers-reduced-motion: reduce)").matches) {
 - [ ] Check: `AnimatePresence` wraps every conditionally-rendered animated element
 - [ ] Run: Lighthouse performance — no CLS caused by animated layout shifts
 
-## Flag for Claude review
+## Flag for planning-mode review
 
 - Complex SVG morphing needed — GSAP MorphSVG vs Motion; flag the choice
 - Page transition between routes — confirm Next.js View Transitions API compatibility

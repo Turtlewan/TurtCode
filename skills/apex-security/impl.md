@@ -1,7 +1,8 @@
 ---
 skill: apex-security
+backend: deepseek
 version: 1.0.0
-last_updated: 2026-05-24
+last_updated: 2026-05-28
 sources:
   - OWASP Top 10 (2021) — owasp.org/Top10
   - NIST SP 800-63B — pages.nist.gov/800-63-3/sp800-63b
@@ -73,7 +74,7 @@ const user = await prisma.user.findUnique({ where: { email: input.email } })
 - [ ] Confirm: no secrets appear in `git diff`
 - [ ] Confirm: all new routes have auth middleware applied
 
-## Flag for Claude review (do not decide yourself)
+## Flag for planning-mode review (do not decide yourself)
 
 - Any new authentication flow design
 - Any change to the permission model

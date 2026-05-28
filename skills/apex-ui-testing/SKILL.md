@@ -1,7 +1,8 @@
 ---
 skill: apex-ui-testing
+backend: claude
 version: 1.0.0
-last_updated: 2026-05-24
+last_updated: 2026-05-28
 sources:
   - Playwright MCP — github.com/microsoft/playwright-mcp
   - Storybook — github.com/storybookjs/storybook

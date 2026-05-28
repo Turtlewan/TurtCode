@@ -1,23 +1,2 @@
-# Credentials and secrets
-.credentials.json
-settings.local.json
-
-# Session and conversation data
-history.jsonl
-sessions/
-projects/
-tasks/
-plans/
-
-# Cache and ephemeral state
-cache/
-paste-cache/
-shell-snapshots/
-file-history/
-debug/
-telemetry/
-backups/
-ide/
-.last-cleanup
-mcp-needs-auth-cache.json
-gsd-file-manifest.json
+*
+!.gitignore
