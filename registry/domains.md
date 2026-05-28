@@ -35,3 +35,9 @@ Phase 3 fills in the skill/agent content. This file defines the routing table.
 | mobile | apex-mobile/SKILL.md | apex-mobile/impl.md | — | React Native, Expo, iOS, Android, mobile app, EAS Build, EAS Update, OTA update, push notifications, app store, TestFlight |
 | research | apex-research/SKILL.md | apex-research/impl.md | — | research, compare options, best practices, look up, investigate, explore options, technology comparison, deep dive |
 | google | apex-google/SKILL.md | apex-google/impl.md | — | Google, OAuth2, Sign in with Google, GIS, googleapis, google-auth-library, Gmail API, Calendar API, Drive API, Workspace, service account, Google SSO, OIDC Google |
+| stack | apex-stack/SKILL.md | apex-stack/impl.md | — | tech stack, framework selection, database choice, ORM, which framework, project start, new project, stack decision, Next.js vs, Prisma vs Drizzle, Clerk vs Auth.js, what stack |
+| auth | apex-auth/SKILL.md | apex-auth/impl.md | — | authentication, auth, login, signup, logout, password, session, JWT, OAuth2, RBAC, roles, permissions, multi-tenant, passkeys, WebAuthn, MFA, magic link, invite |
+| jobs | apex-jobs/SKILL.md | apex-jobs/impl.md | — | background job, job queue, worker, BullMQ, Bull, Redis queue, cron job, scheduled task, async task, retry, dead letter queue, queue worker |
+| realtime | apex-realtime/SKILL.md | apex-realtime/impl.md | — | real-time, WebSocket, Socket.io, SSE, Server-Sent Events, live updates, push, streaming, presence, live dashboard, finance ticker, AI streaming |
+| storage | apex-storage/SKILL.md | apex-storage/impl.md | — | file upload, file storage, S3, MinIO, R2, object storage, presigned URL, signed URL, multipart upload, file download, attachment, image upload |
+| search | apex-search/SKILL.md | apex-search/impl.md | — | search, full-text search, vector search, semantic search, RAG, retrieval, embeddings, pgvector, similarity search, chunking, hybrid search, Typesense, Algolia |
