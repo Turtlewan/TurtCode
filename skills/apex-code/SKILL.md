@@ -1,7 +1,7 @@
 ---
 skill: apex-code
 backend: claude
-version: 1.2.0
+version: 1.3.0
 last_updated: 2026-05-28
 sources:
   - APEX Design Specification 2026-05-24
@@ -76,11 +76,30 @@ Pre-flight:
    After completing the task: verify the criterion before checking it off. No exceptions.
    "The task is done when it's verified, not when the code is written."
 
+7. **Wave Analysis** — runs after Karpathy Pre-Flight, before the first file is touched:
+
+   For every pair of tasks (A, B) in ## Tasks, check all three:
+   - **File conflict**: both tasks write to the same file path → B depends on A
+   - **Output dependency**: B's inputs are produced by A (stated in spec or inferable) → B depends on A
+   - **Shared state**: both tasks modify the same schema, migration, or shared config file → B depends on A
+
+   Group tasks with no dependencies on each other into the same wave.
+
+   Log the wave plan before execution begins:
+   `"Wave 1: [task N, task M] | Wave 2: [task P] | ..."`
+
+   Dispatch rule:
+   - Wave with **2+ independent tasks** → spawn one code-worker agent per task; dispatch all in parallel; wait for all to complete before starting the next wave
+   - Wave with **1 task** → execute that task directly (no agent spawn)
+   - All tasks sequential (every wave has exactly 1 task) → execute directly in order; no agents needed
+
 Context note: each worker agent starts with a fresh ~200k context scoped to its assigned tasks.
 The main window stays lean. All shared state flows through spec files and git history — not handoff docs or conversation memory.
 
 During execution:
-- Work through ## Tasks in order (respecting any dependency notes)
+- Execute waves in the order produced by Wave Analysis
+- Within each wave: apply the dispatch rule (parallel agents or direct execution)
+- After each wave completes: verify wave outputs before starting the next wave
 - After completing each task: check it off in ## Progress
 - When truly ambiguous: make the conservative choice, log it in decisions table
 - Conservative choice rules:
@@ -116,19 +135,16 @@ Triggered by: direct instruction without a spec (small fix, quick change)
 
 Execute in this order:
 
-1. Spawn apex-docs-product-agent:
-   Inputs: files_changed (from apex-coder summary), spec_path, today's date
-   Wait for completion. Collect docs_summary.
+1. Spawn in parallel (neither depends on the other):
+   - apex-docs-product-agent — inputs: files_changed, spec_path, today's date
+   - apex-reviewer (skip if token_profile is "lean") — inputs: spec_path, files_changed
+   Wait for both to complete. Collect docs_summary and reviewer_findings.
 
-2. Spawn apex-reviewer (unless token_profile is "lean"):
-   Inputs: spec_path, files_changed
-   Wait for completion. Collect reviewer_findings.
-
-3. Spawn apex-docs-technical-agent:
+2. Spawn apex-docs-technical-agent:
    Inputs: spec_path, coder_summary, reviewer_findings, docs_summary, today's date
    Wait for completion.
 
-4. Report to user:
+3. Report to user:
    "Build complete. Handoff at docs/handoff/{date}.md.
    Reviewer: {clean | N findings — see handoff}.
    Decisions made: {count} — review in next planning session."

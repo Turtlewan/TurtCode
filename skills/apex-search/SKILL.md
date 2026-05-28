@@ -1,7 +1,7 @@
 ---
 skill: apex-search
 backend: claude
-version: 1.0.0
+version: 1.0.1
 last_updated: 2026-05-28
 sources:
   - pgvector — github.com/pgvector/pgvector
@@ -11,6 +11,8 @@ sources:
   - PostgreSQL FTS — postgresql.org/docs/current/textsearch.html
 staleness_threshold: 30d
 ---
+
+# apex-search — Search & RAG
 
 ## Research findings
 

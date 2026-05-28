@@ -1,7 +1,7 @@
 ---
 skill: apex-storage
 backend: claude
-version: 1.0.0
+version: 1.0.1
 last_updated: 2026-05-28
 sources:
   - AWS SDK v3 Docs — docs.aws.amazon.com/sdk-for-javascript/v3

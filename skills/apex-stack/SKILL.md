@@ -1,7 +1,7 @@
 ---
 skill: apex-stack
 backend: claude
-version: 1.0.0
+version: 1.0.1
 last_updated: 2026-05-28
 sources:
   - State of JS 2024 — stateofjs.com
@@ -12,6 +12,8 @@ sources:
   - Auth.js Docs — authjs.dev
 staleness_threshold: 30d
 ---
+
+# apex-stack — Tech Stack Selection
 
 ## Research findings
 

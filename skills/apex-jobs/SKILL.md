@@ -1,7 +1,7 @@
 ---
 skill: apex-jobs
 backend: claude
-version: 1.0.0
+version: 1.0.1
 last_updated: 2026-05-28
 sources:
   - BullMQ Docs — docs.bullmq.io
@@ -10,6 +10,8 @@ sources:
   - AWS ElastiCache Redis — docs.aws.amazon.com
 staleness_threshold: 30d
 ---
+
+# apex-jobs — Background Jobs
 
 ## Research findings
 

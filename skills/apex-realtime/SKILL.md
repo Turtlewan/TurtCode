@@ -1,7 +1,7 @@
 ---
 skill: apex-realtime
 backend: claude
-version: 1.0.0
+version: 1.0.1
 last_updated: 2026-05-28
 sources:
   - Socket.io Docs — socket.io/docs
@@ -9,6 +9,8 @@ sources:
   - MDN SSE — developer.mozilla.org/en-US/docs/Web/API/Server-sent_events
 staleness_threshold: 30d
 ---
+
+# apex-realtime — Real-time Push
 
 ## Research findings
 

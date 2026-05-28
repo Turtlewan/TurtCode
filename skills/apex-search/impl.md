@@ -1,7 +1,7 @@
 ---
 skill: apex-search
 backend: deepseek
-version: 1.0.0
+version: 1.1.0
 last_updated: 2026-05-28
 sources:
   - pgvector — github.com/pgvector/pgvector
@@ -114,10 +114,10 @@ async function ingestDocument(docId: string, content: string) {
 
     await db.query(
       `INSERT INTO chunks (document_id, content, chunk_index, content_hash, embedding)
-       VALUES ($1, $2, $3, $4, $5)
+       VALUES ($1, $2, $3, $4, $5::vector)
        ON CONFLICT (document_id, chunk_index) DO UPDATE
-       SET content = $2, content_hash = $4, embedding = $5`,
-      [docId, chunks[i], i, hash, JSON.stringify(embedding)]
+       SET content = $2, content_hash = $4, embedding = $5::vector`,
+      [docId, chunks[i], i, hash, `[${embedding.join(',')}]`]
     )
   }
 }

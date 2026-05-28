@@ -1,7 +1,7 @@
 ---
 skill: apex-storage
 backend: deepseek
-version: 1.0.0
+version: 1.1.0
 last_updated: 2026-05-28
 sources:
   - AWS SDK v3 Docs — docs.aws.amazon.com/sdk-for-javascript/v3
@@ -34,6 +34,7 @@ staleness_threshold: 30d
 - Create the bucket during app startup or via docker-compose init container
 - Read only `file-type.minimumBytes` (4100 bytes) for MIME detection on large files
 - Configure `requestChecksumCalculation` and `responseChecksumValidation` for R2
+- For presigned PUT uploads, trigger server-side MIME validation from file bytes after the client upload completes — before marking the file record active in DB
 
 ## S3 client setup (works for MinIO, S3, and R2)
 
@@ -136,6 +137,7 @@ async function createUploadUrl(
     throw new Error('File too large — use multipart upload')
   }
 
+  // ext is for the storage key only — MIME must be validated from bytes post-upload
   const ext = contentType.split('/')[1] ?? 'bin'
   const date = new Date().toISOString().slice(0, 10)
   const key = `${userId}/${date}/${randomUUID()}.${ext}`
@@ -270,3 +272,4 @@ async function detectTypeAndStream(
 - [ ] Soft-delete a file (set `deletedAt`) — object still exists in storage
 - [ ] Large file upload (>10 MB) correctly detects MIME from first bytes only
 - [ ] Bucket is auto-created on `docker compose up` (check minio-init service)
+- [ ] Presigned PUT: after client upload, server validates MIME from bytes before DB record is marked active
