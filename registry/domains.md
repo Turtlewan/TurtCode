@@ -33,7 +33,8 @@ Phase 3 fills in the skill/agent content. This file defines the routing table.
 | k8s | apex-k8s/SKILL.md | apex-k8s/impl.md | — | Kubernetes, K8s, kubectl, Helm, ArgoCD, Flux, GitOps, pod, deployment, ingress, namespace, RBAC, HPA, StatefulSet |
 | iac | apex-iac/SKILL.md | apex-iac/impl.md | — | Terraform, Pulumi, Ansible, infrastructure as code, remote state, tfvars, drift detection, Infracost, provisioning |
 | mobile | apex-mobile/SKILL.md | apex-mobile/impl.md | — | React Native, Expo, iOS, Android, mobile app, EAS Build, EAS Update, OTA update, push notifications, app store, TestFlight |
-| research | apex-research/SKILL.md | apex-research/impl.md | — | research, compare options, best practices, look up, investigate, explore options, technology comparison, deep dive |
+| research | apex-research/SKILL.md | — | — | research, compare options, best practices, look up, investigate, explore options, technology comparison, deep dive |
+| skill-author | apex-skill-author/SKILL.md | — | — | skill authoring, create skill, new skill, SKILL.md, write skill, update skill, skill writing, authoring, skill quality, register skill, impl.md |
 | google | apex-google/SKILL.md | apex-google/impl.md | — | Google, OAuth2, Sign in with Google, GIS, googleapis, google-auth-library, Gmail API, Calendar API, Drive API, Workspace, service account, Google SSO, OIDC Google |
 | stack | apex-stack/SKILL.md | apex-stack/impl.md | — | tech stack, framework selection, database choice, ORM, which framework, project start, new project, stack decision, Next.js vs, Prisma vs Drizzle, Clerk vs Auth.js, what stack |
 | auth | apex-auth/SKILL.md | apex-auth/impl.md | — | authentication, auth, login, signup, logout, password, session, JWT, OAuth2, RBAC, roles, permissions, multi-tenant, passkeys, WebAuthn, MFA, magic link, invite |
