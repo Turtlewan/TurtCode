@@ -1,12 +1,13 @@
 ---
 skill: apex-skill-author
 backend: claude
-version: 1.0.0
+version: 1.1.0
 last_updated: 2026-05-29
 sources:
   - agentskills.io — skill spec & authoring best practices
   - superpowers:writing-skills — TDD-for-skills methodology
   - docs/research/skill-authoring-best-practices.md
+  - docs/research/model-specific-skill-authoring.md
 staleness_threshold: 14d
 description: >
   Use when creating, editing, or reviewing any APEX skill — SKILL.md or impl.md.
@@ -138,6 +139,28 @@ Decide deliberately — do not create `impl.md` by reflex:
 If a draft `impl.md` duplicates the SKILL.md template/checklist, that's the signal it
 shouldn't exist — fold it back in.
 
+## Author to the executor's capability floor
+
+Each file is read by a *specific* model, not an abstract capable reader. "Write good
+enforcement content" is necessary but not sufficient — tune it to who runs it. This is the
+most-skipped judgment in `impl.md` authoring.
+
+- **`impl.md` → the coding backend (DeepSeek V4 Flash).** Flash needs explicit scaffolding
+  and degrades on judgment calls and long tool chains. So:
+  - **Pre-resolve every decision — no judgment calls in `impl.md`.** Not "use SES if the
+    setup cost is worth it", not "pick an expiry that fits". State the default outright. If
+    a step genuinely needs judgment, it cannot live in `impl.md`: pre-resolve it in the
+    spec, or flag it back to planning (the pattern `apex-figma` uses for image steps).
+  - **Keep tool chains short and checkpointed** — aim for ≤2 tools per step, verify after
+    each step, and give an explicit error/recovery path. Flash loses state across long
+    multi-step chains and won't recover from unexpected output on its own.
+- **`SKILL.md` → planning (Claude Opus / Sonnet).** Judgment-framed prose is correct here,
+  but **name the scope explicitly**: Opus interprets instructions literally and won't
+  generalize a rule across items on its own. Write "apply to every skill / all `impl.md`
+  files", not "apply this".
+
+Evidence and the full model matrix: `docs/research/model-specific-skill-authoring.md`.
+
 ## Content rules — what changes behavior
 
 The model ignores what it already knows. Spend lines only on what it doesn't:
@@ -174,6 +197,7 @@ skills may be richer than minimalist skills, but the cap is firm.
 - Never ship a new skill without the triple-write.
 - Never write a `description` that summarizes the workflow instead of triggering on the task.
 - Never create `impl.md` that just duplicates SKILL.md.
+- Never leave a judgment call in `impl.md` — pre-resolve it or flag back to planning; Flash can't reliably make it.
 - Never exceed 500 lines / 5k tokens in a SKILL.md.
 - Never author a domain skill from training memory when best practices are stale — research first.
 
@@ -184,6 +208,7 @@ skills may be richer than minimalist skills, but the cap is firm.
 - [ ] Domain researched via apex-research if knowledge could be stale
 - [ ] Frontmatter complete, including a trigger-style `description`
 - [ ] SKILL vs impl decided deliberately (default planning-only)
+- [ ] impl.md authored to the Flash floor — no judgment calls, short checkpointed chains; SKILL.md names scope explicitly
 - [ ] Content is gotchas/defaults/procedures — not what the model already knows
 - [ ] Under 500 lines / 5k tokens
 - [ ] Triple-write done (registry + SKILLS.md + SKILL-HISTORY.md)
