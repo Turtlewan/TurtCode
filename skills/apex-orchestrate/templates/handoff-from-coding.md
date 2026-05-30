@@ -1,51 +1,21 @@
 # Handoff: {YYYY-MM-DD}
-_Mode: coding | Autonomy level: L{n} | Token profile: {profile}_
+_Mode: coding | L{n} | {profile}_
 
-## What Was Built
-{1-3 sentences summarising what was implemented this session.}
-
-## Specs Completed
-| Spec | Status |
-|------|--------|
-| {spec-name} | ✅ complete |
-| {spec-name} | 🔄 partial — stopped at task {n}/{total} |
-
-## Files Changed
-| File | What changed | Committed |
-|------|-------------|-----------|
-| {path} | {brief description} | ✅ {short-sha} |
-| {path} | {brief description} | 🟡 uncommitted |
-
-## Documentation Status
-| Doc | Action taken | Status |
-|-----|-------------|--------|
-| {path} | {inline JSDoc / API section / changelog entry} | ✅ / 🟡 skipped |
-
-## Current State
-- Builds: ✅ passes / ❌ failing — {error}
-- Tests: ✅ {n} passing / ❌ {n} failing — {test names}
-- Known issues: {list or "none"}
-
-## Specialist Flags
-| Domain | Flag | Severity |
-|--------|------|----------|
-| {domain} | {description} | low / medium / high |
-
-_(or "None")_
+> **Read-once inbox.** Every item below must terminate in exactly one of — a Pending Spec,
+> an Open Question, folded into existing state, or explicitly discarded — before the
+> planning session closes (inbox-zero). **What changed is in `git log`; build/test status
+> and in-progress position are in status.md.** None of that is repeated here.
 
 ## Decisions Made
-| Task | Decision | Reason | Review needed? |
-|------|----------|--------|----------------|
-| Task {n} | {what was decided} | {why} | No / Yes ⚠️ |
+{Autonomous decisions + rationale. Mark "review needed ⚠️" if planning should revisit. Or "none".}
 
-_(Anything marked Yes ⚠️ should be discussed in the next planning session before the next build.)_
+## Specialist Flags
+{The non-obvious gotcha a specialist surfaced that git diff won't show — e.g. a standing
+rule future work must follow. Or "none".}
 
-## Blocked Actions (unlisted permissions)
-| Action | Task | Reason |
-|--------|------|--------|
-| {action} | Task {n} | Not listed in spec permissions — skipped |
+## Blocked Actions
+{Permissions or architecture calls coding could not make — what planning must resolve. Or "none".}
 
-_(or "None")_
-
-## What's Next
-{Suggested follow-up for planning mode — specs to write, decisions to revisit, flags to address.}
+## What's Next (discoveries)
+{Only what the build *learned* — surprises, follow-ups worth a spec. NOT a restatement of
+remaining tasks (those live in the spec + status.md In-Flight). Or "none".}

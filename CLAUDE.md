@@ -156,7 +156,7 @@ docs/
 
 **Commit discipline (per-spec):**
 After completing each spec and moving it to `done/`:
-1. Update the handoff doc's files table — add a `Status` column if not present. Mark every file changed by this spec as `🟡 uncommitted`.
+1. Mark the spec's files `🟡 uncommitted` in the `docs/status.md` In-Flight row (the handoff carries no file table — git is the changelog).
 2. Prompt the user: "**[spec-name]** is done — [N] files changed. Commit now? I'll draft the message."
 3. If user agrees:
    a. Run `git diff --stat` to confirm scope.
@@ -164,7 +164,7 @@ After completing each spec and moving it to `done/`:
    c. Draft a commit message: `feat: <brief description matching spec title>` (or `fix:` / `chore:` as appropriate).
    d. Show the message and ask for approval before committing.
    e. Commit. Record the short SHA (`git rev-parse --short HEAD`).
-   f. Update the handoff doc: change `🟡 uncommitted` → `✅ <sha>` for those files.
+   f. Update the `docs/status.md` In-Flight row: change `🟡 uncommitted` → `✅ <sha>` (or clear the row if the spec is fully done).
 4. If user declines: leave as `🟡 uncommitted` and continue to the next spec.
 
 **Commit discipline (session end):**
@@ -172,15 +172,16 @@ When the user signals they are finishing the session (any of: "done", "wrap up",
 1. Run `git status` to identify remaining uncommitted changes.
 2. If no uncommitted changes: confirm "All changes committed — ready to close." Then write the handoff doc.
 3. If uncommitted changes remain: list them and propose a single commit covering all remaining specs done this session. Offer a draft commit message.
-4. After the final commit: update any remaining `🟡 uncommitted` entries in the handoff doc to `✅ <sha>`.
+4. After the final commit: update any remaining `🟡 uncommitted` entries in the `docs/status.md` In-Flight row to `✅ <sha>`.
 5. Then write / finalise the handoff doc as normal.
 
-**At the end of every coding session** (before the user closes the terminal), write a handoff doc to `docs/handoff/YYYY-MM-DD.md` (use today's date) containing:
-  1. **What was built** — summary of everything implemented this session.
-  2. **Files changed** — list of files modified/created. Use a table with three columns: `| File | What changed | Status |`. Status values: `🟡 uncommitted` (done, not yet committed) or `✅ <short-sha>` (committed). Add the Status column from the moment a spec completes; update it when the commit lands.
-  3. **Current state** — does it build? Do tests pass? Any known issues?
-  4. **Specs completed** — which `docs/changes/` specs were finished.
-  5. **What's next** — suggested next steps or open questions for planning mode.
+**At the end of every coding session** (before the user closes the terminal), write a **thin** handoff doc to `docs/handoff/YYYY-MM-DD.md` (use today's date). The handoff is a **read-once inbox of what the build learned that git can't reconstruct** — narrative only. It does NOT repeat what changed (→ `git log`), build/test status or known issues (→ `docs/status.md`), or which specs finished (→ `docs/status.md` + `done/`). Fill only these, writing "none" where empty:
+  1. **Decisions Made** — autonomous decisions + rationale; mark "review needed ⚠️" if planning should revisit.
+  2. **Specialist Flags** — a non-obvious gotcha a specialist surfaced that git diff won't show.
+  3. **Blocked Actions** — permissions or architecture calls coding couldn't make; what planning must resolve.
+  4. **What's Next (discoveries)** — what the build *learned* (surprises, follow-ups) — NOT remaining tasks (those live in the spec + `docs/status.md` In-Flight).
+
+In-progress position lives in the `docs/status.md` In-Flight row, not the handoff: `{spec} · {partial|blocked|parked} · stopped at task {n}/{total}`.
 
 If the session ends without a handoff doc, the next planning session has no context. Always write it.
 
@@ -196,12 +197,19 @@ If the session ends without a handoff doc, the next planning session has no cont
 
 **During the planning session:**
 - Produce technical change specs as `docs/changes/<short-name>.md` containing:
-  1. **Files to change** — full paths and operations (create / modify / delete).
-  2. **Exact changes** — code-level detail: signatures, new functions, modifications. Pseudocode or full snippets.
-  3. **Acceptance criteria** — one runnable check per task.
-  4. **Commands to run** — exact commands with flags.
+  1. **Identity** — one line: what this builds (for routing/review/recall), optionally + a single ADR/discussion link. Not a rationale paragraph.
+  2. **Files to change** — full paths and operations (create / modify / delete).
+  3. **Exact changes** — code-level detail: signatures, new functions, modifications. Pseudocode or full snippets.
+  4. **Acceptance criteria** — one runnable check per task.
+  5. **Commands to run** — exact commands with flags.
+- **Spec authoring rules** (a spec is an *execution script*, not a design doc — DeepSeek executes literally and can't fill gaps):
+  - **No *why* inline.** Litmus when tempted to add one: does it change what gets built? **No** → cut it (home = ADR / planning discussion). **Yes** → don't add the why, make the *what* explicit. The spec carries at most a one-line identity + a single link to where the why lives.
+  - **List files per task** — every task names its exact files. Never "update the auth flow" (forces exploration = context cost + judgment, DeepSeek's weakest areas).
+  - **Cross-cutting conventions live in the skill's `impl.md`, never copied into the spec.**
 - Resolve all risks and open questions before the spec moves to `docs/changes/`. Do not include a Risks section in the ready spec.
 - Split rule: if a spec touches more than 3 files or has more than 2 logical phases, split it into separate specs.
+
+**status.md hygiene:** `docs/status.md` holds *current state only* — no rolling session-log Notes. Relocate durable facts to their one home (what-changed → git; what-the-build-learned → handoff; architectural *why* → ADR; cross-session user/project facts → memory); merge duplicate parked items rather than appending new ones.
 
 **At the end of every planning session** (before the user closes the terminal), update `docs/status.md`:
 1. Read the current `docs/status.md`. If it does not exist, create it using the initial template from the `## Status update` section of `~/.claude/agents/doc-writer.md` — leave the CODING block with empty Completed table and `unknown` state fields.

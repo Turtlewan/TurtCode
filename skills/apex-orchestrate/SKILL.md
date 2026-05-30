@@ -1,8 +1,8 @@
 ---
 skill: apex-orchestrate
 backend: claude
-version: 1.1.0
-last_updated: 2026-05-28
+version: 1.1.2
+last_updated: 2026-05-30
 sources:
   - APEX Design Specification 2026-05-24
   - GSD (Get Shit Done) — github.com/gsd-build/get-shit-done

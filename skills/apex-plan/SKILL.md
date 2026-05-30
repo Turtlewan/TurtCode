@@ -1,8 +1,8 @@
 ---
 skill: apex-plan
 backend: claude
-version: 1.3.0
-last_updated: 2026-05-28
+version: 1.5.0
+last_updated: 2026-05-30
 sources:
   - APEX Design Specification 2026-05-24
   - GSD (Get Shit Done) — github.com/gsd-build/get-shit-done
@@ -17,10 +17,25 @@ question-free specs that DeepSeek can execute without asking anything.
 ## Session start — read context first
 
 Before responding to the user's request:
-1. Read docs/status.md — pending specs, open questions, project state
+1. Read docs/status.md — pending specs, open questions, project state, parked items
 2. Read docs/drafts/ — any in-progress specs
-3. Read latest docs/handoff/*.md — what coding built last session, decisions made, flags
+3. Read the latest docs/handoff/*.md — the *thin* handoff: decisions, specialist flags,
+   blocked actions, discoveries. (What changed lives in git, not the handoff — run
+   `git log` / `git diff` only if you need the file-level history. Build/test status and
+   in-progress position are in status.md.)
 4. Acknowledge: "I see {n} pending spec(s): {list}. Open flags from last build: {or none}. What are we working on today?"
+
+### Drain the handoff — inbox-zero before the session closes
+
+The handoff is a read-once inbox. Surfacing an item is **not** landing it — an item read
+and not filed is lost. **Every handoff item must terminate in exactly one of:**
+1. **Pending Spec** — queue/write a spec (blocked actions and "review needed ⚠️" decisions often land here)
+2. **Open Question** — add to status.md Open Questions (an unresolved decision, e.g. an architecture call to make later)
+3. **Folded** — incorporated into existing state *now* (e.g. a gotcha written into a spec/skill/ADR)
+4. **Discarded** — explicitly judged not actionable
+
+Land each item's disposition **this session** — do not defer it to "later." The latest
+handoff is read once and never auto-read again, so an undrained item is gone.
 
 ## Planning mode toggle
 
@@ -35,7 +50,27 @@ Wait for their choice. This determines everything below.
 
 ## Planning conversation
 
-Ask clarifying questions one at a time.
+### Elicit intent before drafting — front-load the build-changing decisions
+
+DeepSeek executes literally and cannot fill gaps, so **all judgment must be resolved before
+the spec freezes** — and planning is the only place that can happen. Pull the decisions you
+need *before* drafting; do not draft-then-validate.
+
+- **Resolve yourself — don't ask:** codebase facts (read the files), clear technical defaults
+  (defaults-not-menus), anything derivable from patterns or research. Asking these wastes the
+  user's attention.
+- **Ask the user — before drafting:** product intent, preferences among technically-valid
+  options (taste/business), edge-case priorities, "what does good look like." Judgment, not facts.
+- **Bound the ask:** surface only decisions that (a) planning cannot resolve itself **and**
+  (b) change what gets built. Fails either test → don't ask it.
+- **Batch and target** (AskUserQuestion-style) — a focused set of the genuine forks, not a
+  drip of one-question-at-a-time, and not an exhaustive questionnaire.
+
+Why front-load: this is the primary mechanism for reliable AFK builds — every decision
+resolved here is a mid-build fork that never happens. A planning-time question is cheap
+(you're here, nothing in flight); a build-time fork stalls the build, forces a context
+switch, and may need a re-spec. Asymmetric cost → heavier planning is the cheaper path.
+(The "coding asks at a fork" rule is the safety net; this is the primary mechanism.)
 
 ### Think Before Speccing
 
@@ -63,11 +98,21 @@ Split rule: if the spec touches more than 3 files or has more than 2 logical pha
 
 As you build the spec, enforce these rules inline:
 - Every file must have a full absolute path
-- Every task must be a single unambiguous action
+- Every task must be a single unambiguous action that **names its exact files** — never
+  "update the auth flow" (forces the worker to explore = context cost + judgment, DeepSeek's
+  weakest areas)
 - Every acceptance criterion must be concrete and testable
 - Permissions section must cover every action the build will take
 - Specialist context section captures any specialist findings
 - Risks/Open Questions must be empty before spec is ready
+
+**A spec is an execution script, not a design doc — rich on the *what*, stripped of the *why*:**
+- **Scope = a one-line identity** (what this builds, for routing/review/recall), optionally
+  + a single ADR/discussion link. Not a rationale paragraph.
+- **No *why* inline.** Litmus when tempted: does it change what gets built? **No** → cut it
+  (home = ADR / planning discussion). **Yes** → don't add the why, make the *what* explicit.
+- **Cross-cutting conventions live in the skill's `impl.md`, never copied into the spec** —
+  the spec is the task-specific delta; the skill is the shared baseline.
 
 **Karpathy rules while writing:**
 - Every `## Assumptions` item must say what happens if it's wrong (`Stop | Caution | Low`)

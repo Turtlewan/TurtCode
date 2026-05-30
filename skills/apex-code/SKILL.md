@@ -1,8 +1,8 @@
 ---
 skill: apex-code
 backend: claude
-version: 1.3.0
-last_updated: 2026-05-28
+version: 1.4.0
+last_updated: 2026-05-30
 sources:
   - APEX Design Specification 2026-05-24
   - GSD (Get Shit Done) — github.com/gsd-build/get-shit-done
@@ -101,17 +101,58 @@ During execution:
 - Within each wave: apply the dispatch rule (parallel agents or direct execution)
 - After each wave completes: verify wave outputs before starting the next wave
 - After completing each task: check it off in ## Progress
-- When truly ambiguous: make the conservative choice, log it in decisions table
-- Conservative choice rules:
+- **In-task micro-ambiguity** (which existing pattern to follow, a name, a local detail that
+  does NOT change the spec's approach): make the conservative choice, log it in the decisions table.
   - Prefer not modifying a file over modifying it when unclear
   - Prefer existing patterns over new ones
   - Prefer simpler over clever
   - Prefer more validation over less
   - Never delete anything — flag for planning instead
-- When a needed action is NOT in ## Permissions:
-  - Do NOT perform the action
-  - Log it in Blocked Actions table
-  - Continue with remaining tasks
+- **A fork** (the spec cannot be executed as written, or a materially better path exists) is
+  NOT micro-ambiguity. Do not "conservatively guess" it — route it through **Forks** (below).
+- When a needed action is NOT in ## Permissions: that is a BIG fork (see Forks) — do NOT
+  perform the action; capture-at-halt, log it in Blocked Actions, continue with independent tasks.
+
+## Forks — when the spec is wrong or not optimum
+
+A *fork* = the spec as written can't be executed, or a materially better path exists.
+Classify it mechanically (check the tests in order), then route:
+
+**SMALL — fix in place, log a deviation, continue.** ALL of these must hold:
+- the fix stays within the spec's ## Files to Change, AND
+- adds no dependency, no new file, no schema/API/data-contract change, AND
+- keeps the spec's approach (same implementation shape), AND
+- touches no critical file (*.env, migration, auth middleware, CI/CD).
+→ Make the fix. Log it in the Decisions table as a deviation. Continue.
+
+**BIG — stop this spec, mark it blocked, route to planning.** ANY of these holds:
+- needs a file not in the spec, or a new dependency, OR
+- changes the spec's approach / scope / architecture, OR
+- changes a schema, public API, or data contract, OR
+- is a security / auth / data-loss decision.
+→ Capture-at-halt (below). Do NOT implement the fix. The spec is `blocked`.
+
+**GRAY — pause and ask the user to route.** You cannot cleanly place it in SMALL or BIG
+(e.g. it changes the approach but the impact is unclear, or several valid fixes trade off
+differently).
+→ At autonomy **L2**: capture-at-halt, then **pause and ask the user which way to route.**
+  Never guess at a gray fork. (The ask-line is set by autonomy_level; L2 = ask on gray.)
+
+**AFK behaviour at a BIG or GRAY fork — park, don't halt the whole build:**
+- Forked task is **isolable** (no other task in the build depends on it) → **park only that
+  task**, keep executing the independent tasks in the wave/build.
+- **Halt the whole build only if** everything downstream depends on the forked decision.
+- Never substitute a guess for the parked decision.
+
+**Capture-at-halt — hard requirement, do it the moment you park/block a task, before anything else:**
+1. Append to `docs/progress/{spec-name}.md`:
+   `Task N {blocked|parked}: {what the spec says} → {why it can't be done as-is} → {the decision planning/user must make}.`
+2. Update `docs/status.md` In-Flight: `{spec} · {blocked|parked} · stopped at task N/{total}`.
+This is what makes re-engagement cheap — without it, planning must re-read the whole spec to
+reconstruct the problem.
+
+**A blocked spec stays in `docs/changes/` marked `blocked`** — do NOT move it to `drafts/`.
+That relocation (patch-in-place vs full re-draft) is planning's judgment, not coding's.
 
 ### Edit Mode
 

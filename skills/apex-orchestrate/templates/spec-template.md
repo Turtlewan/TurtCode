@@ -7,6 +7,17 @@ autonomy_level: L2
 
 # Spec: {title}
 
+**Identity:** {one line — what this builds, for routing/review/recall. NOT rationale.}
+<!-- Optional, on its own line: → why: see docs/technical/adr/ADR-NNN-*.md (a pointer, never the content). -->
+
+<!-- A spec is an EXECUTION SCRIPT, not a design doc: rich on the *what* (exact files,
+     copy-paste-ready detail, per-task verify), stripped of the *why*. DeepSeek executes
+     literally and cannot fill gaps. Spec-authoring rules:
+     - No why inline. Litmus when tempted: does it change what gets built? No → cut it
+       (home = ADR / planning discussion). Yes → don't add the why, make the *what* explicit.
+     - List files per task — every task names its exact files (see ## Tasks). Never "update the auth flow."
+     - Cross-cutting conventions live in the relevant skill's impl.md, never copied into the spec. -->
+
 <!-- Split rule: if this spec touches >3 files OR has >2 logical phases, split it into separate specs. -->
 
 ## Assumptions
@@ -29,9 +40,10 @@ Simplicity check: {considered simpler approach? yes/no — if yes, why this vers
 | {full/path/to/file.ts} | create \| modify \| delete | {what changes} |
 
 ## Tasks
-- [ ] Task 1: {description} — done when: {observable outcome}
-- [ ] Task 2: {description} — done when: {observable outcome}
-- [ ] Task 3: {description} — done when: {observable outcome}
+<!-- Every task names its exact files — never "update the auth flow" (forces the worker to explore = context cost + judgment, DeepSeek's two weakest areas). -->
+- [ ] Task 1: {description} — files: {full/path/a.ts, full/path/b.ts} — done when: {observable outcome}
+- [ ] Task 2: {description} — files: {full/path/c.ts} — done when: {observable outcome}
+- [ ] Task 3: {description} — files: {full/path/d.ts} — done when: {observable outcome}
 
 ## Permissions
 

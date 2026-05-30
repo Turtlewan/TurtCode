@@ -1,8 +1,8 @@
 ---
 skill: apex-handoff
 backend: claude
-version: 1.1.0
-last_updated: 2026-05-28
+version: 1.2.0
+last_updated: 2026-05-30
 sources:
   - APEX Design Specification 2026-05-24
   - Planning with Files (OthmanAdi) — github.com/OthmanAdi/planning-with-files
@@ -16,37 +16,64 @@ Defines the bidirectional handoff format between planning and coding modes.
 The only way to move from planning to coding is a spec file.
 The only way to move from coding to planning is a handoff file.
 
+## What the handoff is
+
+**A thin, read-once inbox: "what the build learned that git can't reconstruct."**
+It is *narrative only* — not a state record. One home per fact:
+
+| Fact | Its home — NOT the handoff |
+|------|----------------------------|
+| What files changed, SHAs | `git log` / `git diff` |
+| Build/test status, known issues | status.md (live state) |
+| Which specs finished | status.md + `docs/changes/done/` |
+| In-progress position (partial/blocked/parked) | status.md **In-Flight** pointer |
+
+The handoff never carries any of the above. If a fact has a home above, it does not
+go in the handoff — duplicating it is the root cause of handoff bloat and drift.
+
 ## Writing a handoff (coding → planning)
 
 Called by apex-code at the end of every session.
 
 1. Copy template from ~/.claude/skills/apex-orchestrate/templates/handoff-from-coding.md
 2. Save to docs/handoff/{YYYY-MM-DD}.md (today's date)
-3. Fill every section — no empty sections, no "N/A", write "none" explicitly
+3. Fill only the four narrative sections; write "none" explicitly where empty:
+   - **Decisions Made** — autonomous decisions + rationale; mark "review needed" if planning should revisit
+   - **Specialist Flags** — the non-obvious gotcha a specialist surfaced that git diff won't show
+   - **Blocked Actions** — permissions/architecture calls coding couldn't make; what planning must resolve
+   - **What's Next (discoveries)** — only what the build *learned* (surprises, follow-ups) — NOT a
+     restatement of remaining tasks (those live in the spec + In-Flight)
+4. Update status.md In-Flight (see In-Flight State below). The handoff stays thin precisely
+   because In-Flight carries the in-progress position.
 
-Sections that must always be filled:
-- What Was Built: 1-3 sentences, what a user would notice
-- Specs Completed: every spec touched this session with final status
-- Files Changed: every file modified, with short-sha if committed
-- Current State: actual build/test status — run the commands, don't guess
-- What's Next: at least one concrete suggestion for planning mode
+## Reading a handoff (planning ← coding) — triage is a drain, not a glance
 
-Sections filled only if applicable:
-- Documentation Status: fill if any docs work was done
-- Specialist Flags: fill if any specialist detected an issue
-- Decisions Made: fill if any autonomous decisions were made
-- Blocked Actions: fill if any unlisted permissions were encountered
+Called by apex-plan at session start. Read the latest handoff **once**.
 
-## Reading a handoff (planning ← coding)
+**Inbox-zero before closing the session.** Surfacing an item is not landing it — an item
+read and not filed is lost. Every handoff item must terminate in **exactly one** of:
 
-Called by apex-plan at session start.
+1. **Pending Spec** — write/queue a spec (Blocked Actions, "review needed" decisions often land here)
+2. **Open Question** — add to status.md Open Questions (unresolved decision)
+3. **Folded** — incorporated into existing state (e.g. a gotcha codified into a spec/skill/ADR)
+4. **Discarded** — explicitly judged not actionable
 
-Parse and surface:
-1. What's Next → present as suggested starting point for this session
-2. Decisions Made with "Yes ⚠️" → these need planning review before next build
-3. Specialist Flags with high severity → address in next spec
-4. Blocked Actions → add these to permissions section of next relevant spec
-5. Current State failing build/tests → this is the first priority
+A drained handoff stays git-tracked in `docs/handoff/` but is never auto-read again — only
+the latest is read, only until drained. Accumulation is storage, not context. No standing
+`decisions.md` log (it re-creates the bloat); architectural decisions → ADR during triage.
+
+## In-Flight State (status.md) — the durable in-progress channel
+
+The In-Flight row is a terse position pointer, not a narrative:
+`{spec} · {state} · stopped at task {n}/{total}`. State enum (exactly three):
+
+| State | Meaning |
+|-------|---------|
+| `partial` | Clean pause mid-spec — coding resumes off the In-Flight pointer; spec stays in `docs/changes/` |
+| `blocked` | Needs planning intervention — spec stays in `docs/changes/` marked `blocked` until planning picks it up |
+| `parked` | Paused at a gray-zone fork awaiting user routing |
+
+Happy path barely touches In-Flight (clear it); every unhappy path *lives* in it.
 
 ## Spec status values
 
@@ -56,7 +83,10 @@ Parse and surface:
 | 🔄 partial | Some tasks done — spec stays in docs/changes/ for resume |
 | ❌ blocked | Could not complete — needs planning intervention |
 
-## File change status values
+## Commit status values (status.md In-Flight `Uncommitted` column)
+
+The handoff carries no file table — git is the changelog. Uncommitted risk lives in the
+status.md In-Flight row:
 
 | Status | Meaning |
 |--------|---------|

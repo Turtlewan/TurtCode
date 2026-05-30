@@ -1,8 +1,8 @@
 ---
 skill: apex-debug
 backend: claude
-version: 1.1.0
-last_updated: 2026-05-28
+version: 1.2.0
+last_updated: 2026-05-30
 sources:
   - APEX Design Specification 2026-05-24
   - Superpowers (obra) — github.com/obra/superpowers
@@ -10,6 +10,12 @@ sources:
   - Sentry MCP — github.com/getsentry/sentry-mcp
   - Agent Skills (addyosmani) — github.com/addyosmani/agent-skills
 staleness_threshold: 30d
+description: >
+  Use when investigating a bug, crash, test failure, regression, or "X is broken / not
+  working / behaves wrong" — reproduce-before-fixing, root-cause via one-hypothesis-at-a-time,
+  regression test, and routing the bug record to its durable home. Triggers: "debug X",
+  "why is X failing", "track down this bug", Bug Fix mode from apex-plan, a production
+  incident (--forensic). Not for adding features or known planned work.
 ---
 
 # APEX Bug Investigation
@@ -74,17 +80,24 @@ Surgical fix only:
 2. Run the full test suite — no regressions introduced
 3. If any test fails: this fix broke something — return to Stage 3
 
-### Stage 6 — Prevent
+### Stage 6 — Prevent & record (one home per fact)
 
-1. Write a regression test that would have caught this bug
-   - The test must fail before the fix and pass after
-   - Name it: "it {describes the bug scenario}"
-2. Document in handoff:
-   - Root cause (1 sentence)
-   - Fix location (file:line)
-   - Regression test location
-   - Recurrence risk: low / medium / high
-   - If high: what to watch for
+Each piece of the bug record gets ONE durable home — **git, not a doc that gets archived**:
+
+| Record | Home |
+|--------|------|
+| Root cause (the *why*) | the **commit message body** |
+| Fix (the diff) | the commit |
+| Prevention | a **regression test** (fails before, passes after; name it "it {bug scenario}") |
+| High-recurrence-risk warning | a **code comment at the fix site** |
+| "A bug was fixed" (session signal) | the handoff — transient, a pointer only |
+| Unfixed / deferred bug | a **GitHub Issue** (routed + gated — see apex-github) |
+
+1. Write the regression test (fails before the fix, passes after).
+2. Put the root cause in the **commit message body** — not only the handoff. If the fix closes
+   a tracked issue, end the commit with `fixes #N` (auto-closes it).
+3. If recurrence risk is **high**: add a one-line **code comment at the fix site** naming the trap.
+4. The handoff carries only the signal + pointers (below) — git is the durable record.
 
 ## Forensic mode (--forensic)
 
@@ -111,18 +124,22 @@ Adds Stage 0 before the standard 6 stages.
 
 Then proceed to Stage 1 with the hypothesis as starting point.
 
-## Handoff mini-postmortem
+## Handoff signal (not the durable record)
 
-Every bug investigation writes this to the session handoff:
+The durable record lives in git (root cause → commit body, prevention → test, high-risk →
+code comment). The handoff carries only a **transient one-line signal** so planning knows a
+bug was touched — it does not duplicate the record:
 
 ```markdown
-## Bug Investigation: {title}
-- Root cause: {1 sentence — specific, not vague}
-- Fix: {file}:{approximate line} — {what changed}
-- Regression test: {test file path}:{test name}
-- Recurrence risk: low | medium | high
-- Watch for: {only if high — what would indicate recurrence}
+## Bug fixed: {title}
+- root cause → commit {sha}; regression test → {test path}; risk: {low | med | high}.
 ```
+
+For an **unfixed / deferred / escalated** bug (or a recurrence-risk:high left unaddressed):
+do NOT bury it in the handoff — route it to a **GitHub Issue** via `apex-github`, subject to
+its security/visibility gate. **The Issue *is* the bug backlog; `status.md` does not carry one.**
+A bug fixed in-session with a regression test gets **no issue** (git + test only — avoid
+created-and-closed noise).
 
 ## Rules that cannot be broken
 

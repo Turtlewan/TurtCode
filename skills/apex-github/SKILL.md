@@ -1,14 +1,20 @@
 ---
 skill: apex-github
 backend: claude
-version: 1.0.0
-last_updated: 2026-05-28
+version: 1.1.0
+last_updated: 2026-05-30
 sources:
   - GitHub Docs — docs.github.com
   - GitHub CLI — cli.github.com
   - Conventional Commits — conventionalcommits.org
   - Keep a Changelog — keepachangelog.com
 staleness_threshold: 30d
+description: >
+  Use when working with GitHub itself: repo setup, branch protection, PR/issue workflows,
+  issue taxonomy & labels, Actions/CI, releases & changelogs, GitHub Projects, or filing a
+  bug into Issues as the backlog. Triggers: "set up the repo", "PR workflow", "track this bug
+  as an issue", "branch protection", "cut a release". Not for the debugging investigation
+  itself (that's apex-debug) or for git mechanics unrelated to GitHub.
 ---
 
 # GitHub Specialist — Planning Mode
@@ -81,6 +87,25 @@ A consistent label system across all repos:
 3. **Investigation**: add `needs-repro` if can't reproduce; link related issues/PRs
 4. **Fix**: reference issue in PR (`Fixes #123` auto-closes on merge); write failing test first
 5. **Verify**: QA confirms fix in staging before closing
+
+### Bug backlog → Issues (one home for unfixed bugs; routed from apex-debug)
+
+Where a bug record lands depends on whether it was fixed:
+- **Fixed in-session with a regression test** → git + test only. **Do NOT open an issue**
+  (avoid created-and-closed noise). Root cause lives in the commit body; add `fixes #N` only
+  if an issue already existed.
+- **Known but unfixed** (deferred, escalated to planning, or recurrence-risk:high left
+  unaddressed) → open a GitHub Issue. **Issues *is* the bug backlog** — `status.md` does not
+  carry one. The eventual fix commit's `fixes #N` auto-closes it (the hub wiring ticket ↔
+  commit ↔ test).
+
+**Security / visibility gate — hard rail, runs BEFORE filing any bug issue:**
+1. **Security / auth / data-loss bugs → never auto-file the details to an issue.** Keep them
+   git-private; surface via a **private GitHub Security Advisory**, human-driven. Never write
+   a working exploit or repro into a tracked issue.
+2. **Check repo visibility first:** `gh repo view --json visibility`.
+   - **public** → minimal, non-exploitable stub (or skip the issue entirely) — never a working repro.
+   - **private** → full detail is acceptable.
 
 **Bug report template:**
 ```markdown
