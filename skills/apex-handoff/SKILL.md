@@ -1,8 +1,8 @@
 ---
 skill: apex-handoff
 backend: claude
-version: 1.2.0
-last_updated: 2026-05-30
+version: 1.3.0
+last_updated: 2026-05-31
 sources:
   - APEX Design Specification 2026-05-24
   - Planning with Files (OthmanAdi) — github.com/OthmanAdi/planning-with-files
@@ -38,7 +38,11 @@ Called by apex-code at the end of every session.
 1. Copy template from ~/.claude/skills/apex-orchestrate/templates/handoff-from-coding.md
 2. Save to docs/handoff/{YYYY-MM-DD}.md (today's date)
 3. Fill only the four narrative sections; write "none" explicitly where empty:
-   - **Decisions Made** — autonomous decisions + rationale; mark "review needed" if planning should revisit
+   - **Decisions Made** — autonomous decisions + rationale; mark "review needed" if planning should revisit.
+     Tag any *build-time architectural decision* with `[arch]` (a choice that shaped structure —
+     a data model, a boundary, a protocol, a dependency). Coding only **tags** it; planning writes
+     the ADR during the drain. Do not author the ADR in coding mode (DeepSeek) — the rationale is
+     judgment-heavy and is planning's job.
    - **Specialist Flags** — the non-obvious gotcha a specialist surfaced that git diff won't show
    - **Blocked Actions** — permissions/architecture calls coding couldn't make; what planning must resolve
    - **What's Next (discoveries)** — only what the build *learned* (surprises, follow-ups) — NOT a
@@ -58,9 +62,17 @@ read and not filed is lost. Every handoff item must terminate in **exactly one**
 3. **Folded** — incorporated into existing state (e.g. a gotcha codified into a spec/skill/ADR)
 4. **Discarded** — explicitly judged not actionable
 
+**Required routing — `[arch]`-tagged decisions terminate as a written ADR (not optional).**
+Every build-time architectural decision tagged `[arch]` in *Decisions Made* must terminate as a
+written `docs/technical/adr/ADR-NNN-*.md` **this session** — planning authors it (coding only
+tagged it). "Folded" is not sufficient for an `[arch]` item: a one-line mention in a spec or
+status.md does not satisfy this — the ADR file must exist. If the decision also changed the
+architecture, update `docs/technical/architecture/overview.md` too (de-stub if needed). This
+is the drain-side half of the ADR-001 contract; `apex-plan`'s readiness gate is the other half.
+
 A drained handoff stays git-tracked in `docs/handoff/` but is never auto-read again — only
 the latest is read, only until drained. Accumulation is storage, not context. No standing
-`decisions.md` log (it re-creates the bloat); architectural decisions → ADR during triage.
+`decisions.md` log (it re-creates the bloat).
 
 ## In-Flight State (status.md) — the durable in-progress channel
 

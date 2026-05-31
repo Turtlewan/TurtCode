@@ -1,8 +1,8 @@
 ---
 skill: apex-plan
 backend: claude
-version: 1.5.0
-last_updated: 2026-05-30
+version: 1.7.0
+last_updated: 2026-05-31
 sources:
   - APEX Design Specification 2026-05-24
   - GSD (Get Shit Done) — github.com/gsd-build/get-shit-done
@@ -23,7 +23,25 @@ Before responding to the user's request:
    blocked actions, discoveries. (What changed lives in git, not the handoff — run
    `git log` / `git diff` only if you need the file-level history. Build/test status and
    in-progress position are in status.md.)
-4. Acknowledge: "I see {n} pending spec(s): {list}. Open flags from last build: {or none}. What are we working on today?"
+4. Run the **doc-coverage check** (below) — fold its one-line result into the acknowledgement.
+5. Acknowledge: "I see {n} pending spec(s): {list}. Open flags from last build: {or none}. Doc coverage: {result}. What are we working on today?"
+
+### Doc-coverage check — informational, never blocks
+
+Mirrors `apex-refresh --audit`: surface the per-project documentation gaps so they don't
+silently rot. **It never halts anything** — enforcement lives in the readiness gate, not here.
+Compute three signals and report them in one line (say "clean" if none fire):
+
+1. **Overview missing / still a stub** — does `docs/technical/architecture/overview.md` exist?
+   Does it still contain the `<!-- apex:overview:stub -->` marker? Stub = seeded but never
+   written → flag "overview is still a stub."
+2. **Decisions not yet ADR'd** — any architectural decision in the latest handoff's
+   "Decisions Made" or in status.md that has no matching `docs/technical/adr/ADR-NNN-*.md` →
+   flag "{n} decision(s) not yet ADR'd."
+3. **Overview staleness** — overview.md older than the newest ADR (an architectural change
+   landed but the story wasn't updated) → flag "overview may be stale vs ADR-NNN."
+
+Example: "Doc coverage: overview is still a stub; 1 decision not yet ADR'd."
 
 ### Drain the handoff — inbox-zero before the session closes
 
@@ -227,9 +245,42 @@ Karpathy Quality Gate
 Documentation
   [ ] Inline doc requirements specified (if any code is exported)
   [ ] Product doc updates specified (if any user-facing change)
+  [ ] ADR coverage: every architectural decision reached this session has a written
+      docs/technical/adr/ADR-NNN-*.md — not merely "noted inline." Fails until the ADR file exists.
+  [ ] Overview currency: if the architecture changed, docs/technical/architecture/overview.md
+      is updated — and de-stubbed (the `<!-- apex:overview:stub -->` marker removed) if it was
+      still a stub. Shaping decisions link to their ADRs.
 ```
 
 If any item fails: surface what is unresolved, revise in-place, re-run gate from top. Repeat until clean.
+
+## Confirmation digest — how the user signs off
+
+At spec-confirm time, do **not** tell the user to "go read the file." They lived the
+discussion; sending them to re-read a stripped-down restatement is the redundant step.
+Instead surface a **digest** in chat — only the fields where the written spec could have
+drifted from what you discussed — and let them verify *that*. Depth is mode-gated.
+
+**Digest = the load-bearing, high-drift fields only:**
+- **Files** — every path + operation (create / modify / delete)
+- **Acceptance criteria** — each as a one-line observable outcome
+- **Decisions baked in** — choices the spec now encodes, especially any reversed mid-discussion
+  or folded in late (this is where transcription drift hides)
+
+Omit the *why*, the full task breakdown, and boilerplate — the user is auditing fidelity,
+not re-reading the spec. Close with:
+> "Anything here not match what we discussed? Otherwise say 'start build.'"
+
+**Mode dial — how much to show:**
+| Mode | Confirmation |
+|------|-------------|
+| Deep Details | Digest **+** offer to open the full spec file |
+| Light | Digest only |
+| Bug Fix | One-line verbal confirm — no digest (single ephemeral fix) |
+
+Why a digest, not the file: it catches the drift that bites an AFK build (wrong path, loose
+criterion, a reversed decision) at a fraction of the reading, and keeps the user in chat —
+no context switch from deciding to auditing.
 
 ## Moving spec to ready — by mode
 
@@ -239,15 +290,16 @@ If any item fails: surface what is unresolved, revise in-place, re-run gate from
 3. Update docs/status.md PLANNING block:
    - Add spec to Pending Specs table with one-line summary
    - Update _Last updated by planning mode:_ to today
-4. Confirm: "✅ Spec ready at docs/changes/{name}.md. Say 'start build' when ready."
+4. Present the **Confirmation digest** (Deep Details depth — digest + offer the full file),
+   then: "✅ Spec ready at docs/changes/{name}.md. Say 'start build' when ready."
 
 ### Light
-1. Confirm with user: "Intent doc at docs/changes/{name}.md — ready for build?"
-2. If yes: update docs/status.md PLANNING block (add to Pending table). No gate.
-3. If no: revise.
+1. Present the **Confirmation digest** (Light depth — digest only) for docs/changes/{name}.md.
+2. If it matches: update docs/status.md PLANNING block (add to Pending table). No gate.
+3. If not: revise.
 
 ### Bug Fix
-1. Confirm with user: "Bug fix doc at docs/changes/{name}.md — ready for build?"
+1. One-line verbal confirm — no digest: "Bug fix doc at docs/changes/{name}.md — ready for build?"
 2. If yes: no status.md update. Coding mode will fix it immediately.
 3. If no: revise.
 

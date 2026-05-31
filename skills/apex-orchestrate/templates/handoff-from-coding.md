@@ -7,7 +7,10 @@ _Mode: coding | L{n} | {profile}_
 > and in-progress position are in status.md.** None of that is repeated here.
 
 ## Decisions Made
-{Autonomous decisions + rationale. Mark "review needed ⚠️" if planning should revisit. Or "none".}
+{Autonomous decisions + rationale. Mark "review needed ⚠️" if planning should revisit.
+Tag build-time architectural decisions with `[arch]` (data model, boundary, protocol,
+dependency) — planning must turn each into an ADR during the drain. Don't write the ADR
+here. Or "none".}
 
 ## Specialist Flags
 {The non-obvious gotcha a specialist surfaced that git diff won't show — e.g. a standing

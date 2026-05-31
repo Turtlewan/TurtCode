@@ -1,12 +1,18 @@
 ---
 skill: apex-init
 backend: claude
-version: 1.1.0
-last_updated: 2026-05-28
+version: 1.2.0
+last_updated: 2026-05-31
 sources:
   - APEX Design Specification 2026-05-24
   - GSD (Get Shit Done) — github.com/gsd-build/get-shit-done
 staleness_threshold: 30d
+description: >
+  Use when bootstrapping a brand-new APEX project — triggered automatically by
+  apex-orchestrate when no docs/status.md exists in the project directory.
+  Scaffolds the docs/ tree, seeds PROJECT.md / REQUIREMENTS.md / ROADMAP.md /
+  status.md and the System Overview stub, then hands back. Not for projects that
+  already have a status.md (that's normal orchestration).
 ---
 
 # APEX Init — New Project Bootstrap
@@ -72,6 +78,12 @@ Create these files in the project root if they don't already exist:
 - REQUIREMENTS.md (scope boundaries — stub with "In scope / Out of scope" sections)
 - ROADMAP.md (phase direction — stub, to be filled during planning)
 
+Also seed the **System Overview stub** at `docs/technical/architecture/overview.md`
+if it doesn't already exist (template below). Leave it as the stub — it carries the
+`<!-- apex:overview:stub -->` marker so planning mode's coverage check flags it as
+"exists but not yet written." Planning fills it in (in Claude) once the architecture
+takes shape; do not write the real overview during bootstrap.
+
 ## Step 3: Write docs/status.md
 
 Use the template from ~/.claude/skills/apex-orchestrate/templates/status-template.md.
@@ -91,6 +103,7 @@ Fill in:
     drafts/         ← specs-in-progress
     handoff/        ← session summaries
     technical/      ← ADRs, runbooks, architecture docs
+      architecture/overview.md  ← System Overview (stub — planning fills it in)
     product/        ← user guides, API docs, changelog
   PROJECT.md        ← vision — loaded by every new agent
   REQUIREMENTS.md   ← scope boundaries — loaded by every new agent
@@ -165,4 +178,31 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 # {project-name}
 
 {one-sentence description}
+```
+
+## docs/technical/architecture/overview.md initial content
+
+Seed this verbatim (substitute `{project-name}`). The `<!-- apex:overview:stub -->`
+marker stays until planning writes the real overview — it is what the doc-coverage
+check greps for. Do not fill the sections during bootstrap.
+
+```markdown
+# {project-name} — System Overview
+
+<!-- apex:overview:stub -->
+> **STATUS: STUB.** Not yet written. Planning mode (Claude) fills this in once the
+> architecture takes shape. Until then the doc-coverage check flags it as outstanding.
+
+## What it does
+_One or two paragraphs: what the system does, for whom, top-to-bottom readable._
+
+## How it's structured
+_The major pieces and how they fit — the shape of the system, not an API dump._
+
+## Shaping decisions
+_The handful of decisions that define the architecture. Each links to its ADR._
+
+| Decision | Why (→ ADR) |
+|----------|-------------|
+| _e.g. Postgres over Mongo_ | [ADR-001](../adr/ADR-001-*.md) |
 ```
