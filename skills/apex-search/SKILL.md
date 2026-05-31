@@ -1,20 +1,47 @@
 ---
 skill: apex-search
 backend: claude
-version: 1.0.1
-last_updated: 2026-05-28
+version: 1.2.0
+last_updated: 2026-05-31
 sources:
   - pgvector — github.com/pgvector/pgvector
   - Ollama — ollama.com/library
   - OpenAI Embeddings — platform.openai.com/docs/guides/embeddings
   - Typesense Docs — typesense.org/docs
   - PostgreSQL FTS — postgresql.org/docs/current/textsearch.html
+  - SP5 de-coupling (stack-agnostic; § Stack assumptions)
 staleness_threshold: 30d
+description: >
+  Use when designing search or retrieval — full-text/keyword search, vector/semantic search,
+  embeddings + chunking, or RAG retrieval feeding an AI/LLM. Triggers: "vector search",
+  "semantic search", "RAG", "retrieval", "embeddings", "hybrid search", "search my notes/data".
+  Concepts are stack-neutral (chunking, hybrid RRF, idempotent ingest, dimension-locking); concrete
+  DDL illustrates Postgres + pgvector and adapts to the bound stack (e.g. SQLite + sqlite-vec) via
+  § Stack assumptions. Not the LLM generation/eval layer (apex-ai-systems) or the stack choice
+  itself (apex-stack).
 ---
 
 # apex-search — Search & RAG
 
-## Research findings
+## Stack assumptions
+
+Concrete DDL/index examples below assume **Postgres + pgvector + `tsvector`** (the *default-stack
+illustration*). The **concepts are stack-neutral** — only the store's DDL and nearest-neighbour
+syntax change. Planning checks this against the bound `stack_skills` and adapts on mismatch; the
+**stack skill's Verification Recipe is the verifier, not this file**.
+
+| Concept (keep) | Postgres + pgvector (illustrated) | Swap point on the bound store |
+|---|---|---|
+| Vector column + similarity | `VECTOR(n)` + HNSW index, `<=>` cosine | **SQLite + sqlite-vec:** `vec0` virtual table, `FLOAT[n]`, KNN via `embedding MATCH :q AND k = :n` — exact/brute-force (no ANN index; correct at single-user scale). **LanceDB / Qdrant:** native vector API. |
+| Keyword search | `tsvector` + GIN, `ts_rank` | **SQLite:** FTS5 virtual table + `bm25()`. **Dedicated:** Typesense / Elastic. |
+| Hybrid fusion (RRF) | one SQL query, FULL OUTER JOIN + COALESCE | **SQLite (no FULL OUTER JOIN):** `UNION` of id-sets + two `LEFT JOIN`s; identical `1/(60+rank)` math. |
+| Store enablement | `CREATE EXTENSION vector` once per DB | **sqlite-vec:** load the extension **per connection**, not once per DB. |
+| ID / JSON / time types | `UUID` / `JSONB` / `TIMESTAMPTZ` | **SQLite:** app-generated `TEXT` UUID / `TEXT` JSON / ISO-8601 `TEXT`. |
+
+Stack-neutral — never swap these out: chunking, hybrid RRF, content-hash idempotency, exact
+embedding-dimension locking, local-vs-API embedding choice.
+
+## Research findings (default-stack reference — Postgres/pgvector/Prisma specifics)
 
 | Technology | Finding | Tag |
 |------------|---------|-----|
@@ -46,7 +73,7 @@ staleness_threshold: 30d
 
 ## Search type decision table
 
-| Use case | Approach | Stack |
+| Use case | Approach | Default illustration (adapt per § Stack assumptions) |
 |----------|----------|-------|
 | Find exact keywords, moderate scale | PostgreSQL FTS | `tsvector` + `GIN` index |
 | Typo-tolerant, facets, autocomplete | Typesense | Self-hosted, Docker |
@@ -54,7 +81,7 @@ staleness_threshold: 30d
 | AI brain retrieval (RAG) | Hybrid: FTS + vector + RRF | pgvector + `ts_rank` + RRF |
 | Hosted, no infra | Algolia | Paid, excellent DX |
 
-**Primary recommendation: PostgreSQL hybrid search.** pgvector is already in your DB, zero extra infra. HNSW index handles millions of vectors. PostgreSQL FTS uses the same DB with `tsvector` columns and GIN indexes. Hybrid RRF combines both scores for better retrieval quality than either alone. Typesense is an opt-in if typo tolerance/facets become a priority.
+**Primary recommendation: hybrid search (keyword + vector + RRF)** — it beats either alone (~84% vs ~62% precision). Implement it in whatever store the bound stack provides; a single DB doing both keyword + vector is ideal (Postgres `tsvector` + pgvector, *or* SQLite FTS5 + sqlite-vec) — zero extra infra. Reach for a dedicated engine (Typesense) only if typo-tolerance/facets become a priority.
 
 ## Embedding provider decision table
 
@@ -67,7 +94,11 @@ staleness_threshold: 30d
 
 **Recommendation for Mac Mini / personal AI brain:** Ollama local embeddings (privacy, no cost). `nomic-embed-text` as default with 8K context window. OpenAI as opt-in for higher quality when needed.
 
-## DB schema for RAG
+## DB schema for RAG (Postgres illustration — adapt DDL per § Stack assumptions)
+
+The *shape* is the point — documents → chunks, `content_hash` for idempotent ingest, a
+dimension-locked vector column, and a keyword index. On SQLite this becomes `chunks` + an FTS5
+virtual table + a sqlite-vec `vec0` table keyed by a shared integer rowid (see § Stack assumptions).
 
 ```sql
 -- Source documents (one row per ingested item)
@@ -111,8 +142,8 @@ Overlap rule: always overlap adjacent chunks by 10-15% to avoid cutting context 
 
 ## Hybrid search flow (RRF — Reciprocal Rank Fusion)
 
-1. Run PostgreSQL FTS query → get ranked list of chunk IDs (by `ts_rank`)
-2. Run pgvector similarity query → get ranked list of chunk IDs (by cosine distance)
+1. Run the keyword/FTS query → ranked chunk IDs (Postgres `ts_rank`; SQLite FTS5 `bm25()`)
+2. Run the vector similarity query → ranked chunk IDs by cosine distance (pgvector `<=>`; sqlite-vec `vec0` KNN)
 3. Apply RRF formula: `score = 1/(k + rank_fts) + 1/(k + rank_vector)` where `k=60`
 4. Sort by combined RRF score → return top N chunks
 5. Inject top chunks into LLM context window (apex-ai-systems handles this step)
@@ -135,12 +166,12 @@ Answer the user's question using this context where relevant.
 
 ## Hard blocks
 
-- Never store embeddings as JSON arrays — use pgvector's `VECTOR` type for indexed similarity search
-- Never run similarity search without an index (HNSW or IVFFlat) on tables > 10k rows
+- Never store embeddings as JSON/TEXT arrays — use the store's native vector type (pgvector `VECTOR`, sqlite-vec `FLOAT[n]`) so similarity search is optimised
+- Never run similarity search **without the store's ANN index where it has one** (pgvector HNSW/IVFFlat) on tables > 10k rows — *exception:* sqlite-vec has no ANN index (exact brute-force KNN), which is correct at single-user/desktop scale
 - Never embed full documents without chunking first — exceeds context window and degrades quality
 - Never expose raw embedding vectors in API responses
 - Never re-embed unchanged content — check content hash before calling embedding API
-- Never use IVFFlat if table has fewer than 1M rows — HNSW is better for small-medium scale
+- On pgvector specifically: prefer HNSW over IVFFlat below ~1M rows (better recall, no training step)
 
 ## Review checklist
 
@@ -154,9 +185,8 @@ Answer the user's question using this context where relevant.
 
 ## Gotchas / edge cases
 
-- **pgvector extension must be enabled before migration**: `CREATE EXTENSION IF NOT EXISTS vector` must run before any table with a `VECTOR` column is created. In Prisma this means a raw SQL migration step before the schema migration.
-- **Prisma vector support**: Prisma uses `Unsupported("vector(768)")` for vector columns, meaning similarity queries must use `$queryRaw`.
-- **HNSW vs IVFFlat**: HNSW is generally faster for query time and doesn't require a training step. IVFFlat requires `lists` parameter tuning. For this project's scale, HNSW is the default.
+- **Vector store must be enabled before use** (stack-specific): pgvector → `CREATE EXTENSION IF NOT EXISTS vector` once per DB before any `VECTOR`-column table; **sqlite-vec → load the extension *per connection*** before any `vec0` query (it registers only on that connection). (Prisma: vector columns need `Unsupported("vector(n)")` + `$queryRaw` for similarity queries.)
+- **HNSW vs IVFFlat** (pgvector): HNSW is faster at query time and needs no training step; IVFFlat needs `lists` tuning. HNSW is the default at this scale. (sqlite-vec offers neither — brute-force KNN.)
 - **Embedding dimension must match exactly**: If you use `nomic-embed-text` (768 dims) and define `VECTOR(1536)`, queries will fail. The column definition and the model must be locked together. Changing models requires re-embedding all chunks.
 - **Ollama must be running for ingest and query**: If Ollama is down, embedding generation fails. Include error handling for Ollama unavailability and recommend a health check before starting the ingest pipeline.
 - **Idempotent ingest is critical**: Re-running ingest on the same document should not create duplicates. The content hash pattern handles this. Without it, every re-ingest doubles the chunk count.

@@ -1,7 +1,7 @@
 ---
 skill: apex-code
 backend: claude
-version: 1.5.1
+version: 1.6.0
 last_updated: 2026-05-31
 sources:
   - APEX Design Specification 2026-05-24
@@ -125,12 +125,18 @@ apex-code is a **stack-agnostic runner**: it owns the *loop*; the stack skill ow
 *commands*. There are **no npm/test/lint/build commands baked into this skill** — get them from
 the recipe (ADR-006).
 
-**Load the recipe (once, at pre-flight):**
+**Load the bound impl.md core (once, at pre-flight) — not the whole file:**
 1. Read `stack_skills` from status.md (session start).
-2. For each bound skill, load its `impl.md` `## Verification Recipe`. The **effective recipe =
-   the union of their layers** (language checks + framework checks) — e.g.
+2. For each bound stack skill, load **only its impl.md always-load core**, by section name:
+   `## NEVER do` + `## ALWAYS do` (hard rules to obey while writing), the `## Verification Recipe`,
+   and a compact `## Common errors → fix` table if present. **Do not load the whole impl.md** —
+   pattern walk-throughs and long reference tables stay unread. The **effective recipe = the union
+   of every bound skill's Recipe layers** (language + framework) — e.g.
    `stack_skills: [apex-python, apex-django]` → Python checks **+** Django checks.
-3. **No stack skill bound (`stack_skills: []`):** fall back to the spec's `## Commands to run`;
+3. **On-demand references:** when an impl.md points a pattern to `references/<file>.md` with a load
+   condition ("read when the task touches X"), load that file **only** while a task matches the
+   condition, then move on. Match the condition mechanically — never pre-load references "just in case."
+4. **No stack skill bound (`stack_skills: []`):** fall back to the spec's `## Commands to run`;
    if the spec has none, run the obvious per-ecosystem typecheck/test/build best-effort and
    **log the gap** (no recipe available) in the decisions table.
 

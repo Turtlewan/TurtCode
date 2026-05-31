@@ -1,7 +1,7 @@
 ---
 skill: apex-skill-author
 backend: claude
-version: 1.2.0
+version: 1.3.0
 last_updated: 2026-05-31
 sources:
   - agentskills.io — skill spec & authoring best practices
@@ -212,6 +212,42 @@ most-skipped judgment in `impl.md` authoring.
 
 Evidence and the full model matrix: `docs/research/model-specific-skill-authoring.md`.
 
+## impl.md loading tiers — author for what coding mode loads per run
+
+`impl.md` is consumed by coding mode (`apex-code`) on **every build run**, so structure **every
+`impl.md`** (new and swept) in two tiers by what must load each run.
+
+**Always-load core** — coding mode loads these sections *by section identity*, every run, for each
+bound stack skill. Keep them tight; they are a recurring per-run cost:
+- **frontmatter**
+- **`## Stack assumptions`** *(capability skills only — e.g. `apex-search`, `apex-storage`)* — a
+  one-line statement of the stack/runtime each pattern assumes (e.g. "Assumes Postgres + pgvector;
+  on SQLite/sqlite-vec swap the vector DDL"). Planning checks it against the bound stack and adapts
+  on mismatch — it is **not** a verifier. Stack skills omit it (they *are* the stack).
+- **`## NEVER do` / `## ALWAYS do`** — the hard rules the coder must obey while writing.
+- **`## Verification Recipe`** *(stack skills)* — the runnable check loop.
+- **a compact `## Common errors → fix` table (≤ ~15 rows)** — kept in core because it saves
+  verify-fail recovery iterations. A *long* troubleshooting appendix does **not** qualify → on-demand.
+
+Define the core by these **fixed section names, not a manual "always-load" flag** — so coding mode
+loads them mechanically and authors can't silently inflate the core by over-tagging.
+
+**On-demand tail** — bulky worked examples, long pattern walk-throughs, and big reference tables go
+to **`references/<topic>.md`**, loaded only when a task's work matches an explicit condition stated
+inline at the split point: `> Full wiring: read references/db.md when the task touches the database.`
+
+**When to split — default: don't.**
+- A **lean** `impl.md` (≈≤150 lines of dense gotchas + recipe, like `apex-python`) stays **whole** —
+  splitting tiny files adds indirection for no saving.
+- Split only when the file is **bulky** (approaching the 500-line cap) or a single worked example
+  exceeds ~40 lines and is *not* a hard rule. **Inline** any snippet ≤ ~10 lines that is the literal
+  form of a NEVER/ALWAYS rule — a lookup costs more than the bytes saved.
+- Don't over-fragment: group references by topic; one `references/patterns.md` beats five near-empty
+  files. A new `references/*.md` earns its existence only when its load-trigger is distinct.
+
+(Coding-mode side of this contract — what `apex-code` actually loads — lives in `apex-code` SKILL.md
+§ "Verification — run the stack's recipe".)
+
 ## Content rules — what changes behavior
 
 The model ignores what it already knows. Spend lines only on what it doesn't:
@@ -231,7 +267,8 @@ The model ignores what it already knows. Spend lines only on what it doesn't:
 **Hard cap: 500 lines / 5,000 tokens per `SKILL.md`.** Loaded content stays in context the
 whole session — every line is a recurring cost. Over the cap → move detail to a referenced
 file with an explicit load condition ("read `references/x.md` when …"). Be concise; APEX
-skills may be richer than minimalist skills, but the cap is firm.
+skills may be richer than minimalist skills, but the cap is firm. For `impl.md`, this split is
+governed by the two-tier core/references convention — see § impl.md loading tiers.
 
 ## Updating an existing skill
 
@@ -253,6 +290,7 @@ skills may be richer than minimalist skills, but the cap is firm.
 - Never author a domain skill from training memory when best practices are stale — research first.
 - Never classify a stack skill (`apex-<framework>`) as a plain capability/reference skill — it's a distinct family (always SKILL+impl, always triggers `apex-research`).
 - Never ship a stack skill without a runnable `## Verification Recipe` in its `impl.md`, and never ship that recipe doc-sourced — it must be run against a real project first.
+- Never put a hard rule (`## NEVER`/`## ALWAYS`), the `## Verification Recipe`, or `## Stack assumptions` into a `references/*.md` file — the always-load core is defined by section identity and must stay in `impl.md`.
 
 ## Review checklist
 
@@ -262,6 +300,7 @@ skills may be richer than minimalist skills, but the cap is firm.
 - [ ] Frontmatter complete, including a trigger-style `description`
 - [ ] SKILL vs impl decided deliberately (default planning-only)
 - [ ] impl.md authored to the Flash floor — no judgment calls, short checkpointed chains; SKILL.md names scope explicitly
+- [ ] impl.md tiered: core (frontmatter + `## Stack assumptions` [capability] + NEVER/ALWAYS + Verification Recipe + compact errors) by section identity; bulky patterns in `references/*.md` with load conditions; lean files left whole
 - [ ] Content is gotchas/defaults/procedures — not what the model already knows
 - [ ] Under 500 lines / 5k tokens
 - [ ] Triple-write done (registry + SKILLS.md + SKILL-HISTORY.md)

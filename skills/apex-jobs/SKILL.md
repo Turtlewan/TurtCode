@@ -1,19 +1,45 @@
 ---
 skill: apex-jobs
 backend: claude
-version: 1.0.1
-last_updated: 2026-05-28
+version: 1.1.0
+last_updated: 2026-05-31
 sources:
   - BullMQ Docs — docs.bullmq.io
   - Bull Board — github.com/felixmosh/bull-board
   - pg-boss — github.com/timgit/pg-boss
   - AWS ElastiCache Redis — docs.aws.amazon.com
+  - SP5 de-coupling (stack-agnostic; § Stack assumptions)
 staleness_threshold: 30d
+description: >
+  Use when designing background jobs / async task processing — job queues, workers, retries +
+  backoff, cron/scheduled tasks, dead-letter queues, graceful shutdown. Triggers: "background job",
+  "job queue", "worker", "cron job", "scheduled task", "retry failed tasks", "process X async".
+  Concepts are stack-neutral (queue/worker separation, retry+backoff, DLQ, idempotent handlers);
+  concrete examples illustrate BullMQ + Redis + Node and adapt to the bound stack (e.g. Python arq /
+  APScheduler / SQLite-backed) via § Stack assumptions. Not real-time push (apex-realtime).
 ---
 
 # apex-jobs — Background Jobs
 
-## Research findings
+## Stack assumptions
+
+Concepts below are **stack-neutral**; concrete examples assume **BullMQ + Redis + Node** (the
+default illustration). Planning checks this against the bound `stack_skills` and adapts on mismatch;
+the **stack skill's Verification Recipe is the verifier**.
+
+| Concept (keep) | BullMQ + Redis + Node (illustrated) | Swap point on the bound stack |
+|---|---|---|
+| Queue + separate worker process | `Queue`/`Worker` + ioredis | **Python:** arq (Redis, async), Celery, or RQ. **Local single-user (no broker):** APScheduler (in-process cron) or a SQLite-backed durable queue. |
+| Retry + backoff | `attempts` + `backoff: exponential` | arq `max_tries`; Celery `retry_backoff` — same concept. |
+| Durable backing | Redis (`maxRetriesPerRequest: null`) | Redis / Postgres (pg-boss) / **SQLite** for a local app — never purely in-memory. |
+| Cron / repeatable | `repeat: { pattern }` + stable `jobId` | arq cron; APScheduler `CronTrigger`; Celery beat — always a stable id to avoid duplicate registration. |
+| Dashboard | Bull Board (auth-gated) | Celery → Flower; arq has no built-in UI — gate any dashboard behind auth. |
+| Graceful shutdown | `worker.close()` on SIGTERM | arq handles SIGTERM; APScheduler `scheduler.shutdown(wait=True)`. |
+
+Stack-neutral — never swap out: worker-separate-from-web-process, retry + exponential backoff,
+never-silently-swallow-job-errors, idempotent handlers, durable backing, graceful shutdown.
+
+## Research findings (BullMQ / Redis-specific reference)
 
 | Technology | Finding | Tag |
 |------------|---------|-----|
@@ -45,14 +71,14 @@ staleness_threshold: 30d
 
 | Scenario | Library | Why |
 |----------|---------|-----|
-| Persistent server (Mac Mini, Railway, ECS) | BullMQ + Redis | Battle-tested, feature-complete, horizontal scale |
-| No Redis, already have PostgreSQL | pg-boss | PostgreSQL-backed, zero new infra |
+| Node + persistent server + Redis | BullMQ + Redis | Battle-tested, feature-complete, horizontal scale |
+| Have PostgreSQL, no Redis | pg-boss (Node) / arq / Celery (Python) | Reuse existing infra; pick per bound language |
+| Python, local single-user (no broker) | APScheduler or a SQLite-backed queue | No Redis/broker to run on a desktop hub |
 | Serverless / Vercel | Inngest or Trigger.dev | No persistent worker needed (out of scope here) |
 
-**Primary recommendation: BullMQ**
-- Redis: Docker locally → AWS ElastiCache (single node) → ElastiCache Cluster at scale
-- Workers run as a separate process (not inside the web server)
-- Scale horizontally: more ECS tasks = more workers, all pointing at same Redis
+**Primary recommendation: pick per bound stack** (see § Stack assumptions). Constants regardless of
+library: workers run as a separate process; durable backing (not in-memory); attempts + exponential
+backoff; idempotent handlers; graceful shutdown.
 
 ## Core BullMQ concepts
 
