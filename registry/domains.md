@@ -44,3 +44,4 @@ Phase 3 fills in the skill/agent content. This file defines the routing table.
 | search | apex-search/SKILL.md | apex-search/impl.md | — | search, full-text search, vector search, semantic search, RAG, retrieval, embeddings, pgvector, similarity search, chunking, hybrid search, Typesense, Algolia |
 | nextjs | apex-nextjs/SKILL.md | apex-nextjs/impl.md | — | Next.js, Next, App Router, Server Components, Server Actions, React 19, RSC, caching, revalidation, SSR, ISR, Static Generation |
 | python | apex-python/SKILL.md | apex-python/impl.md | — | Python, FastAPI, uv, ruff, mypy, pydantic, pydantic-settings, async, asyncio, uvicorn, ASGI, pytest, typed Python, type hints |
+| swift | apex-swift/SKILL.md | apex-swift/impl.md | — | Swift, SwiftUI, Xcode, xcodebuild, Swift 6, strict concurrency, @Observable, SwiftData, NavigationStack, actor, Sendable, MainActor, macOS app, iPadOS, native iOS, SPM, Swift Package |
