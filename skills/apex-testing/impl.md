@@ -1,15 +1,21 @@
 ---
 skill: apex-testing
 backend: deepseek
-version: 1.0.0
-last_updated: 2026-05-28
+version: 1.1.0
+last_updated: 2026-05-31
 sources:
   - Vitest Docs — vitest.dev
   - Playwright Docs — playwright.dev
+  - docs/technical/adr/ADR-006-buildability-layer-verification-inversion.md
 staleness_threshold: 14d
 ---
 
 # Testing Implementation Rules
+
+> **Test commands and framework patterns come from the bound stack skill's `## Verification
+> Recipe` (via `stack_skills`), not from this file.** The Vitest/Playwright examples below are
+> **JS-ecosystem illustrations**; for another stack follow that stack skill's test framework
+> (e.g. `pytest`, `go test`). apex-code runs the recipe — this file is the test-authoring discipline.
 
 ## NEVER do
 
@@ -63,7 +69,10 @@ test('user can log in with valid credentials', async ({ page }) => {
 
 ## Verification checklist
 
-- [ ] Run: npm test — all tests pass
-- [ ] Run: npm run test:coverage — coverage ≥ 80% for changed files
-- [ ] Check: no skipped tests (no .skip or xit) left in
-- [ ] Check: each new function has at least one test
+Commands come from the bound stack skill's `## Verification Recipe` (via `stack_skills`) — **not
+assumed npm**. apex-code runs the recipe; this is the test-layer intent it must satisfy.
+
+- [ ] Run the recipe's **test** command — all tests pass (e.g. `pytest`, `go test ./...`, `npm test`)
+- [ ] Coverage ≥ 80% for changed files, via the recipe's coverage command if it declares one
+- [ ] No skipped tests left in (`.skip` / `xit` / `@pytest.mark.skip` / `t.Skip`)
+- [ ] Each new function/behaviour has at least one test

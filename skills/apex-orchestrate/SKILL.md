@@ -1,12 +1,16 @@
 ---
 skill: apex-orchestrate
 backend: claude
-version: 1.1.2
-last_updated: 2026-05-30
+version: 1.1.3
+last_updated: 2026-05-31
 sources:
   - APEX Design Specification 2026-05-24
   - GSD (Get Shit Done) — github.com/gsd-build/get-shit-done
 staleness_threshold: 30d
+description: >
+  APEX session orchestrator — runs first every session: reads docs/status.md,
+  surfaces in-flight work, detects planning vs coding mode from ANTHROPIC_BASE_URL,
+  sets autonomy level, and routes to apex-plan or apex-code. Also handles pause/resume.
 ---
 
 # APEX Orchestrator
@@ -34,6 +38,7 @@ Extract from docs/status.md:
 - token_profile (default: balanced if missing)
 - autonomy_level (default: L2 if missing)
 - specialists_default (domains always active for this project)
+- stack_skills (bound stack skills in play; default: [] if missing — coding reads their Verification Recipe per ADR-005/006)
 - In-Flight table (any interrupted sessions)
 
 ## Step 2: Surface in-flight work

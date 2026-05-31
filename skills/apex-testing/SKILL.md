@@ -1,14 +1,20 @@
 ---
 skill: apex-testing
 backend: claude
-version: 1.0.0
-last_updated: 2026-05-28
+version: 1.1.0
+last_updated: 2026-05-31
 sources:
   - Superpowers (obra) — github.com/obra/superpowers
   - Agent Skills (addyosmani) — github.com/addyosmani/agent-skills
   - Playwright MCP — github.com/microsoft/playwright-mcp
   - axe-core — github.com/dequelabs/axe-core
+  - docs/technical/adr/ADR-006-buildability-layer-verification-inversion.md
 staleness_threshold: 14d
+description: >
+  Use when planning tests for any spec that adds behaviour, fixes a bug, or changes
+  functionality — TDD strategy, the test pyramid, DAMP naming, regression tests, E2E via
+  Playwright MCP, and accessibility (axe-core). Concrete test commands come from the bound
+  stack skill's Verification Recipe, not from here. Not the runner — that's apex-code.
 ---
 
 # Testing Specialist — Planning Mode
@@ -16,6 +22,9 @@ staleness_threshold: 14d
 ## When to activate
 Any spec that adds behaviour, fixes a bug, or changes existing functionality.
 TDD is the default — not optional.
+
+Concrete test/coverage **commands** come from the chosen stack's `## Verification Recipe`
+(apex-code runs them, ADR-006); this skill is the framework-agnostic test *strategy*.
 
 ## RED-GREEN-REFACTOR (mandatory)
 

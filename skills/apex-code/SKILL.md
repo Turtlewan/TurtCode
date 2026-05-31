@@ -1,12 +1,18 @@
 ---
 skill: apex-code
 backend: claude
-version: 1.4.0
-last_updated: 2026-05-30
+version: 1.5.0
+last_updated: 2026-05-31
 sources:
   - APEX Design Specification 2026-05-24
   - GSD (Get Shit Done) — github.com/gsd-build/get-shit-done
+  - docs/technical/adr/ADR-006-buildability-layer-verification-inversion.md
 staleness_threshold: 30d
+description: >
+  APEX coding-mode workflow (DeepSeek) — executes docs/changes/ specs: session start,
+  AFK build vs edit mode, Karpathy pre-flight, wave-parallel dispatch, fork routing,
+  and the stack-agnostic recipe-driven verify loop (reads the stack_skills Verification
+  Recipe, runs it per task, recovers on failure). Loads when building/executing a spec.
 ---
 
 # APEX Coding Workflow
@@ -17,7 +23,7 @@ and completely. Questions belong in planning — execution is silent.
 ## Session start
 
 1. Run `git log --oneline -10` — see what landed recently without loading prose docs
-2. Read docs/status.md — check In-Flight table and note token_profile + autonomy_level only. Stop at the CODING block; do not read the PLANNING block.
+2. Read docs/status.md — check In-Flight table; note token_profile, autonomy_level, and `stack_skills` (the bound stack skills, in the top frontmatter). Stop at the CODING block; do not read the PLANNING block.
 3. List docs/changes/*.md — these are ready specs
 4. Report: "Ready specs: {list or 'none'}. In-progress: {spec name and progress, or 'none'}."
 
@@ -112,6 +118,38 @@ During execution:
   NOT micro-ambiguity. Do not "conservatively guess" it — route it through **Forks** (below).
 - When a needed action is NOT in ## Permissions: that is a BIG fork (see Forks) — do NOT
   perform the action; capture-at-halt, log it in Blocked Actions, continue with independent tasks.
+
+## Verification — run the stack's recipe (not hardcoded commands)
+
+apex-code is a **stack-agnostic runner**: it owns the *loop*; the stack skill owns the
+*commands*. There are **no npm/test/lint/build commands baked into this skill** — get them from
+the recipe (ADR-006).
+
+**Load the recipe (once, at pre-flight):**
+1. Read `stack_skills` from status.md (session start).
+2. For each bound skill, load its `impl.md` `## Verification Recipe`. The **effective recipe =
+   the union of their layers** (language checks + framework checks) — e.g.
+   `stack_skills: [apex-python, apex-django]` → Python checks **+** Django checks.
+3. **No stack skill bound (`stack_skills: []`):** fall back to the spec's `## Commands to run`;
+   if the spec has none, run the obvious per-ecosystem typecheck/test/build best-effort and
+   **log the gap** (no recipe available) in the decisions table.
+
+**Run it (per task — task-level granularity):**
+- After completing a task, run the recipe commands in order (typecheck → lint → test → build,
+  per the recipe). The spec's per-feature delta (e.g. a new test) **supplements** the recipe; it
+  does not replace it.
+- This *is* the per-task done-criteria check (Karpathy step d) — a task is done when the recipe
+  passes, not when the code is written.
+
+**Verify-fail recovery loop (reuse apex-debug discipline):**
+- On a failing command: read the **exact** error → form **one** hypothesis → make the smallest
+  fix → re-run the recipe. One hypothesis at a time; never shotgun multiple changes.
+- Converge before moving to the next task. If it won't converge after a few honest attempts,
+  treat it as a fork (capture-at-halt, route per Forks).
+
+**context7 at the write step:** before writing non-trivial code against the active stack/
+framework, consult **context7** for its current API/syntax — getting it right first means fewer
+recovery iterations.
 
 ## Forks — when the spec is wrong or not optimum
 
@@ -247,7 +285,7 @@ These actions are permanently forbidden. Do not attempt them:
 L0: Read only — no writes, no commands
 L1: Write files with per-file confirmation — no commands
 L2 (default): Write non-critical files freely; critical files need confirmation
-L3: Full pipeline + test/lint/build — no git commits
+L3: Full pipeline + run the stack's Verification Recipe (typecheck/lint/test/build) — no git commits
 L4: Includes git commit (message requires approval first)
 L5: Includes git push to non-main branches + draft PR creation
 

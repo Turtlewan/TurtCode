@@ -1,8 +1,8 @@
 ---
 skill: apex-stack
 backend: deepseek
-version: 1.0.0
-last_updated: 2026-05-28
+version: 1.1.0
+last_updated: 2026-05-31
 sources:
   - State of JS 2024 — stateofjs.com
   - Next.js Docs — nextjs.org/docs
@@ -10,20 +10,21 @@ sources:
   - Drizzle Docs — orm.drizzle.team
   - Hono Docs — hono.dev
   - Auth.js Docs — authjs.dev
+  - docs/technical/adr/ADR-005-stack-best-practice-skills.md
 staleness_threshold: 30d
 ---
 
 ## NEVER do
 
 - Install packages without verifying they are actively maintained (no release in >12 months = flag it)
-- Use package names from this skill verbatim without checking npm — names change (e.g. `next-auth` → `@auth/core`)
+- Use package names from this skill verbatim without checking the ecosystem's registry (npm / PyPI / crates.io / pkg.go.dev / Maven) — names change (e.g. `next-auth` → `@auth/core`)
 - Hardcode any secret or API key in scaffold files — .env.example from day 0
 - Skip writing the ADR — first commit must include docs/technical/adr/ADR-001-stack.md
 
 ## ALWAYS do
 
 - Write ADR-001-stack.md before any application code
-- Verify exact package name and latest major version on npm before installing
+- Verify exact package name and latest major version on the ecosystem's package registry (npm / PyPI / crates.io / pkg.go.dev / Maven) before installing
 - Create .env.example with all required variable keys (values empty, not real secrets)
 - Add a "Stack" section to PROJECT.md (or create it) listing the chosen preset
 - Run the chosen preset past the lock-in table before committing
@@ -59,7 +60,7 @@ Deployment target: [platform]. Scale expectation: [year-1 estimate].
 ## Verification checklist
 
 - [ ] ADR written to docs/technical/adr/ADR-001-stack.md
-- [ ] All chosen packages confirmed on npm: exists, active, correct current name
+- [ ] All chosen packages confirmed on the ecosystem's registry (npm / PyPI / crates.io / pkg.go.dev / Maven): exists, active, correct current name
 - [ ] .env.example created with all required keys (no real values)
 - [ ] PROJECT.md has a "Stack" section
 - [ ] No secrets hardcoded in any file

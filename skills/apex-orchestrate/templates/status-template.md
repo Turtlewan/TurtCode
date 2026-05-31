@@ -5,6 +5,7 @@ stack: {stack}
 token_profile: balanced
 autonomy_level: L2
 specialists_default: []   # domains always active for routing regardless of keywords
+stack_skills: []          # bound stack skills (apex-<framework>); coding reads their ## Verification Recipe (ADR-005/006)
 
 _Last updated by planning mode:_ {YYYY-MM-DD}
 

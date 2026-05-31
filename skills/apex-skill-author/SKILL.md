@@ -1,13 +1,15 @@
 ---
 skill: apex-skill-author
 backend: claude
-version: 1.1.0
-last_updated: 2026-05-29
+version: 1.2.0
+last_updated: 2026-05-31
 sources:
   - agentskills.io — skill spec & authoring best practices
   - superpowers:writing-skills — TDD-for-skills methodology
   - docs/research/skill-authoring-best-practices.md
   - docs/research/model-specific-skill-authoring.md
+  - docs/technical/adr/ADR-005-stack-best-practice-skills.md
+  - docs/technical/adr/ADR-006-buildability-layer-verification-inversion.md
 staleness_threshold: 14d
 description: >
   Use when creating, editing, or reviewing any APEX skill — SKILL.md or impl.md.
@@ -60,7 +62,8 @@ Verify GREEN by reading the actual output, not the subagent's self-report.
    Skills encode *judgment the model doesn't already have*. A one-off doesn't need a skill.
 2. **Do I know this domain's current best practices?** If it's fast-moving or you'd be
    writing from training memory — **REQUIRED SUB-SKILL: invoke `apex-research` first** and
-   author from the verified `docs/research/` doc, not assumptions.
+   author from the verified `docs/research/` doc, not assumptions. For a **stack skill**
+   (`apex-<framework>`) this is **unconditional** — see **Stack skills** below.
 3. **Which skill type is it?** (table below — determines how you baseline-test it.)
 4. **Does it already exist?** Check `registry/domains.md` and `SKILLS.md` before creating.
 
@@ -72,6 +75,7 @@ Verify GREEN by reading the actual output, not the subagent's self-report.
 | **Technique** (how-to) | apex-research, apex-storage | Application scenario — can a bare agent apply it correctly to a new case? |
 | **Pattern** (mental model) | apex-system-design | Recognition — does it know *when* the pattern applies, and when not? |
 | **Reference** (domain facts) | apex-aws, apex-auth | Retrieval — can a bare agent find and correctly use the right fact? Gap-test common cases. |
+| **Stack** (framework/lang best-practice) | apex-nextjs, apex-django, apex-fastapi | Build test — stand up a real project, run the `impl.md` `## Verification Recipe`, confirm it executes and converges. Doc-reading is **not** a baseline. (See **Stack skills** below — distinct family.) |
 
 ## Authoring workflow
 
@@ -139,6 +143,53 @@ Decide deliberately — do not create `impl.md` by reflex:
 If a draft `impl.md` duplicates the SKILL.md template/checklist, that's the signal it
 shouldn't exist — fold it back in.
 
+## Stack skills — a distinct family
+
+`apex-<stack>` (e.g. `apex-nextjs`, `apex-fastapi`, `apex-django`) — reusable, opinionated
+best-practices for one language / framework / tool (ADR-005). A **distinct category** from
+capability (`apex-auth`), specialist (`apex-frontend`), and cloud (`apex-aws`) skills. Do not
+classify a stack skill as "just another capability/reference skill" — it carries
+family-specific conventions a bare agent will miss:
+
+- **Always `SKILL.md` + `impl.md`.** The meat (enforced patterns) lives in `impl.md`; the
+  `SKILL.md` is the thinner planning-side "what to weigh." This is the one family where the
+  split is non-negotiable, regardless of the SKILL-vs-impl default above.
+- **Altitude is emergent — author where the opinions live.** Usually the framework
+  (`apex-django`); language-level (`apex-python`) only when there are genuine language-wide
+  opinions worth enforcing. Do **not** pre-build a coverage grid of every language × framework.
+- **Build threshold (ADR-005):** create one only when **(a)** the stack recurs across projects
+  **and (b)** there are patterns the base model gets wrong / should be enforced consistently.
+  Otherwise `apex-stack`'s coverage gate records "no skill — proceeding on base knowledge."
+
+### The `## Verification Recipe` (required in every stack `impl.md`)
+
+The single highest-value section a stack skill carries (ADR-006). `apex-code` / `apex-testing`
+are stack-agnostic runners that own the *loop*; the stack skill owns the *commands*. Declare the
+exact `check / typecheck / lint / test / build` commands for the stack — runnable verbatim. A
+human-readable "verification checklist" is **not** a recipe: the runner cannot consume prose.
+
+- **Layered: language ⊂ framework.** Separate language-level commands (`mypy`, `ruff`, `tsc`,
+  `cargo check`) from framework-level (`manage.py check`, `next build`). Verifiability is a
+  *language* property (static vs dynamic typing), so the language layer carries the buildability
+  weight and is where it's bought back — e.g. enforce `mypy --strict` to raise a dynamic
+  language's feedback quality toward a typed one's.
+- **Composition:** coding mode unions the recipes of every bound `stack_skills` entry
+  (`apex-python` + `apex-django` → Python checks **+** Django checks).
+- **No npm bias.** State the stack's real commands; never default to `npm run build` / `npx tsc`
+  for a non-JS stack.
+
+### Two baked-in rules — do not skip
+
+1. **Stack skills ALWAYS trigger `apex-research`.** Mandatory, not "if unsure." Framework
+   versions move monthly — this is the fastest-rotting content in APEX; never author one from
+   training memory. Fetching docs via `context7` while authoring is necessary but is **not** the
+   research step and is **not** validation.
+2. **The Verification Recipe is empirically validated by running it against a real project (the
+   pilot) — NOT doc-sourced.** Reading the framework's docs and transcribing commands is the
+   failure mode, not the method. Stand up a real project on the stack, run the recipe, and
+   confirm the commands exist, execute, and converge (write → check → read error → fix → re-run).
+   A recipe that has never been run is unverified — do not ship it.
+
 ## Author to the executor's capability floor
 
 Each file is read by a *specific* model, not an abstract capable reader. "Write good
@@ -200,6 +251,8 @@ skills may be richer than minimalist skills, but the cap is firm.
 - Never leave a judgment call in `impl.md` — pre-resolve it or flag back to planning; Flash can't reliably make it.
 - Never exceed 500 lines / 5k tokens in a SKILL.md.
 - Never author a domain skill from training memory when best practices are stale — research first.
+- Never classify a stack skill (`apex-<framework>`) as a plain capability/reference skill — it's a distinct family (always SKILL+impl, always triggers `apex-research`).
+- Never ship a stack skill without a runnable `## Verification Recipe` in its `impl.md`, and never ship that recipe doc-sourced — it must be run against a real project first.
 
 ## Review checklist
 
@@ -212,5 +265,6 @@ skills may be richer than minimalist skills, but the cap is firm.
 - [ ] Content is gotchas/defaults/procedures — not what the model already knows
 - [ ] Under 500 lines / 5k tokens
 - [ ] Triple-write done (registry + SKILLS.md + SKILL-HISTORY.md)
+- [ ] Stack skill (if any): distinct-family conventions applied — SKILL+impl, runnable `## Verification Recipe` present and empirically run (not doc-sourced), `apex-research` triggered
 - [ ] Execution gate asked (Claude direct vs DeepSeek)
 - [ ] GREEN verified by reading output; loopholes refactored

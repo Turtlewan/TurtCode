@@ -1,11 +1,12 @@
 ---
 skill: apex-init
 backend: claude
-version: 1.2.0
+version: 1.2.1
 last_updated: 2026-05-31
 sources:
   - APEX Design Specification 2026-05-24
   - GSD (Get Shit Done) — github.com/gsd-build/get-shit-done
+  - docs/technical/adr/ADR-005-stack-best-practice-skills.md
 staleness_threshold: 30d
 description: >
   Use when bootstrapping a brand-new APEX project — triggered automatically by
@@ -93,6 +94,7 @@ Fill in:
 - Description: full answer to Question 1
 - Stack: confirmed stack from Question 3
 - specialists_default: [] (empty to start — user adds as needed)
+- stack_skills: [] (empty to start — apex-stack's coverage gate records bound stack skills later)
 
 ## Step 4: Confirm to user
 
