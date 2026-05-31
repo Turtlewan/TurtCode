@@ -1,7 +1,7 @@
 ---
 skill: apex-orchestrate
 backend: claude
-version: 1.1.3
+version: 1.1.4
 last_updated: 2026-05-31
 sources:
   - APEX Design Specification 2026-05-24
@@ -100,7 +100,7 @@ Rules:
 ## Step 6: State active context
 
 After routing, always output one line:
-"Running at L{n} | Profile: {profile} | Mode: {planning/coding}"
+"Running at L{n} | Profile: {profile} | Stack: {stack_skills or 'none'} | Mode: {planning/coding}"
 
 ---
 
@@ -159,7 +159,7 @@ No manual state tracking needed. The In-Flight table is the checkpoint.
 ## Governance rules
 
 At every session start, state the active level:
-"Running at L{n} | Profile: {profile} | Mode: {planning/coding}"
+"Running at L{n} | Profile: {profile} | Stack: {stack_skills or 'none'} | Mode: {planning/coding}"
 
 If user says "set level L{n}" or "run at L{n}" or "drop to L{n}":
 1. Update the autonomy_level in docs/status.md

@@ -1,7 +1,7 @@
 ---
 skill: apex-code
 backend: claude
-version: 1.5.0
+version: 1.5.1
 last_updated: 2026-05-31
 sources:
   - APEX Design Specification 2026-05-24
@@ -25,7 +25,7 @@ and completely. Questions belong in planning — execution is silent.
 1. Run `git log --oneline -10` — see what landed recently without loading prose docs
 2. Read docs/status.md — check In-Flight table; note token_profile, autonomy_level, and `stack_skills` (the bound stack skills, in the top frontmatter). Stop at the CODING block; do not read the PLANNING block.
 3. List docs/changes/*.md — these are ready specs
-4. Report: "Ready specs: {list or 'none'}. In-progress: {spec name and progress, or 'none'}."
+4. Report: "Stack: {stack_skills or 'none'}. Ready specs: {list or 'none'}. In-progress: {spec name and progress, or 'none'}."
 
 **Context discipline:** When executing a spec, read only that spec and the files it explicitly lists.
 Never load docs/handoff/, other pending specs, or ambient project documentation.
