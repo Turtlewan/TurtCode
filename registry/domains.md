@@ -42,3 +42,5 @@ Phase 3 fills in the skill/agent content. This file defines the routing table.
 | realtime | apex-realtime/SKILL.md | apex-realtime/impl.md | — | real-time, WebSocket, Socket.io, SSE, Server-Sent Events, live updates, push, streaming, presence, live dashboard, finance ticker, AI streaming |
 | storage | apex-storage/SKILL.md | apex-storage/impl.md | — | file upload, file storage, S3, MinIO, R2, object storage, presigned URL, signed URL, multipart upload, file download, attachment, image upload |
 | search | apex-search/SKILL.md | apex-search/impl.md | — | search, full-text search, vector search, semantic search, RAG, retrieval, embeddings, pgvector, similarity search, chunking, hybrid search, Typesense, Algolia |
+| nextjs | apex-nextjs/SKILL.md | apex-nextjs/impl.md | — | Next.js, Next, App Router, Server Components, Server Actions, React 19, RSC, caching, revalidation, SSR, ISR, Static Generation |
+| python | apex-python/SKILL.md | apex-python/impl.md | — | Python, FastAPI, uv, ruff, mypy, pydantic, pydantic-settings, async, asyncio, uvicorn, ASGI, pytest, typed Python, type hints |
