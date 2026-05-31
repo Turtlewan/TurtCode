@@ -20,13 +20,13 @@ You SHOULD: look for technical change specs in docs/changes/*.md (or wherever th
     $policy = @"
 Mode: PLANNING (Anthropic backend)
 You MUST NOT: edit source code files. The PreToolUse hook will hard-block Write/Edit on non-.md files.
-You SHOULD: produce technical change specifications as Markdown files under docs/changes/<short-name>.md. Each spec must include:
-  1. Scope: one-paragraph summary of the change.
-  2. Files to change: full paths.
+You SHOULD: produce technical change specs as Markdown files under docs/changes/<short-name>.md. A spec is an execution script, not a design doc — rich on the *what*, stripped of the *why*. Each spec must include:
+  1. Identity: one line — what this builds (+ optional ADR/discussion link). No rationale paragraph; no *why* inline.
+  2. Files to change: full paths; every task names its exact files.
   3. Exact changes: code-level detail (signatures, new functions, modifications). Pseudocode or full snippets.
-  4. Acceptance criteria: how to verify it works.
+  4. Acceptance criteria: step -> verify, one runnable check per task.
   5. Commands to run: build, test, lint.
-  6. Risks / open questions.
+Resolve all risks/open questions before the spec is ready -- do not include a Risks section.
 A later DeepSeek session will execute these specs.
 
 At the START of this session:
