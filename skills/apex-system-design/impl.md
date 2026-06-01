@@ -1,14 +1,28 @@
 ---
 skill: apex-system-design
 backend: deepseek
-version: 1.0.0
-last_updated: 2026-05-28
+version: 1.1.0
+last_updated: 2026-06-01
 sources:
   - Designing Data-Intensive Applications — Kleppmann
 staleness_threshold: 60d
+description: >
+  Coding-mode enforcement for distributed-systems patterns — idempotency keys, distributed
+  lock TTL, DLQ, exponential backoff+jitter, cache invalidation, circuit breakers. Examples
+  are TS + Redis/SQS; swap per stack via § Stack assumptions. Loads when implementing the
+  operational/scale layer.
 ---
 
 # System Design Implementation Rules
+
+## Stack assumptions
+
+Examples are **TypeScript + Redis + SQS**. The patterns are stack-neutral — swap the
+mechanism: Redis → any KV/lock store (or Postgres advisory locks); SQS → the bound queue
+(apex-jobs); `opossum` → a circuit-breaker lib in the bound language. **Scale-gate first**
+(see SKILL.md § Scale assumptions): a single-user/local hub usually needs idempotency +
+backoff but **not** distributed locks, rate limiting, or circuit breakers — don't add them
+without evidence. The SQL idempotency-key pattern works in any RDBMS (Postgres/SQLite).
 
 ## NEVER do
 

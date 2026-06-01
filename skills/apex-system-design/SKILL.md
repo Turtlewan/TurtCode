@@ -1,14 +1,21 @@
 ---
 skill: apex-system-design
 backend: claude
-version: 1.0.0
-last_updated: 2026-05-28
+version: 1.1.0
+last_updated: 2026-06-01
 sources:
   - Designing Data-Intensive Applications — Kleppmann
   - System Design Interview — Alex Xu (Vol 1 & 2)
   - AWS Architecture Blog — aws.amazon.com/architecture
   - Martin Fowler — martinfowler.com
 staleness_threshold: 60d
+description: >
+  Use when designing the distributed-systems / operational layer — consistency trade-offs
+  (CAP/PACELC), caching, idempotency, message queues + sagas, rate limiting, read replicas,
+  circuit breakers, distributed locking. Triggers: "will this scale", "strong vs eventual
+  consistency", "add a cache/queue", "idempotency", "rate limit", "this keeps failing under
+  load". Patterns are stack-neutral (tool names are illustrative); scale-gate first
+  (§ Scale assumptions). Not codebase structure / monolith-vs-microservices (apex-architecture).
 ---
 
 # System Design Specialist — Planning Mode
@@ -21,6 +28,15 @@ decision that affects reliability, latency, or scale across service boundaries.
 
 Distinct from apex-architecture (which covers codebase structure, monolith vs microservices,
 DDD, ADRs). This skill covers the **operational and distributed-systems layer**.
+
+## Scale assumptions — gate before applying
+
+These are **stack-neutral** patterns; the named tools (DynamoDB, Kafka, SQS, Redis…) are
+*illustrative*, not prescriptions — map each to the bound stack. **Most importantly, gate by
+real scale:** a single-user or local-hub system (e.g. an Artemis-style personal assistant)
+rarely needs sharding, read replicas, distributed locks, or a saga orchestrator — reach for
+them only when measured load demands it. Applying this layer prematurely is the most common
+failure here. Start simple (one Postgres/SQLite, in-process work); add distribution on evidence.
 
 ## Questions to ask before designing
 
