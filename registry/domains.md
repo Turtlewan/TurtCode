@@ -15,7 +15,7 @@ Phase 3 fills in the skill/agent content. This file defines the routing table.
 | observability | apex-observability/SKILL.md | apex-observability/impl.md | apex-observability-agent | logging, tracing, metrics, alert, monitor, Prometheus, OpenTelemetry, Sentry |
 | accessibility | apex-accessibility/SKILL.md | apex-accessibility/impl.md | apex-accessibility-agent | a11y, WCAG, ARIA, screen reader, keyboard nav, colour contrast, focus management |
 | ai-systems | apex-ai-systems/SKILL.md | apex-ai-systems/impl.md | apex-ai-systems-agent | LLM, embedding, RAG, vector, prompt, eval, model, agent, inference, fine-tuning |
-| data | apex-data/SKILL.md | apex-data/impl.md | apex-data-agent | migration, schema, pipeline, ETL, warehouse, query optimisation, Prisma, PostgreSQL |
+| data | apex-data/SKILL.md | apex-data/impl.md | apex-data-agent | migration, schema, pipeline, ETL, warehouse, query optimisation, Prisma, Alembic, SQLAlchemy, SQLModel, SwiftData, PostgreSQL |
 | docs-technical | apex-docs-technical/SKILL.md | — | apex-docs-technical-agent | ADR, runbook, architecture doc, decision record, setup guide |
 | docs-product | apex-docs-product/SKILL.md | apex-docs-product/impl.md | apex-docs-product-agent | changelog, README, user guide, API reference, release notes, tutorial |
 | ui-ux-design | apex-ui-ux-design/SKILL.md | apex-ui-ux-design/impl.md | apex-ui-ux-design-agent | UX, user flow, wireframe, design system, onboarding, visual hierarchy, interaction design |

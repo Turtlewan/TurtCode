@@ -1,22 +1,36 @@
 ---
 skill: apex-data
 backend: claude
-version: 1.1.0
-last_updated: 2026-05-28
+version: 1.2.0
+last_updated: 2026-06-01
 sources:
   - Prisma Migrations — prisma.io/docs/guides/database/developing-with-prisma-migrate
+  - Alembic — alembic.sqlalchemy.org
   - Firecrawl — github.com/firecrawl/firecrawl
   - Firecrawl MCP — github.com/firecrawl/firecrawl-mcp-server
   - Repomix — github.com/yamadashy/repomix
   - Context7 — github.com/upstash/context7
 staleness_threshold: 30d
+description: >
+  Use when designing database schema or migrations — new tables/columns/indexes, breaking schema
+  changes, zero-downtime migration strategy, backfills, integrity constraints, query-pattern
+  indexing. The safety rules are stack-neutral (expand/contract, nullable-then-backfill, FK
+  indexing); the migration tool is per-stack — Prisma (TS) / Alembic (Python) / SwiftData or GRDB
+  (Apple), see § Stack assumptions. Not the coding-mode enforcement rules (that's impl.md).
 ---
 
 # Data Specialist — Planning Mode
 
+## Stack assumptions
+
+The migration-safety rules here are **stack-neutral** — they govern relational schema evolution
+regardless of tool. The concrete ORM / migration tool is per-stack: **Prisma** (TypeScript) /
+**SQLAlchemy + Alembic** or **SQLModel** (Python) / **SwiftData** or **GRDB** (Apple). Where a rule
+names Prisma below, read it as the illustration; the rule itself is tool-agnostic.
+
 ## When to activate
-Database schema changes, migrations, Prisma model changes, data pipelines,
-query optimisation, data integrity constraints.
+Database schema changes, migrations, ORM model changes (Prisma / SQLAlchemy / SwiftData / …), data
+pipelines, query optimisation, data integrity constraints.
 
 ## Questions to ask before designing
 
