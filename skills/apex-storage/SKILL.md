@@ -1,17 +1,48 @@
 ---
 skill: apex-storage
 backend: claude
-version: 1.0.1
-last_updated: 2026-05-28
+version: 1.1.0
+last_updated: 2026-06-01
 sources:
   - AWS SDK v3 Docs — docs.aws.amazon.com/sdk-for-javascript/v3
   - MinIO Docs — min.io/docs
   - Cloudflare R2 Docs — developers.cloudflare.com/r2
   - file-type — github.com/sindresorhus/file-type
+  - SP5 de-coupling (stack-agnostic; § Stack assumptions)
 staleness_threshold: 30d
+description: >
+  Use when a project needs to store, upload, or serve files — object storage (S3/MinIO/R2),
+  presigned URLs, MIME validation, image/document/attachment upload, multipart upload, file
+  download. Concepts are stack-neutral (MIME-from-bytes, opaque UUID keys, store-before-record,
+  time-limited private access, soft-delete + async GC); the S3-SDK examples adapt to the bound
+  stack (Python boto3, or a local-filesystem backend for a single-user hub) via § Stack
+  assumptions. Not the storage *decision* of whether to use files at all.
 ---
 
 # File Storage Specialist — Planning Mode
+
+## Stack assumptions
+
+Concepts below are **stack-neutral**; concrete examples assume an **S3-compatible object store via
+the AWS S3 SDK + TypeScript** (MinIO / S3 / R2 — the default illustration). Planning checks this
+against the bound `stack_skills` and adapts on mismatch; the **stack skill's Verification Recipe is
+the verifier**.
+
+| Concept (keep) | S3-SDK + TS (illustrated) | Swap point on the bound stack |
+|---|---|---|
+| Storage client | `@aws-sdk/client-s3` (MinIO/S3/R2, one SDK) | **Python:** boto3 / aioboto3 (same 3 providers). **Local single-user hub (Mac):** the local filesystem — no SDK, write under a base dir. |
+| MIME from bytes | `file-type` (npm) | **Python:** python-magic / filetype. Read first ~4 KB, classify by magic bytes. |
+| Private-file access | presigned GET URL | boto3 `generate_presigned_url`. **Local fs:** no host to presign → authenticated streaming route + short-lived signed token. |
+| Direct large upload | presigned PUT (client→store) | boto3 presigned PUT. **Local fs:** stream multipart through the app to disk (no direct hop). |
+| Local dev store | MinIO via docker-compose | MinIO works for any object-store stack. **Local-fs backend needs no service at all.** |
+| Config | `STORAGE_*` keys/endpoint env | same env contract; **local fs:** a single `STORAGE_BASE_DIR`. |
+
+**Local filesystem is a genuinely different code path, not an endpoint swap** (object stores
+MinIO/S3/R2 share one SDK — local fs does not). Two rules invert on it: private files must be
+served *through* the app (no signed-URL host exists), and path traversal becomes a live threat
+(opaque object keys can't escape; `../` filesystem keys can — add a resolved-path containment
+check). Stack-neutral and never swapped: MIME-from-bytes, opaque UUID keys, store-before-DB-record,
+time-limited private access, soft-delete + async GC, env-var config.
 
 ## Research findings
 
@@ -48,13 +79,14 @@ Any time a project needs to store, upload, or serve files:
 
 | Scenario | Provider | Why |
 |----------|----------|-----|
+| Single-user / local-first hub (e.g. Mac mini) | Local filesystem | Zero infra — write under a base dir; no Docker, no daemon. Best default when there's exactly one node and no sharing. |
 | Self-hosted / dev / home server | MinIO | Docker, S3-compatible API, free, runs locally, full control |
 | Cloud scale, AWS infra | AWS S3 | Native integration, mature ecosystem, deep AWS service integration |
 | Cloud scale, any infra | Cloudflare R2 | Zero egress fees, S3-compatible, global CDN, pay-per-operation |
 | Self-hosted team / multi-node | MinIO or Garage | Open source, S3-compatible, no vendor lock-in |
 
-**Key insight — same code for all providers:**
-All providers use `@aws-sdk/client-s3`. The only difference is the `endpoint` config:
+**Key insight — one SDK for all *object-store* providers:**
+MinIO, S3, and R2 all use `@aws-sdk/client-s3` (or boto3). The only difference is the `endpoint`:
 
 ```
 MinIO:   endpoint: 'http://localhost:9000', forcePathStyle: true
@@ -62,7 +94,9 @@ S3:      (no endpoint override needed — use default)
 R2:      endpoint: 'https://<ACCOUNT_ID>.r2.cloudflarestorage.com', region: 'auto'
 ```
 
-Migration = change environment variables, not code.
+Migrating between these three = change environment variables, not code. **The local-filesystem
+backend is the exception** — it is a separate code path (no SDK, no presigning; serve via an
+authenticated app route, and add a path-containment check). See § Stack assumptions.
 
 ## Upload strategy decision table
 
@@ -130,14 +164,19 @@ Never delete from S3 synchronously inside a request handler — if the DB transa
 
 ## Hard blocks
 
-- Never validate file type from the `Content-Type` header or filename extension alone — always check bytes with `file-type`.
+- Never validate file type from the `Content-Type` header or filename extension alone — always check the file's bytes (`file-type` / `python-magic` / the stack equivalent).
 - Never use the user-supplied filename as the storage key.
-- Never expose the internal storage key directly in API responses — return a DB record ID.
-- Never proxy large file downloads through the server — use presigned GET URLs.
+- Never expose the internal storage key/path directly in API responses — return a DB record ID.
+- Never proxy large file downloads through the server **on an object store** — use a presigned GET URL. (On a **local-filesystem** backend this inverts: there is no presign host, so you *must* serve via an authenticated streaming route + short-lived token.)
+- On a **local-filesystem** backend, never read/write a path without confirming the resolved absolute path is contained within the storage base dir (path-traversal guard), and never hand out the filesystem path to clients.
 - Never delete from storage without first marking `deletedAt` in the DB.
-- Never hardcode MinIO/S3/R2 credentials in source code — environment variables only.
+- Never hardcode storage credentials (object-store keys, or any secret) in source code — environment variables only.
 
 ## Gotchas and edge cases
+
+_Object-store / S3-SDK ecosystem (illustration — applies when the bound stack is MinIO/S3/R2; a
+local-filesystem backend has none of these, but adds the path-containment concern in § Stack
+assumptions)._
 
 - **Multer is not abandoned** (v2.1.1, March 2025) but buffers files in memory by default, which is problematic for large files. For Fastify, use `@fastify/multipart`. For custom streaming pipelines, use `busboy` directly. Evaluate based on framework choice.
 - **`forcePathStyle: true` is required for MinIO**: Without this, the SDK constructs virtual-hosted URLs (`bucket.localhost:9000`) which MinIO does not support. S3 and R2 use virtual-hosted style by default, so this flag is `false` for them.

@@ -1,275 +1,83 @@
 ---
 skill: apex-storage
 backend: deepseek
-version: 1.1.0
-last_updated: 2026-05-28
+version: 1.2.0
+last_updated: 2026-06-01
 sources:
   - AWS SDK v3 Docs — docs.aws.amazon.com/sdk-for-javascript/v3
   - MinIO Docs — min.io/docs
   - Cloudflare R2 Docs — developers.cloudflare.com/r2
   - file-type — github.com/sindresorhus/file-type
+  - SP5 de-coupling (stack-neutral core; references/ illustration)
 staleness_threshold: 30d
+description: >
+  Coding-mode rules for file storage — stack-neutral invariants (MIME-from-bytes, opaque
+  UUID keys, store-before-DB-record, time-limited private access, soft-delete + async GC,
+  env-var config). Loaded when a task uploads/stores/serves files. Concrete code is
+  backend-specific — the S3-SDK + TypeScript worked examples live in references/s3-typescript.md;
+  a local-filesystem backend (single-user hub) is a distinct code path, see § Stack assumptions.
 ---
 
-# File Storage Implementation Rules
+# apex-storage — file-storage implementation rules
+
+Capability skill — **stack-neutral**. The bound stack skill's Verification Recipe is the verifier;
+the concrete storage client + language come from the bound stack (see § Stack assumptions).
+
+## Stack assumptions
+
+Rules below are stack-neutral; the worked examples assume an **S3-compatible object store via the
+AWS S3 SDK + TypeScript** (`references/s3-typescript.md`, covering MinIO / S3 / R2). On the bound
+stack, swap:
+
+- **Storage client:** `@aws-sdk/client-s3` → **Python:** `boto3` / `aioboto3` (same MinIO/S3/R2). **Local single-user hub (Mac):** the **local filesystem** — no SDK, write under an app-data base dir.
+- **MIME-from-bytes:** `file-type` (npm) → **Python:** `python-magic` / `filetype`. Same idea: read the first ~4 KB, classify by magic bytes.
+- **Private-file access:** presigned GET URL (`getSignedUrl`) → boto3 `generate_presigned_url`. **Local fs:** there is no storage host to presign against → serve through an **authenticated app route that streams the file** (session/authz check + a short-lived signed token); do **not** expose the filesystem path.
+- **Direct large-file upload:** presigned PUT (client → store) → boto3 presigned PUT. **Local fs:** no direct-to-store hop exists → stream multipart through the app to disk.
+- **Config:** `STORAGE_ENDPOINT/BUCKET/ACCESS_KEY/SECRET` env vars → same contract; **local fs:** a single `STORAGE_BASE_DIR` env var instead of keys.
+
+Two rules invert on a **local-filesystem** backend — call them out per § NEVER / § ALWAYS:
+1. The "issue a signed URL, don't proxy through the server" rule **reverses**: with no separate
+   storage host, you *must* serve private files through the authenticated app route.
+2. **Path traversal becomes a live threat.** Object-store keys are opaque; a filesystem key like
+   `../../etc/passwd` escapes the base dir. The UUID-key rule plus a resolved-path containment
+   check are both mandatory on local fs.
 
 ## NEVER do
 
-- Trust `Content-Type` header or file extension for MIME validation — use `file-type` on bytes
-- Use the original filename as the storage key or part of the storage path
-- Store MinIO/S3/R2 credentials in code — environment variables only
-- Proxy large file downloads through the server at scale — use presigned GET URLs
-- Delete from storage inside a request handler (async job only)
-- Expose the internal storage key directly in API responses
-- Skip `forcePathStyle: true` for MinIO — virtual-hosted style is not supported
-- Buffer entire large files in memory just for MIME detection — read first 4100 bytes
+- Trust the `Content-Type` header or file extension for type validation — detect from the file's bytes (magic bytes).
+- Use the user-supplied filename as the storage key or any part of the storage path.
+- Store storage credentials / secrets in code — environment variables only.
+- For a **remote object store**, proxy large downloads through the app server at scale — issue a time-limited signed URL instead. (Inverts on local fs — see below.)
+- Delete from storage synchronously inside a request handler — soft-delete in the DB, an async job removes the object.
+- Expose the internal storage key/path in API responses — return a DB record id.
+- For a **local-filesystem** backend: write or read a path without confirming the *resolved absolute path* stays inside the storage base dir (path-traversal containment); and never serve files by handing out the filesystem path.
 
 ## ALWAYS do
 
-- Generate a UUID-based key: `${userId}/${date}/${uuid}.${ext}`
-- Validate MIME type from the first bytes of the file using `file-type`
-- Upload to storage FIRST, then insert the DB record (prevents orphaned records)
-- Return presigned GET URLs for private files with ≤ 15 minute (900s) expiry
-- Set `forcePathStyle: true` for MinIO (required), `false` for S3/R2
-- Create the bucket during app startup or via docker-compose init container
-- Read only `file-type.minimumBytes` (4100 bytes) for MIME detection on large files
-- Configure `requestChecksumCalculation` and `responseChecksumValidation` for R2
-- For presigned PUT uploads, trigger server-side MIME validation from file bytes after the client upload completes — before marking the file record active in DB
+- Generate an opaque UUID-based key, never derived from user input: `${ownerId}/${date}/${uuid}.${ext}`.
+- Validate MIME from the first bytes (~4 KB) of the file, not the header/extension; block executable/script types.
+- Write the object to storage FIRST, then insert the DB record (an orphan object is cheap to GC; an orphan DB record points at nothing).
+- Serve private files via **time-limited access**: a signed URL on an object store, or an authenticated streaming route + short-lived signed token on local fs.
+- Soft-delete in the DB first (`deletedAt`), then let an async worker remove the stored object.
+- Keep all storage config (endpoint/bucket/keys, or the local base dir) in environment variables.
+- Store file metadata (key, mime, size, owner, isPublic, timestamps) in the DB; look files up by record, never reconstruct the key from user input.
+- On a local-filesystem backend, resolve the final path and assert it is contained within the base dir before any read/write.
 
-## S3 client setup (works for MinIO, S3, and R2)
+## Acceptance checks (stack-neutral)
 
-```typescript
-import { S3Client } from '@aws-sdk/client-s3'
+- Upload any file → object exists in the store under a UUID key; a DB metadata record is created.
+- Upload an `.exe` / script → rejected (type detected from bytes, not header).
+- Upload a file with a spoofed `Content-Type` → still classified by its bytes.
+- Fetch a private file → only reachable via time-limited access; the link/route 403s after expiry.
+- Soft-delete a file → DB row flagged, object still present until the async cleanup runs.
+- (Object store) swap the backend by env only → upload/download code unchanged across MinIO/S3/R2.
+- (Local fs) a key containing `../` cannot escape the base dir; private files are unreachable without auth.
 
-export const s3 = new S3Client({
-  region: process.env.STORAGE_REGION ?? 'us-east-1',
-  endpoint: process.env.STORAGE_ENDPOINT,         // MinIO or R2 endpoint
-  forcePathStyle: process.env.STORAGE_FORCE_PATH_STYLE === 'true', // true for MinIO
-  requestChecksumCalculation: 'WHEN_REQUIRED',     // required for R2
-  responseChecksumValidation: 'WHEN_REQUIRED',     // required for R2
-  credentials: {
-    accessKeyId: process.env.STORAGE_ACCESS_KEY!,
-    secretAccessKey: process.env.STORAGE_SECRET_KEY!,
-  },
-})
-```
+## Worked examples (load on demand)
 
-The checksum flags are harmless for MinIO and S3 (they just add a no-op when not needed) and required for R2. This config works identically across all three providers.
-
-## Server-side upload (files < 10 MB) with MIME validation
-
-```typescript
-import { PutObjectCommand } from '@aws-sdk/client-s3'
-import { fileTypeFromBuffer } from 'file-type'
-import { randomUUID } from 'node:crypto'
-
-const BLOCKED_MIMES = new Set([
-  'application/x-dosexec',       // .exe
-  'application/x-msdownload',    // .dll, .exe
-  'application/x-sh',            // .sh
-  'application/x-bat',           // .bat
-  'application/x-msdos-program',
-  'text/x-php',
-  'application/x-java-jnilib',
-])
-
-async function uploadFile(buffer: Buffer, originalName: string, userId: string) {
-  // 1. Validate MIME from bytes, not filename or Content-Type header
-  const detected = await fileTypeFromBuffer(buffer)
-  if (!detected) throw new Error('Unable to detect file type from content')
-
-  if (BLOCKED_MIMES.has(detected.mime)) {
-    throw new Error(`File type '${detected.mime}' is not allowed`)
-  }
-
-  // 2. Generate storage key — never use original filename
-  const ext = detected.ext
-  const date = new Date().toISOString().slice(0, 10) // YYYY-MM-DD
-  const key = `${userId}/${date}/${randomUUID()}.${ext}`
-
-  // 3. Upload to storage first
-  await s3.send(new PutObjectCommand({
-    Bucket: process.env.STORAGE_BUCKET!,
-    Key: key,
-    Body: buffer,
-    ContentType: detected.mime,
-  }))
-
-  // 4. Then record metadata in DB (if this fails, async cleanup handles orphan)
-  //    (DB insert goes here — adapt to your ORM)
-
-  return { key, mimeType: detected.mime, sizeBytes: buffer.length }
-}
-```
-
-## Presigned GET URL for private files
-
-```typescript
-import { GetObjectCommand } from '@aws-sdk/client-s3'
-import { getSignedUrl } from '@aws-sdk/s3-request-presigner'
-
-async function getPrivateDownloadUrl(key: string): Promise<string> {
-  return getSignedUrl(
-    s3,
-    new GetObjectCommand({
-      Bucket: process.env.STORAGE_BUCKET!,
-      Key: key,
-    }),
-    { expiresIn: 900 } // 15 minutes
-  )
-}
-```
-
-## Presigned PUT URL for direct client upload (files 10 MB – 5 GB)
-
-```typescript
-import { PutObjectCommand } from '@aws-sdk/client-s3'
-import { getSignedUrl } from '@aws-sdk/s3-request-presigner'
-import { randomUUID } from 'node:crypto'
-
-async function createUploadUrl(
-  contentType: string,
-  fileSizeBytes: number,
-  userId: string
-): Promise<{ url: string; key: string }> {
-  const MAX_SIZE = 5 * 1024 ** 3 // 5 GB
-  if (fileSizeBytes > MAX_SIZE) {
-    throw new Error('File too large — use multipart upload')
-  }
-
-  // ext is for the storage key only — MIME must be validated from bytes post-upload
-  const ext = contentType.split('/')[1] ?? 'bin'
-  const date = new Date().toISOString().slice(0, 10)
-  const key = `${userId}/${date}/${randomUUID()}.${ext}`
-
-  const url = await getSignedUrl(
-    s3,
-    new PutObjectCommand({
-      Bucket: process.env.STORAGE_BUCKET!,
-      Key: key,
-      ContentType: contentType,
-    }),
-    { expiresIn: 300 } // 5 minutes — enough for upload, limits exposure
-  )
-
-  return { url, key }
-}
-```
-
-## MinIO docker-compose (local dev)
-
-```yaml
-services:
-  minio:
-    image: minio/minio
-    ports:
-      - '9000:9000'   # API — used by app/sdk
-      - '9001:9001'   # Console UI — browser admin at http://localhost:9001
-    environment:
-      MINIO_ROOT_USER: minioadmin
-      MINIO_ROOT_PASSWORD: minioadmin
-    command: server /data --console-address ":9001"
-    volumes:
-      - minio_data:/data
-    healthcheck:
-      test: ['CMD', 'curl', '-f', 'http://localhost:9000/minio/health/live']
-      interval: 10s
-      timeout: 5s
-      retries: 5
-
-  # Optional: auto-create the app bucket on first start
-  minio-init:
-    image: minio/mc
-    depends_on:
-      minio:
-        condition: service_healthy
-    entrypoint: >
-      /bin/sh -c "
-      /usr/bin/mc alias set local http://minio:9000 minioadmin minioadmin;
-      /usr/bin/mc mb local/my-app --ignore-existing;
-      /usr/bin/mc anonymous set public local/my-app-public --ignore-existing;
-      "
-    restart: no
-
-volumes:
-  minio_data:
-```
-
-## Environment variables (.env.example)
-
-```
-# Storage provider: MinIO (local), S3 (AWS), or R2 (Cloudflare)
-
-# For MinIO (local dev):
-STORAGE_ENDPOINT=http://localhost:9000
-STORAGE_FORCE_PATH_STYLE=true
-STORAGE_REGION=us-east-1
-
-# For AWS S3 (remove endpoint, set forcePathStyle to false):
-# STORAGE_ENDPOINT=
-# STORAGE_FORCE_PATH_STYLE=false
-# STORAGE_REGION=us-east-1
-
-# For Cloudflare R2:
-# STORAGE_ENDPOINT=https://<ACCOUNT_ID>.r2.cloudflarestorage.com
-# STORAGE_FORCE_PATH_STYLE=false
-# STORAGE_REGION=auto
-
-# Common to all providers:
-STORAGE_ACCESS_KEY=minioadmin
-STORAGE_SECRET_KEY=minioadmin
-STORAGE_BUCKET=my-app
-```
-
-## Large file upload — MIME detection without buffering the whole file
-
-For files > 10 MB, read only the first 4100 bytes for type detection, then stream to storage:
-
-```typescript
-import { fileTypeFromBuffer, minimumBytes } from 'file-type'
-import { PassThrough } from 'node:stream'
-
-async function detectTypeAndStream(
-  stream: NodeJS.ReadableStream
-): Promise<{ fileType: { ext: string; mime: string }; body: NodeJS.ReadableStream }> {
-  // Read the minimum bytes needed for detection
-  const chunk = await new Promise<Buffer>((resolve, reject) => {
-    const bufs: Buffer[] = []
-    stream.on('data', (d: Buffer) => {
-      bufs.push(d)
-      const total = bufs.reduce((a, b) => a + b.length, 0)
-      if (total >= minimumBytes) {
-        stream.pause()
-        resolve(Buffer.concat(bufs))
-      }
-    })
-    stream.on('error', reject)
-    stream.on('end', () => resolve(Buffer.concat(bufs)))
-  })
-
-  const fileType = await fileTypeFromBuffer(chunk)
-  if (!fileType) throw new Error('Unable to detect file type')
-
-  // Reconstruct stream from the chunk + remaining data
-  const pass = new PassThrough()
-  pass.write(chunk)
-  stream.resume()
-  stream.pipe(pass)
-
-  return { fileType, body: pass }
-}
-```
-
-## Verification checklist
-
-- [ ] MinIO console accessible at `http://localhost:9001`
-- [ ] Upload a file (any type) — object appears in MinIO console under correct bucket and key
-- [ ] Upload `.exe` file — rejected with 400 error
-- [ ] Upload file with spoofed `Content-Type` header — MIME validated from bytes not header
-- [ ] Fetch presigned URL for a private file — file downloads correctly
-- [ ] Presigned URL returns 403 after expiry
-- [ ] Swap `STORAGE_ENDPOINT` to point at real S3 or R2 — same code works unchanged
-- [ ] Soft-delete a file (set `deletedAt`) — object still exists in storage
-- [ ] Large file upload (>10 MB) correctly detects MIME from first bytes only
-- [ ] Bucket is auto-created on `docker compose up` (check minio-init service)
-- [ ] Presigned PUT: after client upload, server validates MIME from bytes before DB record is marked active
+> The concrete **S3-SDK + TypeScript** implementation (S3 client for MinIO/S3/R2, server-side upload
+> with MIME validation, presigned GET/PUT, MinIO docker-compose, `.env`, large-file streaming
+> detection) is in **`references/s3-typescript.md`** — load it **only when the bound stack uses the
+> AWS S3 SDK + TypeScript**. On a Python object-store app use the boto3/aioboto3 equivalents; for a
+> **local-filesystem** backend there is no SDK and no presigning — follow the local-fs swaps in
+> § Stack assumptions (authenticated streaming route + path-containment check).
