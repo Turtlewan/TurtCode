@@ -1,28 +1,36 @@
 # APEX Domain Registry
 
-Maps domain names to skills, agents, and activation keywords.
-Phase 3 fills in the skill/agent content. This file defines the routing table.
+Maps domain names to skills, impl files, and activation keywords.
+
+**Agent column** = the planning-side reviewer dispatched for this domain. Every domain uses the one
+generic **`apex-spec-reviewer`** (Agent tool, pointed at this row's SKILL.md); the prior per-domain
+`apex-*-agent` stubs are retired (ADR-007). A `—` means no default reviewer is wired, but one can be
+dispatched on judgment. Coding-side *enforcement* needs no agent — `apex-coder` wave-workers load the
+domain `impl.md` inline. Two domains keep a dedicated coding-side agent for their own tooling:
+**security** (`apex-security-agent`, Bash verification) and **figma** (`apex-figma-agent`, MCP/image
+steps). The post-build doc pipeline agents (`apex-docs-product-agent`, `apex-docs-technical-agent`)
+are spawned by `apex-code`, not from this table.
 
 | Domain | SKILL.md | impl.md | Agent | Keywords |
 |--------|----------|---------|-------|---------|
-| security | apex-security/SKILL.md | apex-security/impl.md | apex-security-agent | auth, crypto, secret, password, token, permissions, SQL, injection, XSS, CORS, API key, vulnerability, OWASP, supply chain, dependency audit, security headers |
-| frontend | apex-frontend/SKILL.md | apex-frontend/impl.md | apex-frontend-agent | React, React 19, Actions, React Compiler, component, UI, CSS, browser, client-side, bundle, tailwind, shadcn |
-| backend | apex-backend/SKILL.md | apex-backend/impl.md | apex-backend-agent | API, server, endpoint, database, cache, queue, service, handler, REST, GraphQL, FastAPI, pydantic, Fastify |
-| architecture | apex-architecture/SKILL.md | — | apex-architecture-agent | system design, scalability, microservices, monolith, event-driven, domain model, ADR, bounded context |
-| devops | apex-devops/SKILL.md | apex-devops/impl.md | apex-devops-agent | Docker, CI/CD, deploy, pipeline, container, GitHub Actions, supply-chain, OIDC, SHA pin, rollback |
-| testing | apex-testing/SKILL.md | apex-testing/impl.md | apex-testing-agent | TDD, test pyramid, e2e, unit, integration, coverage, mock, vitest, Playwright, axe-core, Storybook |
-| performance | apex-performance/SKILL.md | apex-performance/impl.md | apex-performance-agent | slow, latency, throughput, N+1, memory, bundle size, cache, profiling, lighthouse |
-| observability | apex-observability/SKILL.md | apex-observability/impl.md | apex-observability-agent | logging, tracing, metrics, alert, monitor, Prometheus, OpenTelemetry, OTel GenAI, Sentry, structlog |
-| accessibility | apex-accessibility/SKILL.md | apex-accessibility/impl.md | apex-accessibility-agent | a11y, WCAG 2.2, EAA, ARIA, screen reader, keyboard nav, colour contrast, focus management, target size |
-| ai-systems | apex-ai-systems/SKILL.md | apex-ai-systems/impl.md | apex-ai-systems-agent | LLM, RAG generation, prompt, structured output, agent, tool calling, MCP, eval, LLM-as-judge, streaming, model selection |
-| data | apex-data/SKILL.md | apex-data/impl.md | apex-data-agent | migration, schema, pipeline, ETL, warehouse, query optimisation, Prisma, Alembic, SQLAlchemy, SQLModel, SwiftData, PostgreSQL |
-| docs-technical | apex-docs-technical/SKILL.md | — | apex-docs-technical-agent | ADR, runbook, architecture doc, decision record, setup guide |
-| docs-product | apex-docs-product/SKILL.md | apex-docs-product/impl.md | apex-docs-product-agent | changelog, README, user guide, API reference, release notes, tutorial |
-| ui-ux-design | apex-ui-ux-design/SKILL.md | apex-ui-ux-design/impl.md | apex-ui-ux-design-agent | UX, user flow, wireframe, onboarding, visual hierarchy, interaction design, conversational UI, Liquid Glass, calm UI |
-| design-system | apex-design-system/SKILL.md | apex-design-system/impl.md | apex-design-system-agent | component library, design tokens, shadcn, Radix, Base UI, Tailwind v4, Storybook, registry, theming |
-| animation | apex-animation/SKILL.md | apex-animation/impl.md | apex-animation-agent | animation, motion, transition, scroll effect, GSAP, Motion, spring, gesture, SwiftUI animation, reduced motion |
-| figma | apex-figma/SKILL.md | apex-figma/impl.md | apex-figma-agent | Figma, design file, design-to-code, design token, MCP, Dev Mode, Code Connect, Figma Make, Framelink |
-| ui-testing | apex-ui-testing/SKILL.md | apex-ui-testing/impl.md | apex-ui-testing-agent | visual regression, Chromatic, Storybook testing, Vitest addon, Playwright, Playwright MCP, component testing, axe-core, axe, snapshot |
+| security | apex-security/SKILL.md | apex-security/impl.md | apex-spec-reviewer · apex-security-agent | auth, crypto, secret, password, token, permissions, SQL, injection, XSS, CORS, API key, vulnerability, OWASP, supply chain, dependency audit, security headers |
+| frontend | apex-frontend/SKILL.md | apex-frontend/impl.md | apex-spec-reviewer | React, React 19, Actions, React Compiler, component, UI, CSS, browser, client-side, bundle, tailwind, shadcn |
+| backend | apex-backend/SKILL.md | apex-backend/impl.md | apex-spec-reviewer | API, server, endpoint, database, cache, queue, service, handler, REST, GraphQL, FastAPI, pydantic, Fastify |
+| architecture | apex-architecture/SKILL.md | — | apex-spec-reviewer | system design, scalability, microservices, monolith, event-driven, domain model, ADR, bounded context |
+| devops | apex-devops/SKILL.md | apex-devops/impl.md | apex-spec-reviewer | Docker, CI/CD, deploy, pipeline, container, GitHub Actions, supply-chain, OIDC, SHA pin, rollback |
+| testing | apex-testing/SKILL.md | apex-testing/impl.md | apex-spec-reviewer | TDD, test pyramid, e2e, unit, integration, coverage, mock, vitest, Playwright, axe-core, Storybook |
+| performance | apex-performance/SKILL.md | apex-performance/impl.md | apex-spec-reviewer | slow, latency, throughput, N+1, memory, bundle size, cache, profiling, lighthouse |
+| observability | apex-observability/SKILL.md | apex-observability/impl.md | apex-spec-reviewer | logging, tracing, metrics, alert, monitor, Prometheus, OpenTelemetry, OTel GenAI, Sentry, structlog |
+| accessibility | apex-accessibility/SKILL.md | apex-accessibility/impl.md | apex-spec-reviewer | a11y, WCAG 2.2, EAA, ARIA, screen reader, keyboard nav, colour contrast, focus management, target size |
+| ai-systems | apex-ai-systems/SKILL.md | apex-ai-systems/impl.md | apex-spec-reviewer | LLM, RAG generation, prompt, structured output, agent, tool calling, MCP, eval, LLM-as-judge, streaming, model selection |
+| data | apex-data/SKILL.md | apex-data/impl.md | apex-spec-reviewer | migration, schema, pipeline, ETL, warehouse, query optimisation, Prisma, Alembic, SQLAlchemy, SQLModel, SwiftData, PostgreSQL |
+| docs-technical | apex-docs-technical/SKILL.md | — | apex-spec-reviewer | ADR, runbook, architecture doc, decision record, setup guide |
+| docs-product | apex-docs-product/SKILL.md | apex-docs-product/impl.md | apex-spec-reviewer | changelog, README, user guide, API reference, release notes, tutorial |
+| ui-ux-design | apex-ui-ux-design/SKILL.md | apex-ui-ux-design/impl.md | apex-spec-reviewer | UX, user flow, wireframe, onboarding, visual hierarchy, interaction design, conversational UI, Liquid Glass, calm UI |
+| design-system | apex-design-system/SKILL.md | apex-design-system/impl.md | apex-spec-reviewer | component library, design tokens, shadcn, Radix, Base UI, Tailwind v4, Storybook, registry, theming |
+| animation | apex-animation/SKILL.md | apex-animation/impl.md | apex-spec-reviewer | animation, motion, transition, scroll effect, GSAP, Motion, spring, gesture, SwiftUI animation, reduced motion |
+| figma | apex-figma/SKILL.md | apex-figma/impl.md | apex-spec-reviewer · apex-figma-agent | Figma, design file, design-to-code, design token, MCP, Dev Mode, Code Connect, Figma Make, Framelink |
+| ui-testing | apex-ui-testing/SKILL.md | apex-ui-testing/impl.md | apex-spec-reviewer | visual regression, Chromatic, Storybook testing, Vitest addon, Playwright, Playwright MCP, component testing, axe-core, axe, snapshot |
 | github | apex-github/SKILL.md | apex-github/impl.md | — | GitHub, repo setup, branch protection, issue labels, PR workflow, Conventional Commits, semver, Dependabot, CodeQL, CODEOWNERS, release, changelog |
 | system-design | apex-system-design/SKILL.md | apex-system-design/impl.md | — | distributed systems, CAP theorem, consistency, caching, message queue, rate limiting, circuit breaker, idempotency, Kafka, SQS, Redis, pub/sub, scalability |
 | devcontainer | apex-devcontainer/SKILL.md | apex-devcontainer/impl.md | — | dev container, devcontainer, devcontainer.json, isolated environment, postCreateCommand, Features, DinD, container tooling |

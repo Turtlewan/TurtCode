@@ -1,8 +1,8 @@
 ---
 skill: apex-orchestrate
 backend: claude
-version: 1.1.4
-last_updated: 2026-05-31
+version: 1.1.5
+last_updated: 2026-06-01
 sources:
   - APEX Design Specification 2026-05-24
   - GSD (Get Shit Done) — github.com/gsd-build/get-shit-done
@@ -96,6 +96,10 @@ Rules:
 - Specialists do not call each other — all coordination routes through you
 - Specialists may flag that another domain should be consulted; you decide whether to act
 - Also activate any domain in specialists_default regardless of keywords
+- **Role split (planning mode):** the inline SKILL.md load above is *drafting advice* (the
+  enforce/advice role). The planning-side **review** pass is dispatched separately by `apex-plan`
+  via the generic `apex-spec-reviewer` (fresh context) — not loaded inline (ADR-007). The
+  per-domain `apex-*-agent` roster is retired; the registry's Agent column routes review there.
 
 ## Step 6: State active context
 

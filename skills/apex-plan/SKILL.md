@@ -1,8 +1,8 @@
 ---
 skill: apex-plan
 backend: claude
-version: 1.7.0
-last_updated: 2026-05-31
+version: 1.8.0
+last_updated: 2026-06-01
 sources:
   - APEX Design Specification 2026-05-24
   - GSD (Get Shit Done) — github.com/gsd-build/get-shit-done
@@ -138,7 +138,35 @@ As you build the spec, enforce these rules inline:
 - Every `## Tasks` item must have a "done when:" clause — observable, not "it works"
 - Every file in `## Files to Change` must be strictly necessary — no speculative additions
 
-Then run the Readiness Gate (below). Only move to docs/changes/ when it passes.
+Then dispatch domain review (below), resolve its findings, and run the Readiness Gate (below).
+Only move to docs/changes/ when the gate passes.
+
+### Dispatched domain review — Deep Details only
+
+Before the readiness gate, dispatch a **fresh-context** domain review of the draft. Domain knowledge
+loaded *inline* into this planning window both bloats it and lets self-review skip the non-salient
+checklist items; a dispatched reviewer returns gate-ready, severity-tagged findings and keeps this
+window lean (ADR-007).
+
+**What to dispatch:** the generic `apex-spec-reviewer` agent (Agent tool,
+`subagent_type: apex-spec-reviewer`), **one per reviewed domain, in parallel**. Pass each:
+- `skill_path`: `~/.claude/skills/apex-<domain>/SKILL.md` for that domain
+- `spec`: the draft path `docs/drafts/{name}.md` (or its text)
+
+It reads only that one skill + the spec (sandboxed from planning docs) and returns findings
+classified BLOCK / FLAG / note, each cited to a skill rule.
+
+**Which domains — the trigger:**
+- **Auto-fire** for any of the heavy set the spec touches: **security, auth, data, testing,
+  accessibility**. A missed non-salient gap in these is expensive.
+- **Judgment-fire** any other domain the spec touches when you think it's warranted.
+- **Skip** a trivial single-domain spec — inline drafting already handles the salient single-domain
+  case; don't pay the spawn.
+
+**Resolve before the gate:** every BLOCK finding must be resolved in the spec; every FLAG resolved or
+explicitly accepted with reasoning. These populate the gate's *Specialist flags* section. Only then
+run the readiness gate. If a review flags that another domain is relevant, dispatch a reviewer for it
+too before proceeding.
 
 ### Light mode
 
@@ -343,15 +371,22 @@ At the end of every planning session:
 ### Bug Fix
 No status.md update. Bug fix docs are ephemeral — consumed and archived in one coding session.
 
-## Specialist loading rules — Deep Details only
+## Specialist knowledge — two roles (Deep Details only)
 
-Specialists are loaded by the orchestrator based on keyword detection.
-When a specialist is active:
-- Their SKILL.md findings inform the spec's Specialist Context section
-- BLOCK flags halt spec creation — must be resolved before continuing
-- FLAG flags are noted in Specialist Context — user decides whether to accept
+Domain knowledge reaches a spec two ways — keep them distinct (ADR-007):
 
-You never activate other specialists directly.
-If a specialist flags that another domain is relevant, tell the orchestrator.
+- **Inline (drafting advice).** The orchestrator loads a matched domain's SKILL.md into this window
+  (keyword detection + specialists_default) so you draft with its concerns in mind. Its guidance
+  shapes the spec's Specialist Context section.
+- **Dispatched (review).** The gate-bearing check is the dispatched `apex-spec-reviewer` pass
+  (§ Dispatched domain review) — fresh context, severity-tagged, gate-ready. This is what produces
+  the BLOCK/FLAG flags the readiness gate resolves. **Do not rely on inline self-review for that** —
+  inline review skips non-salient checklist items and bloats this window.
 
-**Light / Bug Fix modes:** skip specialist loading entirely.
+Rules:
+- BLOCK flags halt spec creation — must be resolved before continuing.
+- FLAG flags are noted in Specialist Context — user decides whether to accept.
+- You never run other specialists' impl-side enforcement directly; if a review flags another domain
+  is relevant, dispatch a reviewer for it (§ Dispatched domain review).
+
+**Light / Bug Fix modes:** skip specialist review entirely.
