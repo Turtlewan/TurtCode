@@ -1,8 +1,8 @@
 ---
 skill: apex-observability
 backend: claude
-version: 1.1.0
-last_updated: 2026-05-28
+version: 1.2.0
+last_updated: 2026-06-01
 sources:
   - OpenTelemetry Docs — opentelemetry.io/docs
   - Sentry Docs — docs.sentry.io
@@ -10,7 +10,15 @@ sources:
   - Sentry MCP — github.com/getsentry/sentry-mcp
   - Grafana MCP — github.com/grafana/mcp-grafana
   - OpenTelemetry MCP — github.com/traceloop/opentelemetry-mcp-server
+  - OTel GenAI semantic conventions — opentelemetry.io/docs/specs/semconv/gen-ai
 staleness_threshold: 14d
+description: >
+  Use when adding logging, metrics, alerting, distributed tracing, error tracking, or
+  production monitoring — incl. LLM/AI-call observability (tokens, cost, latency). Triggers:
+  "add logging", "instrument this", "trace this request", "error tracking", "metrics/alerts",
+  "why is prod slow", "monitor X". Pillars (structured logs / metrics / OTel traces) and the
+  no-PII rule are stack-neutral; logger + error-tracker SDK are per-stack, see § Stack
+  assumptions. Not the coding-mode enforcement rules (that's impl.md).
 ---
 
 # Observability Specialist — Planning Mode
@@ -18,6 +26,20 @@ staleness_threshold: 14d
 ## When to activate
 Adding logging, metrics, alerting, distributed tracing, error tracking,
 or any production monitoring concern.
+
+## Stack assumptions
+
+Pillars and rules are stack-neutral; the SDKs differ:
+
+| Concern | TypeScript/Node | Python | Apple/Swift |
+|---------|-----------------|--------|-------------|
+| Structured logger | pino / winston | **structlog** / stdlib `logging` (JSON) | `os.Logger` (unified logging) |
+| Error tracking | `@sentry/node` (or `/nextjs`) | `sentry-sdk` | `sentry-cocoa` / MetricKit |
+| Tracing | OpenTelemetry JS | OpenTelemetry Python | OTel-Swift / signposts |
+
+OpenTelemetry is the **vendor-neutral standard** across all of them — instrument to OTel and
+export anywhere (Grafana/Tempo, Jaeger, Datadog…). For LLM calls use the now-stable **OTel
+GenAI semantic conventions** (token/model/cost attributes) — they supersede ad-hoc naming.
 
 ## Three pillars
 

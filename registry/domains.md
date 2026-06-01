@@ -12,7 +12,7 @@ Phase 3 fills in the skill/agent content. This file defines the routing table.
 | devops | apex-devops/SKILL.md | apex-devops/impl.md | apex-devops-agent | Docker, CI/CD, deploy, pipeline, Kubernetes, infra, environment, container, GitHub Actions |
 | testing | apex-testing/SKILL.md | apex-testing/impl.md | apex-testing-agent | TDD, test pyramid, e2e, unit, integration, coverage, mock, vitest, Playwright, axe-core, Storybook |
 | performance | apex-performance/SKILL.md | apex-performance/impl.md | apex-performance-agent | slow, latency, throughput, N+1, memory, bundle size, cache, profiling, lighthouse |
-| observability | apex-observability/SKILL.md | apex-observability/impl.md | apex-observability-agent | logging, tracing, metrics, alert, monitor, Prometheus, OpenTelemetry, Sentry |
+| observability | apex-observability/SKILL.md | apex-observability/impl.md | apex-observability-agent | logging, tracing, metrics, alert, monitor, Prometheus, OpenTelemetry, OTel GenAI, Sentry, structlog |
 | accessibility | apex-accessibility/SKILL.md | apex-accessibility/impl.md | apex-accessibility-agent | a11y, WCAG 2.2, EAA, ARIA, screen reader, keyboard nav, colour contrast, focus management, target size |
 | ai-systems | apex-ai-systems/SKILL.md | apex-ai-systems/impl.md | apex-ai-systems-agent | LLM, RAG generation, prompt, structured output, agent, tool calling, MCP, eval, LLM-as-judge, streaming, model selection |
 | data | apex-data/SKILL.md | apex-data/impl.md | apex-data-agent | migration, schema, pipeline, ETL, warehouse, query optimisation, Prisma, Alembic, SQLAlchemy, SQLModel, SwiftData, PostgreSQL |
