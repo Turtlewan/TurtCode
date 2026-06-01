@@ -32,7 +32,7 @@ Phase 3 fills in the skill/agent content. This file defines the routing table.
 | homelab | apex-homelab/SKILL.md | apex-homelab/impl.md | — | Home Assistant, ESPHome, smart home, IoT, ESP32, Zigbee, MQTT, automation, smart device, presence detection, mmWave, Node-RED |
 | k8s | apex-k8s/SKILL.md | apex-k8s/impl.md | — | Kubernetes, K8s, kubectl, Helm, ArgoCD, Flux, GitOps, pod, deployment, ingress, namespace, RBAC, HPA, StatefulSet |
 | iac | apex-iac/SKILL.md | apex-iac/impl.md | — | Terraform, Pulumi, Ansible, infrastructure as code, remote state, tfvars, drift detection, Infracost, provisioning |
-| mobile | apex-mobile/SKILL.md | apex-mobile/impl.md | — | React Native, Expo, iOS, Android, mobile app, EAS Build, EAS Update, OTA update, push notifications, app store, TestFlight |
+| mobile | apex-mobile/SKILL.md | apex-mobile/impl.md | — | React Native, Expo, Flutter, Kotlin Multiplatform, KMP, iOS, Android, mobile app, EAS, OTA, push notifications, app store, native vs cross-platform |
 | research | apex-research/SKILL.md | — | — | research, compare options, best practices, look up, investigate, explore options, technology comparison, deep dive |
 | skill-author | apex-skill-author/SKILL.md | — | — | skill authoring, create skill, new skill, SKILL.md, write skill, update skill, skill writing, authoring, skill quality, register skill, impl.md |
 | google | apex-google/SKILL.md | apex-google/impl.md | — | Google, OAuth2, Sign in with Google, GIS, googleapis, google-auth-library, google-api-python-client, Gmail API, Calendar API, Drive API, Workspace, service account, Google SSO, OIDC Google |

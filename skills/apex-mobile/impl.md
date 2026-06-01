@@ -1,12 +1,28 @@
 ---
 skill: apex-mobile
 backend: deepseek
-mode: coding
-version: 1.0.0
-last_updated: 2026-05-28
+version: 1.1.0
+last_updated: 2026-06-01
+sources:
+  - Expo Docs — docs.expo.dev
+  - React Native (New Architecture) — reactnative.dev
+staleness_threshold: 14d
+description: >
+  Coding-mode enforcement for the React Native + Expo path — secure storage, expo-image,
+  SafeArea, EAS build/submit/OTA. This is the RN/Expo lane; native (SwiftUI → apex-swift,
+  Jetpack Compose) and Flutter/KMP differ — see § Stack assumptions. Loads when building a
+  cross-platform mobile app.
 ---
 
 # Mobile (React Native + Expo) — Coding Patterns
+
+## Stack assumptions
+
+These patterns are the **React Native + Expo** path (the cross-platform default; **New
+Architecture** is on — keep `newArchEnabled: true`). If the bound stack is **native** the
+mechanism differs entirely: **Apple/SwiftUI → apex-swift** (Keychain not SecureStore, native
+nav, no EAS); **Android → Jetpack Compose/Kotlin**; **Flutter** → Dart/pub/`flutter build`;
+**KMP** → shared Kotlin logic + native UI. Don't apply Expo APIs off the RN path.
 
 ## NEVER / ALWAYS
 

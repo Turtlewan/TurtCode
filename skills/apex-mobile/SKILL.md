@@ -1,21 +1,43 @@
 ---
 skill: apex-mobile
 backend: claude
-version: 1.0.0
-last_updated: 2026-05-28
+version: 1.1.0
+last_updated: 2026-06-01
 sources:
-  - Expo Docs — docs.expo.dev
-  - React Native Docs — reactnative.dev/docs
-  - EAS Docs — docs.expo.dev/eas
+  - Expo Docs (now official RN start) — docs.expo.dev
+  - React Native (New Architecture) — reactnative.dev/docs
+  - Flutter — docs.flutter.dev
+  - Kotlin Multiplatform — kotlinlang.org/docs/multiplatform.html
+  - Apple HIG / Android target API policy — developer.apple.com · developer.android.com
 staleness_threshold: 14d
+description: >
+  Use when building a mobile app or extending to mobile — iOS/Android, the cross-platform
+  framework choice (React Native/Expo, Flutter, Kotlin Multiplatform), mobile nav, native
+  device APIs (camera/notifications/biometrics), OTA updates, app-store submission. Triggers:
+  "build a mobile app", "iOS and Android", "React Native/Expo/Flutter", "publish to the app
+  store", "add mobile to our SaaS". Owns the native-vs-cross-platform decision; pure
+  Apple-native SwiftUI depth → apex-swift, see § Stack assumptions.
 ---
 
 # Mobile Development Specialist — Planning Mode
 
 ## When to activate
-Any spec involving iOS or Android app development, React Native/Expo setup,
+Any spec involving iOS or Android app development, the cross-platform framework choice,
 mobile navigation, native device APIs (camera, notifications, biometrics),
 app store submission, over-the-air updates, or extending a web SaaS to mobile.
+
+## Stack assumptions
+
+This skill defaults to **cross-platform (React Native + Expo)** but owns the **native-vs-cross
+decision first**:
+- **One platform, deep OS integration, best feel (esp. Apple-only)** → go **native**. SwiftUI
+  depth (incl. Liquid Glass, iOS 26) lives in **apex-swift**; Android-native is Jetpack Compose / Kotlin.
+- **Both platforms, one JS/TS team, speed** → **React Native + Expo** (the default below).
+- **Both platforms, custom-drawn/animation-heavy UI** → **Flutter** (Dart, Impeller engine).
+- **Shared business logic across native apps** → **Kotlin Multiplatform** (logic shared, UI native per platform).
+
+The Expo/RN specifics below are one path; map them to the chosen framework. Native UI/UX
+detail → apex-ui-ux-design (+ apex-swift); a11y → apex-accessibility.
 
 ## Questions to ask before designing
 
@@ -26,20 +48,26 @@ app store submission, over-the-air updates, or extending a web SaaS to mobile.
 - Offline support required? (MMKV + React Query persistence, SQLite)
 - OTA updates needed? (Expo EAS Update for JS-layer hotfixes without app store review)
 
-## Stack selection
+## Stack selection (current — 2026)
 
-**React Native + Expo (recommended for JS/TS teams):**
-- Single codebase → iOS + Android
-- Expo managed workflow: no Xcode/Android Studio needed for most work
-- EAS Build: cloud build service (no local build environment needed)
-- EAS Update: OTA updates for JS changes without App Store review
+**React Native + Expo (recommended for JS/TS teams; Expo is now the *official* RN start):**
+- Single codebase → iOS + Android. **New Architecture is exclusive** as of 2026 (JSI + Fabric +
+  TurboModules; the old bridge was **removed in RN 0.82**); **Hermes** is the default engine.
+- Expo managed workflow + EAS Build (cloud) + EAS Update (OTA for JS changes, no store review).
 
-**Flutter (if team knows Dart or needs pixel-perfect custom UI):**
-- Dart language; strong typing; own rendering engine (not native components)
-- Better performance for animation-heavy, custom-drawn UIs
-- Larger initial bundle size
+**Flutter (~46% share; Dart, own Impeller rendering engine):**
+- Compiles to native ARM; best for animation-heavy / pixel-perfect custom UI. Larger bundle.
 
-**Decision:** If team already knows React/TypeScript → Expo. If starting fresh with complex custom UI → Flutter.
+**Kotlin Multiplatform (KMP — fastest-growing, Google-backed):**
+- Share **business logic** (networking, models, persistence) across platforms while keeping
+  **UI native** (SwiftUI on Apple, Compose on Android). Best when native feel matters but logic shouldn't be duplicated.
+
+**Native (SwiftUI / Jetpack Compose):**
+- One platform or deepest OS integration / best feel → native. Apple-native → **apex-swift**.
+
+**Decision:** Apple-only or native-feel-critical → native (apex-swift) / KMP for shared logic.
+JS/TS team, both platforms, speed → Expo. Custom-drawn UI → Flutter. The "one framework for
+everything" era is over — **hybrid** (KMP logic + native/RN/Flutter UI) is common in 2026.
 
 ## Expo project structure
 
@@ -171,8 +199,8 @@ eas update --channel production --message "Fix login bug"
 **Android (Google Play Console):**
 - Package name set (`android.package`)
 - Keystore managed by EAS (or provide own — never lose it)
-- Target API level: Android 14 (API 34) minimum for new submissions
-- 64-bit support: required
+- Target API level: Google Play requires targeting a **recent** API (rises ~yearly — verify current; was API 35 / Android 15, trending to 36) for new submissions & updates
+- 64-bit support: required; iOS builds target the current SDK (iOS 26 era)
 
 ## Common pitfalls
 
