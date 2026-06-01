@@ -1,7 +1,7 @@
 ---
 skill: apex-plan
 backend: claude
-version: 1.8.0
+version: 1.9.0
 last_updated: 2026-06-01
 sources:
   - APEX Design Specification 2026-05-24
@@ -40,6 +40,10 @@ Compute three signals and report them in one line (say "clean" if none fire):
    flag "{n} decision(s) not yet ADR'd."
 3. **Overview staleness** — overview.md older than the newest ADR (an architectural change
    landed but the story wasn't updated) → flag "overview may be stale vs ADR-NNN."
+4. **Conceptual data model still a stub** (data-bearing projects only) — does
+   `docs/technical/architecture/data-model.md` exist and still carry the `<!-- apex:data-model:stub -->`
+   marker while a spec touches data/schema? → flag "data model is still a stub." Skip for stateless
+   projects (no such file by design — ADR-008).
 
 Example: "Doc coverage: overview is still a stub; 1 decision not yet ADR'd."
 
@@ -103,6 +107,9 @@ with an assumption that isn't written down somewhere — write it in `## Assumpt
 Present trade-offs and alternatives before deciding.
 Write ADRs immediately for every architectural decision made (see ADR workflow below) — **Deep Details only**.
 Load specialist skills when domain keywords appear (orchestrator handles this) — **Deep Details only**.
+For **data-bearing projects**, capture the conceptual data model (entities + relationships) in
+`docs/technical/architecture/data-model.md` **early — before per-phase schema specs** — so per-phase
+schema stays coherent against one anchor (ADR-008) — **Deep Details only**.
 
 ## Writing the spec — by mode
 

@@ -1,7 +1,7 @@
 ---
 skill: apex-data
 backend: claude
-version: 1.2.0
+version: 1.3.0
 last_updated: 2026-06-01
 sources:
   - Prisma Migrations — prisma.io/docs/guides/database/developing-with-prisma-migrate
@@ -34,6 +34,10 @@ pipelines, query optimisation, data integrity constraints.
 
 ## Questions to ask before designing
 
+- Does this introduce or change an **entity**? Reconcile the schema against the conceptual model at
+  `docs/technical/architecture/data-model.md` (the single anchor for the whole entity set); add any
+  new entity/relationship to it so per-phase schema stays coherent (ADR-008). Physical schema here,
+  conceptual model there — they must agree.
 - Is this a breaking schema change? What is the migration strategy?
 - Are there existing rows to backfill? How many?
 - What indexes are needed for the expected query patterns?
@@ -56,6 +60,7 @@ Never rename a column in one migration — add new, backfill, remove old.
 - [ ] NOT NULL columns have default values or migration handles backfill
 - [ ] Unique constraints defined for business-unique fields
 - [ ] Large table migrations reviewed for lock impact
+- [ ] Schema reconciles with the conceptual model (`data-model.md`); any new entity added to it
 
 ## External data gathering tools
 

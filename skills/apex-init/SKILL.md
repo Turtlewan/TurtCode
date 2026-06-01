@@ -1,8 +1,8 @@
 ---
 skill: apex-init
 backend: claude
-version: 1.2.1
-last_updated: 2026-05-31
+version: 1.3.0
+last_updated: 2026-06-01
 sources:
   - APEX Design Specification 2026-05-24
   - GSD (Get Shit Done) — github.com/gsd-build/get-shit-done
@@ -85,6 +85,14 @@ if it doesn't already exist (template below). Leave it as the stub — it carrie
 "exists but not yet written." Planning fills it in (in Claude) once the architecture
 takes shape; do not write the real overview during bootstrap.
 
+**Data-model stub — only for data-bearing projects (ADR-008).** If the confirmed stack
+(Question 3) includes a persistence layer (a database / ORM / local store), also seed the
+**conceptual data-model stub** at `docs/technical/architecture/data-model.md` (template below). It
+carries the `<!-- apex:data-model:stub -->` marker for the coverage check. If the project is
+**stateless** (static site, pure CLI with no stored data), skip this file and add a line "No
+persistent data model" under REQUIREMENTS.md → Out of scope. Leave it as a stub — planning fills the
+entities/relationships in early; do not model data during bootstrap.
+
 ## Step 3: Write docs/status.md
 
 Use the template from ~/.claude/skills/apex-orchestrate/templates/status-template.md.
@@ -106,6 +114,7 @@ Fill in:
     handoff/        ← session summaries
     technical/      ← ADRs, runbooks, architecture docs
       architecture/overview.md  ← System Overview (stub — planning fills it in)
+      architecture/data-model.md ← conceptual data model (stub — data-bearing projects only)
     product/        ← user guides, API docs, changelog
   PROJECT.md        ← vision — loaded by every new agent
   REQUIREMENTS.md   ← scope boundaries — loaded by every new agent
@@ -207,4 +216,37 @@ _The handful of decisions that define the architecture. Each links to its ADR._
 | Decision | Why (→ ADR) |
 |----------|-------------|
 | _e.g. Postgres over Mongo_ | [ADR-001](../adr/ADR-001-*.md) |
+```
+
+## docs/technical/architecture/data-model.md initial content
+
+Seed this **only for data-bearing projects** (substitute `{project-name}`). The
+`<!-- apex:data-model:stub -->` marker stays until planning writes the real model — it is what the
+doc-coverage check greps for. Conceptual only — do **not** add physical schema (tables/columns/
+types/indexes); that is designed per-feature in specs via `apex-data` and reconciled against this.
+
+```markdown
+# {project-name} — Data Model (conceptual)
+
+<!-- apex:data-model:stub -->
+> **STATUS: STUB.** The conceptual domain model — the entities this system holds and how they
+> relate. Planning fills this in early, before per-phase schema. Conceptual only: entities,
+> relationships, invariants. **Not** physical schema — tables/columns/types/indexes/migrations are
+> designed per-feature in specs via apex-data, and must reconcile with this model.
+
+## Entities
+_Each: what it represents · key attributes (conceptual, not columns) · owning subsystem._
+
+| Entity | Represents | Key attributes | Owner |
+|--------|-----------|----------------|-------|
+
+## Relationships
+_How entities relate, with cardinality._
+
+| From | → | To | Cardinality |
+|------|---|----|-------------|
+
+## Invariants
+_Rules that must always hold across entities (e.g. "an Order always has ≥1 LineItem")._
+-
 ```

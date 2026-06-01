@@ -1,7 +1,7 @@
 ---
 skill: apex-architecture
 backend: claude
-version: 1.1.0
+version: 1.2.0
 last_updated: 2026-06-01
 sources:
   - Clean Architecture — Robert Martin
@@ -27,7 +27,9 @@ event-driven architecture, bounded contexts, scalability planning, ADR creation.
 - What are the natural domain boundaries in this system?
 - What is the expected scale? When do we need to worry about it?
 - What is the team's deployment and operational capability?
-- What does the data model look like at steady state?
+- What does the data model look like at steady state? Record the **conceptual** model (entities +
+  relationships + invariants) in `docs/technical/architecture/data-model.md` — its single home, owned
+  here; physical schema is designed per-phase via apex-data and reconciled against it (ADR-008).
 - What are the consistency requirements? Is eventual consistency acceptable?
 
 ## Monolith vs microservices
