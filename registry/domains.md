@@ -6,7 +6,7 @@ Phase 3 fills in the skill/agent content. This file defines the routing table.
 | Domain | SKILL.md | impl.md | Agent | Keywords |
 |--------|----------|---------|-------|---------|
 | security | apex-security/SKILL.md | apex-security/impl.md | apex-security-agent | auth, crypto, secret, password, token, permissions, SQL, injection, XSS, CORS, API key, vulnerability, OWASP, supply chain, dependency audit, security headers |
-| frontend | apex-frontend/SKILL.md | apex-frontend/impl.md | apex-frontend-agent | React, Next, Vue, component, UI, CSS, browser, client-side, bundle, tailwind, shadcn |
+| frontend | apex-frontend/SKILL.md | apex-frontend/impl.md | apex-frontend-agent | React, React 19, Actions, React Compiler, component, UI, CSS, browser, client-side, bundle, tailwind, shadcn |
 | backend | apex-backend/SKILL.md | apex-backend/impl.md | apex-backend-agent | API, server, endpoint, database, cache, queue, service, handler, REST, GraphQL, FastAPI, pydantic, Fastify |
 | architecture | apex-architecture/SKILL.md | — | apex-architecture-agent | system design, scalability, microservices, monolith, event-driven, domain model, ADR, bounded context |
 | devops | apex-devops/SKILL.md | apex-devops/impl.md | apex-devops-agent | Docker, CI/CD, deploy, pipeline, Kubernetes, infra, environment, container, GitHub Actions |
