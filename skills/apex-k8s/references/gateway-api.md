@@ -3,7 +3,11 @@
 Load when configuring ingress/north-south routing. Gateway API is the recommended path for new
 clusters; `ingress-nginx` is retired (read-only since Mar 2026, no security patches).
 
-## GatewayClass + Gateway + HTTPRoute (Envoy Gateway default)
+## GatewayClass + Gateway + HTTPRoute (Envoy Gateway shown as one example)
+
+Envoy Gateway is used here only to make the example concrete — there is no mandated default;
+pick the implementation per § Networking in `../SKILL.md` (Envoy / Cilium / Istio / cloud-native)
+and set `controllerName` accordingly.
 
 ```yaml
 # GatewayClass — installed with the controller (Envoy Gateway shown; swap for Cilium/Istio)

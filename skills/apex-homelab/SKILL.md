@@ -1,20 +1,22 @@
 ---
 skill: apex-homelab
 backend: claude
-version: 1.1.0
+version: 1.2.0
 last_updated: 2026-06-01
 sources:
   - Home Assistant Docs — home-assistant.io/docs
   - ESPHome Docs / Changelog — esphome.io
   - HA Connect ZBT-2 — home-assistant.io/connect/zbt-2
   - Matter / Thread 1.4 — csa-iot.org
+  - Proxmox VE 9.x — proxmox.com
 staleness_threshold: 30d
 description: >
-  Use when planning home automation, IoT sensor builds, or smart-home infrastructure. Triggers:
-  Home Assistant, ESPHome, Zigbee, Z-Wave, Matter, Thread, MQTT, "home lab", "smart home",
-  presence/occupancy detection, local voice assistant (Wyoming/Whisper), ESP32 sensor.
-  Not: cloud IoT platforms (AWS IoT / Azure IoT Hub) or commercial building automation
-  (BACnet / KNX).
+  Use when planning home automation, IoT sensor builds, OR home-lab / self-hosting
+  infrastructure (the host that runs the stack). Triggers: Home Assistant, ESPHome, Zigbee,
+  Z-Wave, Matter, Thread, MQTT, "home lab", "smart home", presence/occupancy detection, local
+  voice (Wyoming/Whisper), ESP32; and Proxmox, Docker Compose self-hosting, reverse proxy
+  (Traefik/Caddy/NPM), Tailscale, homelab backups. Not: cloud IoT platforms (AWS IoT / Azure
+  IoT Hub), commercial building automation (BACnet / KNX), or team/prod CI (→ apex-devops).
 ---
 
 # Home Lab / Home Automation Specialist — Planning Mode
@@ -83,6 +85,67 @@ Your applications (via REST API / WebSocket API / webhooks)
 **USB Zigbee coordinators:** prefer **EFR32MG24-based** — Sonoff **ZBDongle-E (MG24)** or the
 **HA ZBT-2**; **SMLIGHT SLZB-06MG24** for PoE/LAN. Avoid the EOL **Conbee II**. Note the ZBT-2 is
 Zigbee **or** Thread, not both at once.
+
+## Homelab infrastructure
+
+The layer that *hosts* Home Assistant and other self-hosted services. Present options with
+trade-offs and recommend by scale — don't mandate.
+
+**Host strategy** (the fork everything else hangs off):
+
+| Scale | Host | Trade-off |
+|-------|------|-----------|
+| HA only / beginner | Bare-metal HAOS (or Pi 5 + NVMe — never SD card) | simplest, fewest moving parts; can't run other VMs |
+| HA + a few services | Docker Compose on a mini-PC (no hypervisor) | simpler than Proxmox; enough for most homelabs |
+| HA + many services + snapshots | **Proxmox VE 9.x**, HAOS in a VM | full flexibility + snapshot DR; needs ≥8 GB RAM |
+| Multi-machine failover | Proxmox cluster (3+ nodes for quorum) | overkill for a single-box hub |
+
+HAOS-in-Proxmox VM: q35 + OVMF (Secure Boot off) + VirtIO SCSI, 2 vCPU / 4 GB+, USB Zigbee dongle
+passed through via a persistent `/dev/serial/by-id/...` path. Steps → `references/homelab-infra.md`.
+
+**Container runtime:** default **Docker + Compose v2** (`docker compose`, not the deprecated v1
+`docker-compose`). Prefer **Podman (rootless)** if starting fresh and security posture matters. One
+Linux VM running one Compose stack is the dominant pattern. **Don't run Docker inside an LXC** — use
+a VM (Proxmox doesn't officially support Docker-in-LXC).
+
+**Reverse proxy + TLS:**
+
+| Tool | Best for | Trade-off |
+|------|----------|-----------|
+| Nginx Proxy Manager | beginners, GUI, non-Docker backends | heavier; no Docker auto-discovery |
+| Caddy | config-file simplicity, automatic HTTPS | lightest; smaller plugin ecosystem |
+| Traefik | Docker-Compose-first (label auto-discovery) | steeper config; best for dynamic stacks |
+
+Internal-only services → DNS-01 ACME (no public port 80 needed); public → HTTP-01 or DNS-01.
+
+**Remote access (split pattern):** **Tailscale** (WireGuard-based, easiest) for personal device
+access; self-hosted **WireGuard** for lowest-latency full control; **Cloudflare Tunnel** for
+publicly *shared* services / CGNAT; **Nabu Casa** for HA-only. Never expose raw ports (see Security).
+
+**Storage:** ext4 (simplest, Proxmox default) vs **ZFS** (checksums + snapshots + PBS backups;
+budget 1–2 GB ARC RAM) vs btrfs (mirrors only — RAID 5/6 still unstable). HA's recorder writes
+constantly — put the HA DB on a TLC/NVMe disk with high TBW and purge old records. TrueNAS only for
+a dedicated multi-disk NAS (≥16 GB RAM); overkill for one mini-PC.
+
+**Backups (3-2-1):** Proxmox Backup Server (on-host VM is fine for a single node) for VM/LXC +
+**HA Supervisor backups** (portable HA state) + an offsite copy via **restic + rclone** to B2/S3.
+
+**Monitoring (by scale):** start with **Uptime Kuma** (~80% of needs); add **Prometheus + Grafana**
+only for trends or 10+ containers; **Glances** for live debugging.
+
+**Networking / firewall (scale-gated):** a VLAN-capable consumer router (UniFi, Asus-Merlin)
+suffices for most. **OPNsense** (preferred over pfSense in 2026) only when you need IDS/IPS or the
+router lacks VLANs — dedicated hardware beats a firewall-in-a-VM (Proxmox down = network down).
+
+**Secrets / git hygiene:** minimum `.env` git-ignored + `.env.example` committed; better **SOPS +
+age** (encrypt secrets at rest, commit them) for GitOps; Infisical/Vault only with many dynamic creds.
+
+**Boundary:** at this scale, Compose files in git **are** your IaC — Terraform/OpenTofu (apex-iac)
+and Kubernetes (apex-k8s) are overkill for a home hub (k3s is fine as a *learning* target, not the
+HA runtime). Image build / CI pipelines → apex-devops. Ceph/SAN → out of scope (cluster-only).
+
+> Worked infra snippets (Proxmox HAOS VM steps, Traefik Compose + labels, Caddyfile, restic+rclone
+> backup script, SOPS+age): `references/homelab-infra.md`.
 
 ## ESPHome — declarative firmware
 
@@ -157,6 +220,10 @@ Always design for internet outage. Core automations must work without cloud:
 - [ ] USB Zigbee dongle uses persistent udev symlink (not `/dev/ttyUSB0`)
 - [ ] mmWave radar used for occupancy (not PIR-only) where stationary detection matters
 - [ ] Long-lived access tokens generated for machine-to-machine access only
+- [ ] Host strategy chosen by scale (bare-metal / Compose / Proxmox — not a cluster by default)
+- [ ] Web-facing services behind a reverse proxy with TLS (never raw ports)
+- [ ] 3-2-1 backups in place incl. an HA Supervisor backup copied offsite
+- [ ] Service secrets in git-ignored `.env` (or SOPS+age) — never committed plaintext
 
 ## Standards
 

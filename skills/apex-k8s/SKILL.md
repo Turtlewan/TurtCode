@@ -1,7 +1,7 @@
 ---
 skill: apex-k8s
 backend: claude
-version: 1.1.0
+version: 1.2.0
 last_updated: 2026-06-01
 sources:
   - Kubernetes Docs — kubernetes.io/docs
@@ -16,30 +16,31 @@ description: >
   (HPA/VPA/Karpenter/in-place resize). Triggers: a spec mentioning k8s, kubectl, pods,
   Deployments, StatefulSets, Helm, ArgoCD, EKS/GKE/AKS workloads, "deploy to Kubernetes".
   Not: container image build (no Dockerfile authoring), cloud infra provisioning (→ apex-iac),
-  or a project that hasn't yet outgrown a managed platform (Cloud Run / App Runner /
-  Container Apps) — see § When NOT to use Kubernetes.
+  or before weighing whether a managed platform / single VM fits better (see § Orchestration
+  options).
 ---
 
 # Kubernetes Specialist — Planning Mode
 
-## When NOT to use Kubernetes (scale-gate — check first)
+## Orchestration options — weigh before choosing Kubernetes
 
-Kubernetes is the wrong default for most small projects. Reach for a managed container
-platform (**Cloud Run, App Runner, Azure Container Apps, Fly.io, Render**) — or a single VM —
-when any of these hold:
-- Team < ~5 infra-capable engineers, or no one who'll own cluster upgrades.
-- Fewer than ~10 services, no multi-tenant/complex-networking need.
-- A single-server / local hub (e.g. an Artemis-style personal assistant) — Compose or a
-  systemd unit beats a cluster.
+Don't reach for Kubernetes by default. Present the realistic options and their trade-offs, then
+let the user decide:
 
-Use Kubernetes when you genuinely need: many services with complex orchestration, bin-packing
-across a fleet, mature multi-team RBAC/quota isolation, or portability across clouds. **If the
-scale-gate doesn't clear, say so and stop** — don't spec a cluster the project doesn't need.
+| Option | Good for | Trade-offs |
+|--------|----------|-----------|
+| Single VM + Compose / systemd | one box, a few services, a personal/local hub (e.g. Artemis) | simplest ops; no self-healing or auto-scale; manual scaling; single host is a SPOF |
+| Managed container platform (Cloud Run, App Runner, Container Apps, Fly.io, Render) | small teams, bursty/stateless web services, zero cluster ops wanted | fast + cheap to run, no node management; less control over networking/scheduling; per-platform limits; possible cold starts |
+| Kubernetes (managed: EKS/GKE/AKS) | many services, complex orchestration, fleet bin-packing, multi-team RBAC/quota, cloud portability | most powerful + portable; real ops burden (upgrades, networking, RBAC); overkill below ~10 services or without someone to own upgrades |
+
+Rule of thumb: below ~10 services, or with no one to own cluster upgrades, a managed platform or a
+single VM usually wins. **State the recommendation and the trade-off being accepted, then let the
+user decide** — don't silently spec a cluster, but don't refuse one the user deliberately wants.
 
 ## When to activate
 Any spec involving Kubernetes workload design, Helm chart creation, cluster operations,
 GitOps setup (Argo CD/Flux), ingress/networking, autoscaling, RBAC, or migrating
-containerised workloads to Kubernetes — **after** the scale-gate clears.
+containerised workloads to Kubernetes — once the orchestration options above have been weighed.
 
 ## Questions to ask before designing
 
@@ -82,9 +83,12 @@ restart — VPA's `InPlaceOrRecreate` mode (beta) uses this.
 ## Autoscaling
 
 HPA scales pod count on CPU/custom metrics (`autoscaling/v2`, `minReplicas ≥ 2` in prod). For
-right-sizing requests use **VPA** (`InPlaceOrRecreate`). For nodes, **Karpenter v1** is the
-default node autoscaler across **EKS / GKE / AKS / OCI** (faster + more cost-aware than Cluster
-Autoscaler, which remains the fallback where Karpenter has no provider).
+right-sizing requests use **VPA** (`InPlaceOrRecreate`). For node autoscaling, weigh the two at
+decision point (no default):
+- **Karpenter v1** — provisions right-sized nodes fast, better bin-packing / cost-awareness; GA
+  across EKS/GKE/AKS/OCI. Trade-off: newer, provider-specific setup, another controller to run.
+- **Cluster Autoscaler** — mature, ubiquitous, works wherever node groups exist. Trade-off:
+  slower to react, node-group-bound (less bin-packing flexibility).
 
 > HPA + PDB + VPA + in-place-resize manifests: `references/manifests.md`.
 
@@ -113,8 +117,16 @@ Code PR → merge to main → Argo CD detects diff → syncs (`automated: { prun
 
 **North-south traffic — Gateway API (new clusters).** Use the Gateway API (`GatewayClass` +
 `Gateway` + `HTTPRoute`), not Ingress, for new work. **`ingress-nginx` is retired (read-only
-since Mar 2026, no security patches)** — do not spec it for new clusters. Default implementation:
-**Envoy Gateway** (or Cilium Gateway if the CNI is Cilium, or Istio Gateway if a mesh is present).
+since Mar 2026, no security patches)** — do not spec it for new clusters. Pick the implementation
+at decision point (no single default — it depends on the cluster):
+
+| Implementation | Pros | Cons |
+|----------------|------|------|
+| Envoy Gateway | CNCF, standalone, widely adopted for new clusters; no mesh required | one more component to run/upgrade |
+| Cilium Gateway API | reuses the CNI if already on Cilium — no extra proxy | only when Cilium is the CNI |
+| Istio Gateway | natural if a service mesh is already present | heavy if you don't otherwise need a mesh |
+| Cloud-native (GKE/AWS Gateway controllers) | managed, integrates with the cloud LB | cloud-specific, less portable |
+
 Ingress as an API is feature-frozen, not deprecated — existing clusters can stay, but migrate via
 `ingress2gateway`.
 
@@ -142,7 +154,7 @@ probe block is in the deployment template (`references/manifests.md`).
 
 ## Review checklist
 
-- [ ] Scale-gate cleared — Kubernetes is actually warranted (not a managed platform's job)
+- [ ] Orchestration options weighed — Kubernetes chosen with its trade-offs acknowledged (not by default)
 - [ ] All pods have resource requests AND limits defined
 - [ ] HPA configured for production Deployments (min ≥ 2 replicas)
 - [ ] Health probes: liveness + readiness on every container
