@@ -1,15 +1,34 @@
 ---
 skill: apex-github
 backend: deepseek
-version: 1.0.0
-last_updated: 2026-05-28
+version: 1.1.0
+last_updated: 2026-06-01
 sources:
   - GitHub CLI Docs — cli.github.com/manual
   - GitHub Actions Docs — docs.github.com/en/actions
+  - SP5 de-coupling (stack-neutral; CI workflow = Node illustration)
 staleness_threshold: 30d
+description: >
+  Coding-mode rules for GitHub itself — branch+PR flow (never push to main), Actions security (pin
+  third-party actions to a commit SHA, least-privilege `permissions:`, no secrets in YAML, no
+  pull_request_target with untrusted code), gh CLI, Conventional Commits, branch naming, release on
+  tag. Loaded on repo/CI/PR/release work. The CI workflow steps are stack-specific (setup-* +
+  install/test/build) — see § Stack assumptions; the security rules are stack-neutral.
 ---
 
 # GitHub Implementation Rules
+
+## Stack assumptions
+
+Everything here is **stack-neutral GitHub-platform knowledge** *except the CI/Release workflow
+**steps***. The Actions security invariants (pin to SHA, least-privilege `permissions:`, no secrets
+in YAML) apply to any stack. In the workflow examples below, swap the **language setup + the
+install/lint/test/build commands** for the bound stack — they should come from the bound stack
+skill's **Verification Recipe**:
+
+- **Node (illustrated):** `actions/setup-node` + `npm ci` / `npm run lint` / `npm test` / `npm run build`.
+- **Python:** `actions/setup-python` + `uv sync` / `ruff check` / `mypy` / `pytest`.
+- **Swift/Apple:** a `macos-latest` runner + `xcodebuild` / `swift test`.
 
 ## NEVER do
 
@@ -28,7 +47,7 @@ staleness_threshold: 30d
 - Reference issues in every PR body: `Closes #NNN`
 - Update `CHANGELOG.md` in the same PR as the feature/fix
 
-## GitHub Actions: Standard CI
+## GitHub Actions: Standard CI (Node illustration — swap steps per § Stack assumptions)
 
 ```yaml
 name: CI
