@@ -1,22 +1,45 @@
 ---
 skill: apex-animation
 backend: claude
-version: 1.0.0
-last_updated: 2026-05-28
+version: 1.1.0
+last_updated: 2026-06-01
 sources:
-  - Motion (motiondivision) — github.com/motiondivision/motion
-  - GSAP — github.com/greensock/gsap
+  - Motion — motion.dev
+  - GSAP (now 100% free) — gsap.com
+  - SwiftUI Animations — developer.apple.com/documentation/swiftui/animations
   - MagicUI — github.com/magicuidesign/magicui
   - Vercel React View Transitions — github.com/vercel-labs/agent-skills
 staleness_threshold: 30d
+description: >
+  Use when adding motion — transitions, entrance/exit, scroll effects, gestures, page
+  transitions, micro-interactions. Triggers: "animate this", "add a transition", "scroll
+  animation", "page transition", "make it feel smooth". Motion principles (reduced-motion,
+  meaningful motion, spring physics, animate transform/opacity) are surface-neutral; web
+  (Motion / GSAP) is the default, native (SwiftUI) swaps via § Stack assumptions. Not the
+  design-token system (apex-design-system) or screen-level UX (apex-ui-ux-design).
 ---
 
 # Animation Specialist — Planning Mode
 
 ## When to activate
-Any spec involving transitions, motion, scroll effects, entrance/exit animations, gestures, or page transitions.
+Any spec involving transitions, motion, scroll effects, entrance/exit animations, gestures, or page transitions — on any surface.
 
-## Library selection
+## Stack assumptions
+
+| Concern | Web (default) | SwiftUI / native |
+|---------|---------------|------------------|
+| Library | Motion (`motion/react`) / GSAP / CSS | built-in — no dependency |
+| Trigger | `animate` props / GSAP timelines | `withAnimation {}` / `.animation(_:value:)` |
+| Spring | `type: "spring"` (stiffness/damping) | `.spring`, `.bouncy`, `.smooth`, `.snappy` presets (iOS 17+) |
+| Shared element | Motion `layout` / View Transitions | `matchedGeometryEffect` |
+| Sequence / scroll | GSAP timeline / ScrollTrigger | `PhaseAnimator` / `KeyframeAnimator` (iOS 17+); `ScrollView` `.scrollTransition` |
+| Reduced motion | `prefers-reduced-motion` / `useReducedMotion()` | `@Environment(\.accessibilityReduceMotion)` |
+
+The libraries below are **web**. The *principles* (animate cheap properties, springs over
+fixed durations, respect reduced-motion, motion must mean something) are universal — on
+native, SwiftUI provides them built-in; never reach for a JS animation lib on an Apple surface.
+
+## Library selection  (web)
 
 | Use case | Library | Why |
 |----------|---------|-----|
@@ -62,7 +85,9 @@ gsap.to(".panel", {
 })
 ```
 
-GSAP is free including all plugins for personal and commercial use.
+**GSAP is 100% free** (since 30 Apr 2025, after the Webflow acquisition) — including all
+formerly-paid Club plugins (SplitText, MorphSVG, DrawSVG, etc.) for personal and commercial
+use. SplitText was rewritten ~50% smaller. No licence gate to consider any more.
 
 ## Accessibility rules (non-negotiable)
 
@@ -77,6 +102,7 @@ GSAP is free including all plugins for personal and commercial use.
 ```
 
 In Motion: `useReducedMotion()` hook returns `true` when user prefers reduced motion — use it.
+In SwiftUI: read `@Environment(\.accessibilityReduceMotion)` and drop/shorten the animation.
 
 ## Timing guidelines
 

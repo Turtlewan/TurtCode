@@ -1,32 +1,44 @@
 ---
 skill: apex-animation
 backend: deepseek
-version: 1.0.0
-last_updated: 2026-05-28
+version: 1.1.0
+last_updated: 2026-06-01
 sources:
   - Motion — motion.dev
-  - GSAP — gsap.com/docs
+  - GSAP (100% free since Apr 2025) — gsap.com/docs
+  - SwiftUI Animations — developer.apple.com/documentation/swiftui/animations
 staleness_threshold: 30d
+description: >
+  Coding-mode enforcement for animation — reduced-motion fallback, animate transform/opacity
+  only, spring physics, AnimatePresence. Web (Motion/GSAP/CSS) default; native (SwiftUI
+  built-in) swaps via § Stack assumptions. Loads when building motion/transitions.
 ---
 
 # Animation Implementation Rules
 
+## Stack assumptions
+
+Code below is **web** (Motion / GSAP / CSS). On **SwiftUI** use built-in animation
+(`withAnimation`, `.animation(_:value:)`, `.spring`/`.bouncy`/`.smooth`, `matchedGeometryEffect`,
+`PhaseAnimator`) — never a JS lib; gate motion on `@Environment(\.accessibilityReduceMotion)`.
+The reduced-motion + cheap-property + spring rules below are universal.
+
 ## NEVER do
 
-- Add animation without a `prefers-reduced-motion` fallback
-- Use `transition-duration: 0s` to disable animations — use `0.01ms` to avoid reflow
-- Animate `top`/`left`/`width`/`height` — animate `transform` and `opacity` only
+- Add animation without a reduced-motion fallback (web `prefers-reduced-motion` / native Reduce Motion)
+- Use `transition-duration: 0s` to disable animations — use `0.01ms` to avoid reflow (web)
+- Animate `top`/`left`/`width`/`height` — animate `transform` and `opacity` only (web)
 - Use GSAP for simple show/hide transitions achievable with CSS or Motion
 - Create looping animations with no pause mechanism
 - Use hardcoded pixel values in spring animations — use unitless stiffness/damping
 
 ## ALWAYS do
 
-- Wrap all Motion `animate` values with `useReducedMotion()` check
-- Use spring physics (`type: "spring"`) for component animations, not duration-based easing
-- Use `AnimatePresence` for all mount/unmount animations
-- Use `layout` prop for size/position change animations
-- Apply `will-change-transform` (Tailwind) for GPU-composited animations
+- Wrap all Motion `animate` values with `useReducedMotion()` (web) / check Reduce Motion (native)
+- Use spring physics for component animations, not duration-based easing (web `type:"spring"` / SwiftUI spring presets)
+- Use `AnimatePresence` for all mount/unmount animations (web)
+- Use `layout` prop (web) / `matchedGeometryEffect` (SwiftUI) for size/position change animations
+- Apply `will-change-transform` (Tailwind) for GPU-composited animations (web)
 
 ## Motion enter/exit pattern
 
@@ -82,11 +94,11 @@ if (!window.matchMedia("(prefers-reduced-motion: reduce)").matches) {
 
 ## Verification checklist
 
-- [ ] Toggle OS reduced motion — animations must stop or minimise
-- [ ] Check: all animated properties are `transform` or `opacity` (no layout properties)
+- [ ] Toggle OS reduced motion — animations must stop or minimise (all surfaces)
+- [ ] Check: all animated properties are `transform` or `opacity` (no layout properties) (web)
 - [ ] Check: no looping animations without a pause control
-- [ ] Check: `AnimatePresence` wraps every conditionally-rendered animated element
-- [ ] Run: Lighthouse performance — no CLS caused by animated layout shifts
+- [ ] Check: `AnimatePresence` wraps every conditionally-rendered animated element (web)
+- [ ] (web) Run Lighthouse — no CLS caused by animated layout shifts
 
 ## Flag for planning-mode review
 
