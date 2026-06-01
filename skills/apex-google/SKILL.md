@@ -1,8 +1,8 @@
 ---
 skill: apex-google
 backend: claude
-version: 1.0.0
-last_updated: 2026-05-28
+version: 1.1.0
+last_updated: 2026-06-01
 sources:
   - Google Identity — developers.google.com/identity
   - Google Sign-In for Web (GIS) — developers.google.com/identity/gsi/web
@@ -11,10 +11,25 @@ sources:
   - Google Calendar API — developers.google.com/calendar/api
   - Google Drive API — developers.google.com/drive/api
   - googleapis npm — github.com/googleapis/google-api-nodejs-client
+  - google-api-python-client — github.com/googleapis/google-api-python-client
 staleness_threshold: 30d
+description: >
+  Use when integrating Google identity or Workspace — Sign in with Google, Google OAuth2, Gmail /
+  Calendar / Drive access, service accounts, domain-wide delegation, scope selection. The OAuth
+  flows, scopes, token-storage rules, and architecture patterns are stack-neutral platform facts;
+  only the client library differs by stack — googleapis (Node) / google-api-python-client (Python),
+  see § Stack assumptions. Not the coding-mode enforcement rules (that's impl.md).
 ---
 
 # Google Account & Workspace Specialist — Planning Mode
+
+## Stack assumptions
+
+Almost everything here is **stack-neutral Google-platform knowledge** (OAuth flows, scopes, token
+storage, the three credential patterns). Only the **client library** differs by stack: **googleapis +
+google-auth-library** (Node) ↔ **google-api-python-client + google-auth + google-auth-oauthlib**
+(Python). Where a pattern names the Node library, the Python equivalent is 1:1 (see impl.md § Stack
+assumptions).
 
 ## When to activate
 
@@ -105,7 +120,7 @@ Your server → uses access token to call Google APIs on user's behalf
 ### Pattern 2: Service account (backend daemon)
 ```
 Service account JSON key (or Workload Identity on GCP)
-→ google-auth-library creates JWT
+→ the Google auth library (google-auth-library / google-auth) creates a JWT
 → Google token endpoint → short-lived access token
 → Call API directly
 ```
