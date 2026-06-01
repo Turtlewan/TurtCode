@@ -212,7 +212,7 @@ If the session ends without a handoff doc, the next planning session has no cont
 **status.md hygiene:** `docs/status.md` holds *current state only* — no rolling session-log Notes. Relocate durable facts to their one home (what-changed → git; what-the-build-learned → handoff; architectural *why* → ADR; cross-session user/project facts → memory); merge duplicate parked items rather than appending new ones.
 
 **At the end of every planning session** (before the user closes the terminal), update `docs/status.md`:
-1. Read the current `docs/status.md`. If it does not exist, create it using the initial template from the `## Status update` section of `~/.claude/agents/doc-writer.md` — leave the CODING block with empty Completed table and `unknown` state fields.
+1. Read the current `docs/status.md`. If it does not exist, create it from the canonical template at `~/.claude/skills/apex-orchestrate/templates/status-template.md` (the same template `apex-init` uses) — leave the CODING block's In-Flight table empty.
 2. Rewrite everything between `<!-- PLANNING:START -->` and `<!-- PLANNING:END -->` (inclusive of the markers):
    - **Pending table:** scan `docs/changes/*.md` (not `done/`). List each spec with a one-line summary in alphabetical order by filename.
    - **Open questions:** carry over unresolved questions from the previous PLANNING block, add new unresolved questions from this session, remove any that were resolved.

@@ -33,7 +33,7 @@ Fill every section accurately:
 - Specs Completed: each spec with ✅ complete or 🔄 partial
 - Files Changed: every file from coder_summary with commit sha or 🟡 uncommitted
 - Documentation Status: from apex-docs-product-agent output (passed as input)
-- Current State: run `npm run build` and `npm test` — report actual results
+- Current State: run the bound stack's `## Verification Recipe` (from `stack_skills` in status.md, per ADR-006) and report actual results. If no stack skill is bound, report what the spec's `## Commands to run` produced. Never assume `npm`.
 - Specialist Flags: from reviewer_findings, severity high/medium only
 - Decisions Made: all from coder_summary decisions table
 - Blocked Actions: from coder_summary blocked_actions
@@ -51,8 +51,10 @@ Read current docs/status.md.
 In the PLANNING block:
 - Remove the completed spec from Pending Specs table
 In the CODING block (between <!-- CODING:START --> and <!-- CODING:END -->):
-- Clear In-Flight row if this spec was in-flight (resume build)
-- Add row: Last build: {date} | Spec: {name} | Files: {count}
+- Clear the In-Flight row for this spec (it is done + archived to done/)
+- Do NOT add a "Completed"/"Last build" row — status.md holds current state only; completion is
+  recorded by the `docs/changes/done/` archive + git log (the canonical CODING block is the
+  In-Flight table only — see status-template.md)
 
 Write file back.
 
