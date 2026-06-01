@@ -9,7 +9,7 @@ Phase 3 fills in the skill/agent content. This file defines the routing table.
 | frontend | apex-frontend/SKILL.md | apex-frontend/impl.md | apex-frontend-agent | React, React 19, Actions, React Compiler, component, UI, CSS, browser, client-side, bundle, tailwind, shadcn |
 | backend | apex-backend/SKILL.md | apex-backend/impl.md | apex-backend-agent | API, server, endpoint, database, cache, queue, service, handler, REST, GraphQL, FastAPI, pydantic, Fastify |
 | architecture | apex-architecture/SKILL.md | — | apex-architecture-agent | system design, scalability, microservices, monolith, event-driven, domain model, ADR, bounded context |
-| devops | apex-devops/SKILL.md | apex-devops/impl.md | apex-devops-agent | Docker, CI/CD, deploy, pipeline, Kubernetes, infra, environment, container, GitHub Actions |
+| devops | apex-devops/SKILL.md | apex-devops/impl.md | apex-devops-agent | Docker, CI/CD, deploy, pipeline, container, GitHub Actions, supply-chain, OIDC, SHA pin, rollback |
 | testing | apex-testing/SKILL.md | apex-testing/impl.md | apex-testing-agent | TDD, test pyramid, e2e, unit, integration, coverage, mock, vitest, Playwright, axe-core, Storybook |
 | performance | apex-performance/SKILL.md | apex-performance/impl.md | apex-performance-agent | slow, latency, throughput, N+1, memory, bundle size, cache, profiling, lighthouse |
 | observability | apex-observability/SKILL.md | apex-observability/impl.md | apex-observability-agent | logging, tracing, metrics, alert, monitor, Prometheus, OpenTelemetry, OTel GenAI, Sentry, structlog |

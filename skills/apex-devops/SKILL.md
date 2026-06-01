@@ -1,15 +1,22 @@
 ---
 skill: apex-devops
 backend: claude
-version: 1.1.0
-last_updated: 2026-05-28
+version: 1.2.0
+last_updated: 2026-06-01
 sources:
   - Docker Best Practices — docs.docker.com/develop/dev-best-practices
-  - GitHub Actions Docs — docs.github.com/en/actions
-  - HashiCorp Agent Skills — github.com/hashicorp/agent-skills
+  - GitHub Actions Docs + security hardening — docs.github.com/en/actions
+  - SLSA supply-chain framework — slsa.dev
   - Claude Code Action — github.com/anthropics/claude-code-action
   - Vercel Agent Skills — github.com/vercel-labs/agent-skills
 staleness_threshold: 14d
+description: >
+  Use when setting up CI/CD, containerisation, or deployment — pipelines, Dockerfiles,
+  GitHub Actions, environments/secrets, rollback, deploy gates, supply-chain hardening.
+  Triggers: "set up CI", "Dockerfile", "GitHub Actions workflow", "deploy this", "rollback
+  strategy", "pin/secure the pipeline". Docker/CI examples are Node-default; per-stack swaps
+  (Python etc.) via § Stack assumptions; CI build/test steps come from the bound stack's
+  Verification Recipe. IaC depth → apex-iac. Not the coding-mode enforcement (that's impl.md).
 ---
 
 # DevOps Specialist — Planning Mode
@@ -17,6 +24,23 @@ staleness_threshold: 14d
 ## When to activate
 CI/CD pipelines, Docker configuration, deployment strategy, environment management,
 infrastructure changes, GitHub Actions workflows.
+
+## Stack assumptions
+
+The Docker + CI examples are **Node-default**. Per stack: **Python** → `python:3.x-slim` base,
+`uv sync` / `pip install`, `.venv` not `node_modules`; the CI **build/test/lint steps come from
+the bound stack's `## Verification Recipe`**, not hardcoded `npm` commands. Container hygiene
+(multi-stage, non-root, pinned base, healthcheck, no secrets baked in) and the supply-chain
+rules below are **stack-neutral**. Deep IaC (Terraform/OpenTofu/Pulumi) → **apex-iac**.
+
+## Supply-chain hardening (current baseline)
+
+- **Pin GitHub Actions to a commit SHA**, not a mutable tag (`@v4` → `@<sha>  # v4.x`) — a
+  retagged action is a supply-chain attack vector (OWASP A03:2025).
+- **Use OIDC for cloud auth** (GitHub → AWS/GCP/Azure) — short-lived federated tokens, **no
+  long-lived cloud keys in CI secrets**.
+- Set least-privilege `permissions:` on each workflow; never `pull_request_target` with untrusted code.
+- Commit a lockfile; run a dependency audit in CI; consider SLSA provenance/attestations for releases.
 
 ## Questions to ask before designing
 
@@ -37,16 +61,11 @@ Recommended pipeline order:
 6. Smoke test staging
 7. Deploy to production (manual gate for production)
 
-## Terraform / HashiCorp IaC
+## Infrastructure as Code
 
-When specs involve infrastructure-as-code:
-- Use HCL modules for reusable patterns — not copy-pasted resource blocks
-- Validate with `terraform validate` and `terraform plan` before apply
-- Store state in remote backend (S3 + DynamoDB lock, or Terraform Cloud)
-- Secrets via Vault or environment injection — never in `.tfvars` committed to git
-- Tag all resources: `environment`, `project`, `managed-by=terraform`
-
-HashiCorp Agent Skills plugin: `npx skills add hashicorp/agent-skills` (Terraform + Packer skills)
+When specs involve IaC (Terraform/OpenTofu/Pulumi), **defer to apex-iac** for the depth —
+module structure, remote state + locking, plan-before-apply, secrets, and resource tagging.
+At the devops level just ensure the pipeline runs `plan` on PR and gates `apply` behind review.
 
 ## Claude Code Action (GitHub CI)
 
@@ -72,5 +91,6 @@ Auto-deploys from git push. `vercel-labs/agent-skills` provides `vercel-deploy-c
 - [ ] Health check endpoint defined for containerised services
 - [ ] Database migrations run before app starts (not in same container)
 - [ ] Rollback strategy documented (git revert + redeploy, or blue-green)
-- [ ] Terraform state in remote backend (if IaC is in scope)
-- [ ] All infrastructure resources tagged (environment, project, managed-by)
+- [ ] GitHub Actions pinned to commit SHA; least-privilege `permissions:` set
+- [ ] Cloud auth via OIDC (no long-lived keys in CI secrets) where supported
+- [ ] IaC in scope → see apex-iac (remote state, tagging, plan-before-apply)

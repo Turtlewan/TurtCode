@@ -1,34 +1,48 @@
 ---
 skill: apex-devops
 backend: deepseek
-version: 1.0.0
-last_updated: 2026-05-28
+version: 1.1.0
+last_updated: 2026-06-01
 sources:
   - Docker Best Practices — docs.docker.com/develop/dev-best-practices
-  - GitHub Actions Docs — docs.github.com/en/actions
+  - GitHub Actions security hardening — docs.github.com/en/actions/security-guides
 staleness_threshold: 14d
+description: >
+  Coding-mode enforcement for CI/CD + containers — multi-stage Dockerfile, non-root, pinned
+  bases, no baked secrets, SHA-pinned Actions, OIDC. Examples Node-default; Python swaps via
+  § Stack assumptions; CI steps from the bound stack recipe. Loads when writing Dockerfiles/CI.
 ---
 
 # DevOps Implementation Rules
+
+## Stack assumptions
+
+Dockerfile + CI examples are **Node**. **Python** → `python:3.x-slim` base, `uv sync`/`pip
+install`, copy `.venv` or install in builder; `.dockerignore` excludes `.venv`/`__pycache__`.
+**CI lint/test/build steps come from the bound stack's `## Verification Recipe`** — never
+default to `npm` for a non-JS stack. Container/supply-chain rules below are stack-neutral.
 
 ## NEVER do
 
 - Hardcode environment variables in Dockerfiles or CI YAML
 - Run as root in Docker containers
-- Copy .env files into Docker images
-- Use latest tag for base images in production — pin exact versions
+- Copy .env / secrets files into Docker images
+- Use `latest` tag for base images in production — pin exact versions
 - Run migrations and app startup in the same container entrypoint
+- Reference GitHub Actions by mutable tag for security-sensitive workflows — pin to a commit SHA
+- Put long-lived cloud keys in CI secrets when OIDC federation is available
 
 ## ALWAYS do
 
 - Use multi-stage Dockerfile (builder stage + production stage)
 - Add non-root user in Dockerfile
-- Pin base image versions (node:20.11-alpine, not node:latest)
-- Add .dockerignore (exclude node_modules, .env, .git)
+- Pin base image versions (e.g. `node:24-alpine` / `python:3.13-slim`, not `:latest`)
+- Add .dockerignore (exclude deps dir, .env, .git)
 - Add HEALTHCHECK to Dockerfile for services
-- Use GitHub Actions secrets for all CI credentials
+- Pin Actions to commit SHA; set least-privilege `permissions:` per workflow
+- Use OIDC for cloud auth; GitHub Actions secrets only for what OIDC can't cover
 
-## Dockerfile pattern (Node.js)
+## Dockerfile pattern (Node.js — Python swaps base + install per § Stack assumptions)
 
 ```dockerfile
 FROM node:20.11-alpine AS builder
@@ -55,19 +69,18 @@ CMD ["node", "dist/index.js"]
 ```yaml
 name: CI
 on:
-  push:
-    branches: [main]
-  pull_request:
-    branches: [main]
+  push: { branches: [main] }
+  pull_request: { branches: [main] }
+permissions:
+  contents: read            # least privilege; widen only per-job as needed
 jobs:
   test:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version: '20'
-          cache: 'npm'
+      - uses: actions/checkout@<sha>     # pin to SHA, comment the version (# v4.x)
+      - uses: actions/setup-node@<sha>   # pin to SHA
+        with: { node-version: '24', cache: 'npm' }
+      # build/test/lint = the bound stack's Verification Recipe (npm shown; Python: uv run ...)
       - run: npm ci
       - run: npm run lint
       - run: npm test
@@ -75,7 +88,8 @@ jobs:
 
 ## Verification checklist
 
-- [ ] docker build completes without errors
-- [ ] docker run starts and health check passes
+- [ ] docker build completes without errors; container runs as non-root, health check passes
 - [ ] No secrets visible in: docker inspect, docker history, git log
-- [ ] .env is in .gitignore
+- [ ] .env / secrets in .gitignore and .dockerignore
+- [ ] Actions pinned to SHA; workflow `permissions:` least-privilege
+- [ ] CI steps match the bound stack's Verification Recipe (not assumed npm)
