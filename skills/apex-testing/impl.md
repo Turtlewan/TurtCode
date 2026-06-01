@@ -1,21 +1,32 @@
 ---
 skill: apex-testing
 backend: deepseek
-version: 1.1.0
-last_updated: 2026-05-31
+version: 1.2.0
+last_updated: 2026-06-01
 sources:
   - Vitest Docs — vitest.dev
   - Playwright Docs — playwright.dev
   - docs/technical/adr/ADR-006-buildability-layer-verification-inversion.md
 staleness_threshold: 14d
+description: >
+  Coding-mode test-authoring discipline — stack-neutral invariants (test behaviour not
+  implementation, AAA structure, descriptive "it does X when Y" names, mock only real boundaries,
+  test through the public interface). Loaded when a task adds/changes tests. Test commands +
+  framework come from the bound stack skill's `## Verification Recipe`, NOT this file (Vitest/
+  Playwright shown are JS illustrations — pytest / go test / XCTest on other stacks); see § Stack
+  assumptions.
 ---
 
 # Testing Implementation Rules
 
-> **Test commands and framework patterns come from the bound stack skill's `## Verification
-> Recipe` (via `stack_skills`), not from this file.** The Vitest/Playwright examples below are
-> **JS-ecosystem illustrations**; for another stack follow that stack skill's test framework
-> (e.g. `pytest`, `go test`). apex-code runs the recipe — this file is the test-authoring discipline.
+## Stack assumptions
+
+The test-authoring discipline below is **stack-neutral**. The **test commands and framework come
+from the bound stack skill's `## Verification Recipe`** (via `stack_skills`), *not* from this file —
+apex-code runs that recipe. The **Vitest / Playwright** examples are **JS-ecosystem illustrations**;
+on the bound stack swap the framework: **Python** pytest (+ Playwright-Python / httpx for E2E/API);
+**Go** `go test`; **Swift/Apple** XCTest / Swift Testing + XCUITest. The *patterns* (AAA, behaviour
+assertions, descriptive names) are identical across all of them.
 
 ## NEVER do
 
@@ -34,7 +45,7 @@ staleness_threshold: 14d
 - Write the test before the implementation (or immediately after the task, not at the end)
 - Prefer real implementations over mocks within the same service boundary
 
-## Vitest unit test pattern
+## Vitest unit test pattern (JS illustration — see § Stack assumptions)
 
 ```typescript
 import { describe, it, expect, beforeEach } from 'vitest'
