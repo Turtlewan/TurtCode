@@ -1,17 +1,35 @@
 ---
 skill: apex-iac
 backend: deepseek
-mode: coding
-version: 1.0.0
-last_updated: 2026-05-28
+version: 1.1.0
+last_updated: 2026-06-01
+sources:
+  - OpenTofu — opentofu.org
+  - Terraform — developer.hashicorp.com/terraform
+  - Pulumi — pulumi.com/docs
+staleness_threshold: 14d
+description: >
+  Coding-mode enforcement for IaC — HCL module structure, remote state + locking,
+  for_each over count, prevent_destroy, no-secrets-in-state, plan-on-PR CI. HCL examples
+  run on both Terraform and OpenTofu (`tofu` is drop-in) — see § Tool note. Loads when
+  writing IaC.
 ---
 
 # Infrastructure as Code — Coding Patterns
+
+## Tool note (Terraform / OpenTofu)
+
+All HCL below runs on **both** — `tofu` is a drop-in for `terraform` (same providers/modules).
+**Prefer OpenTofu for new projects** (OSI licence + native state encryption); in CI use
+`opentofu/setup-opentofu` instead of `hashicorp/setup-terraform`. **Pin CI actions to a commit
+SHA** (the `@v4`/`@v3` tags below are illustrative — see apex-devops). Pulumi/Ansible patterns
+are tool-specific and shown separately.
 
 ## NEVER / ALWAYS
 
 NEVER:
 - Commit secrets to `.tfvars` files — use env vars (`TF_VAR_secret`) or Vault/Secrets Manager
+- **Output a secret** (`output`/exported value) — it lands in **plaintext in state**; write it to a secrets manager at apply, fetch at runtime
 - Run `terraform apply` without a saved plan (`terraform plan -out=tfplan` first)
 - Use `terraform destroy` in production without explicit confirmation workflow
 - Use `terraform workspace` for prod/staging differentiation in critical infra — use separate directories

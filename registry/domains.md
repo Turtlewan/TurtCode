@@ -31,7 +31,7 @@ Phase 3 fills in the skill/agent content. This file defines the routing table.
 | gcp | apex-gcp/SKILL.md | apex-gcp/impl.md | — | GCP, Google Cloud, Cloud Run, GKE, Cloud SQL, BigQuery, Pub/Sub, Cloud Functions, Artifact Registry, Workload Identity, Secret Manager |
 | homelab | apex-homelab/SKILL.md | apex-homelab/impl.md | — | Home Assistant, ESPHome, smart home, IoT, ESP32, Zigbee, MQTT, automation, smart device, presence detection, mmWave, Node-RED |
 | k8s | apex-k8s/SKILL.md | apex-k8s/impl.md | — | Kubernetes, K8s, kubectl, Helm, ArgoCD, Flux, GitOps, pod, deployment, ingress, namespace, RBAC, HPA, StatefulSet |
-| iac | apex-iac/SKILL.md | apex-iac/impl.md | — | Terraform, Pulumi, Ansible, infrastructure as code, remote state, tfvars, drift detection, Infracost, provisioning |
+| iac | apex-iac/SKILL.md | apex-iac/impl.md | — | OpenTofu, Terraform, Pulumi, Ansible, infrastructure as code, remote state, state encryption, drift detection, Infracost, provisioning |
 | mobile | apex-mobile/SKILL.md | apex-mobile/impl.md | — | React Native, Expo, Flutter, Kotlin Multiplatform, KMP, iOS, Android, mobile app, EAS, OTA, push notifications, app store, native vs cross-platform |
 | research | apex-research/SKILL.md | — | — | research, compare options, best practices, look up, investigate, explore options, technology comparison, deep dive |
 | skill-author | apex-skill-author/SKILL.md | — | — | skill authoring, create skill, new skill, SKILL.md, write skill, update skill, skill writing, authoring, skill quality, register skill, impl.md |
