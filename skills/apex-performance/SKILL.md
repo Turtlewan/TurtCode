@@ -1,8 +1,8 @@
 ---
 skill: apex-performance
 backend: claude
-version: 1.1.0
-last_updated: 2026-05-28
+version: 1.2.0
+last_updated: 2026-06-01
 sources:
   - Web Vitals — web.dev/vitals
   - Prisma Performance — prisma.io/docs/guides/performance-and-optimization
@@ -10,9 +10,22 @@ sources:
   - Web Quality Skills (addyosmani) — github.com/addyosmani/web-quality-skills
   - Playwright MCP — github.com/microsoft/playwright-mcp
 staleness_threshold: 14d
+description: >
+  Use when addressing performance — latency, slow loads, N+1 queries, bundle size, memory/CPU,
+  throughput. Measure-first; sets budgets (Core Web Vitals LCP/INP/CLS, API p95). Principles are
+  stack-neutral (eager-load not N+1, index hot columns, paginate, cache, don't block the loop);
+  the eager-load API + profiling tools are per-stack (Prisma ↔ SQLAlchemy), see § Stack assumptions.
+  Not the coding-mode enforcement rules (that's impl.md).
 ---
 
 # Performance Specialist — Planning Mode
+
+## Stack assumptions
+
+The performance principles here are **stack-neutral** (measure-first, eager-load instead of N+1,
+index hot columns, paginate, cache, don't block the loop). Core Web Vitals apply to any web
+frontend. The concrete eager-load API and profiling tools are per-stack — Prisma `include` ↔
+SQLAlchemy `selectinload`; `next/image` ↔ the stack's image pipeline. See impl.md § Stack assumptions.
 
 ## When to activate
 Latency complaints, slow page loads, N+1 query patterns, large bundle sizes,
@@ -47,9 +60,9 @@ Database query: < 100ms for user-facing queries
 
 ## Review checklist
 
-- [ ] N+1 queries identified and resolved (use include/select, not nested loops)
+- [ ] N+1 queries identified and resolved (eager-load: include/select or selectinload, not nested loops)
 - [ ] Appropriate indexes on frequently-queried columns
 - [ ] Caching strategy defined for expensive or repeated operations
 - [ ] Pagination on all list endpoints — no unbounded queries
-- [ ] Images optimised (next/image with appropriate sizes)
+- [ ] Images optimised (the stack's image pipeline — e.g. next/image — with appropriate sizes)
 - [ ] Large data processing moved to background jobs
