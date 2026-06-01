@@ -13,25 +13,25 @@
 | apex-docs-technical-agent | agents/apex-docs-technical-agent.md | Claude | apex-code | Writes handoff, ADRs |
 | apex-docs-product-agent | agents/apex-docs-product-agent.md | DeepSeek | apex-code | Inline docs, changelog, README |
 
-## Phase 3 Agents (domain specialists)
+## Phase 3 Agents (domain review + tooling)
+
+Planning-side **domain review** is one generic agent dispatched per domain (ADR-007), not a
+per-domain roster:
 
 | Agent | File | Mode | Activation |
 |-------|------|------|-----------|
-| apex-security-agent | agents/apex-security-agent.md | Both | security, auth, crypto keywords |
-| apex-frontend-agent | agents/apex-frontend-agent.md | Both | React, Next, component, UI keywords |
-| apex-backend-agent | agents/apex-backend-agent.md | Both | API, server, endpoint, database keywords |
-| apex-architecture-agent | agents/apex-architecture-agent.md | Claude only | system design, ADR, scalability keywords |
-| apex-devops-agent | agents/apex-devops-agent.md | Both | Docker, CI/CD, deploy, pipeline keywords |
-| apex-testing-agent | agents/apex-testing-agent.md | DeepSeek only | When spec includes testing tasks only |
-| apex-performance-agent | agents/apex-performance-agent.md | Both | slow, latency, N+1, profiling keywords |
-| apex-observability-agent | agents/apex-observability-agent.md | Both | logging, metrics, tracing keywords |
-| apex-accessibility-agent | agents/apex-accessibility-agent.md | Both | a11y, WCAG, ARIA keywords |
-| apex-ai-systems-agent | agents/apex-ai-systems-agent.md | Both | LLM, RAG, embedding, vector keywords |
-| apex-data-agent | agents/apex-data-agent.md | Both | migration, schema, ETL keywords |
-| apex-docs-technical-agent | (see Phase 2) | Claude only | Always in planning |
-| apex-docs-product-agent | (see Phase 2) | DeepSeek only | Always post-build |
-| apex-ui-testing-agent | agents/apex-ui-testing-agent.md | DeepSeek only | When spec includes Storybook, Playwright, or axe-core tasks |
-| apex-design-system-agent | agents/apex-design-system-agent.md | DeepSeek only | When spec adds components, tokens, or Storybook stories |
-| apex-animation-agent | agents/apex-animation-agent.md | DeepSeek only | When spec includes Motion, GSAP, or scroll animation tasks |
-| apex-ui-ux-design-agent | agents/apex-ui-ux-design-agent.md | Claude only | Pre-build quality gate for UI specs |
-| apex-figma-agent | agents/apex-figma-agent.md | DeepSeek only | When spec includes a Figma URL |
+| apex-spec-reviewer | agents/apex-spec-reviewer.md | Claude | Dispatched by apex-plan to review a draft spec against one `apex-<domain>/SKILL.md`; auto-fired for the heavy set (security/auth/data/testing/a11y), judgment-fired otherwise |
+
+Agents retained for domain-specific **tooling** (not review stubs):
+
+| Agent | File | Mode | Activation |
+|-------|------|------|-----------|
+| apex-security-agent | agents/apex-security-agent.md | Both | security, auth, crypto keywords (Bash security verification) |
+| apex-figma-agent | agents/apex-figma-agent.md | DeepSeek only | When spec includes a Figma URL (MCP / image steps) |
+
+The post-build doc agents are listed in Phase 2 (`apex-docs-technical-agent`, `apex-docs-product-agent`).
+
+_Retired 2026-06-01 (ADR-007): the 14 per-domain review/enforce stubs — accessibility, ai-systems,
+animation, architecture, backend, data, design-system, devops, frontend, observability, performance,
+testing, ui-testing, ui-ux-design. They were never dispatched; planning-side review is now the generic
+`apex-spec-reviewer`, coding-side enforcement is `apex-coder` wave-workers loading `impl.md` inline._
