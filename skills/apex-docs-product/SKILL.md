@@ -1,13 +1,20 @@
 ---
 skill: apex-docs-product
 backend: claude
-version: 1.0.0
-last_updated: 2026-05-28
+version: 1.1.0
+last_updated: 2026-06-01
 sources:
   - Keep a Changelog — keepachangelog.com
   - Divio Documentation System — documentation.divio.com
   - Google Developer Documentation Style Guide — developers.google.com/style
 staleness_threshold: 60d
+description: >
+  Use when planning user-facing documentation — what docs a feature needs, README structure,
+  changelog content, API reference, doc-site structure, choosing the right doc type. Triggers:
+  "what docs do I need", "write the README", "changelog entry", "document this API/feature",
+  "structure the docs". Stack-neutral (Divio four-type model, Keep a Changelog); doc-comment
+  syntax per language via impl § Stack assumptions. Not internal/technical docs — ADRs,
+  runbooks, System Overview are apex-docs-technical.
 ---
 
 # Product Documentation Specialist — Planning Mode

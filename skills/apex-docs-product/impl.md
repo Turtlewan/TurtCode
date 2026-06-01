@@ -1,14 +1,25 @@
 ---
 skill: apex-docs-product
 backend: deepseek
-version: 1.0.0
-last_updated: 2026-05-28
+version: 1.1.0
+last_updated: 2026-06-01
 sources:
   - Keep a Changelog — keepachangelog.com
 staleness_threshold: 30d
+description: >
+  Coding-mode enforcement for user-facing docs — user-perspective wording, Keep a Changelog
+  entries, API-reference examples, no placeholders. Doc-comment example is JSDoc; per-language
+  swaps via § Stack assumptions. Loads when writing/updating product docs.
 ---
 
 # Product Documentation Implementation Rules
+
+## Stack assumptions
+
+Content rules (user-perspective, Keep a Changelog, no placeholders, doc-type discipline) are
+**stack-neutral**. Only the **doc-comment syntax** swaps: TS → **JSDoc** (shown); Python →
+docstrings (Google/NumPy style, Sphinx/mkdocstrings); Swift → **DocC** (`///`). The OpenAPI
+example is language-neutral. Apply the matching doc-comment style for the bound stack.
 
 ## NEVER do
 
