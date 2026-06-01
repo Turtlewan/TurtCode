@@ -19,7 +19,7 @@ Phase 3 fills in the skill/agent content. This file defines the routing table.
 | docs-technical | apex-docs-technical/SKILL.md | — | apex-docs-technical-agent | ADR, runbook, architecture doc, decision record, setup guide |
 | docs-product | apex-docs-product/SKILL.md | apex-docs-product/impl.md | apex-docs-product-agent | changelog, README, user guide, API reference, release notes, tutorial |
 | ui-ux-design | apex-ui-ux-design/SKILL.md | apex-ui-ux-design/impl.md | apex-ui-ux-design-agent | UX, user flow, wireframe, onboarding, visual hierarchy, interaction design, conversational UI, Liquid Glass, calm UI |
-| design-system | apex-design-system/SKILL.md | apex-design-system/impl.md | apex-design-system-agent | component library, design tokens, shadcn, Radix, Tailwind, Storybook, Chromatic, Tremor |
+| design-system | apex-design-system/SKILL.md | apex-design-system/impl.md | apex-design-system-agent | component library, design tokens, shadcn, Radix, Base UI, Tailwind v4, Storybook, registry, theming |
 | animation | apex-animation/SKILL.md | apex-animation/impl.md | apex-animation-agent | animation, motion, transition, scroll effect, GSAP, Framer Motion, spring, gesture |
 | figma | apex-figma/SKILL.md | apex-figma/impl.md | apex-figma-agent | Figma, design file, design-to-code, design token, MCP, Framelink |
 | ui-testing | apex-ui-testing/SKILL.md | apex-ui-testing/impl.md | apex-ui-testing-agent | visual regression, Chromatic, Storybook testing, Playwright, axe, snapshot |

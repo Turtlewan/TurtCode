@@ -1,19 +1,25 @@
 ---
 skill: apex-design-system
 backend: claude
-version: 1.0.0
-last_updated: 2026-05-28
+version: 1.1.0
+last_updated: 2026-06-01
 sources:
-  - shadcn/ui — github.com/shadcn-ui/ui
-  - Radix Primitives — github.com/radix-ui/primitives
-  - Tailwind CSS — github.com/tailwindlabs/tailwindcss
-  - Storybook — github.com/storybookjs/storybook
-  - floating-ui — github.com/floating-ui/floating-ui
+  - shadcn/ui (CLI v4, MCP, registries) — ui.shadcn.com/docs
+  - Radix UI (unified package) — radix-ui.com
+  - Base UI — base-ui.com
+  - Tailwind CSS v4 — tailwindcss.com
+  - Storybook — storybook.js.org
+  - floating-ui — floating-ui.com
   - Emil Kowalski (vaul, sonner) — github.com/emilkowalski
-  - TanStack Table — github.com/TanStack/table
-  - Recharts — github.com/recharts/recharts
-  - Tremor — github.com/tremorlabs/tremor
+  - TanStack Table — tanstack.com/table
 staleness_threshold: 14d
+description: >
+  Use when building or extending a component library / design system — UI primitives,
+  design tokens, theming, component variants, Storybook stories, registries. Triggers:
+  "design system", "component library", "design tokens", "shadcn", "theme this",
+  "add a primitive". WEB-STACK skill (React + Tailwind + shadcn/Radix or Base UI). The
+  token discipline generalises but the component machinery is web; native design systems →
+  apex-swift. Not screen-level UX (apex-ui-ux-design) or animation (apex-animation).
 ---
 
 # Design System Specialist — Planning Mode
@@ -21,13 +27,33 @@ staleness_threshold: 14d
 ## When to activate
 Building or extending a component library, adding a new UI primitive, establishing design tokens, or integrating a third-party component system.
 
+## Stack assumptions
+
+**Web-stack skill** — assumes **React + Tailwind v4 + shadcn/ui** on **Radix or Base UI**
+primitives. The *token discipline* (semantic tokens, single source of truth, no hardcoded
+values, all states defined) is universal — on **SwiftUI** it maps to Asset Catalog colour
+sets + semantic/system colours + Dynamic Type + a shared `Theme` — but the component
+machinery here (shadcn CLI, Radix, Storybook, `cn()`) is web-only. Native design system → apex-swift.
+
+## What's current (2026)
+
+- **Unified `radix-ui` package** (Feb 2026) — new-york style imports from a single `radix-ui`
+  dep, **not** individual `@radix-ui/react-*` packages. Don't add the old per-component packages.
+- **shadcn CLI v4** (Mar 2026) — `shadcn init` scaffolds full templates (Next.js, Vite, Astro,
+  React Router, TanStack Start, Laravel). `npx shadcn@latest add <component>` still the per-component flow.
+- **shadcn MCP server + shadcn/skills** — agents browse/search/install from registries; prefer
+  it for discovering components. Registries can compose multiple `registry.json` files.
+- **Base UI** (from the MUI team) is now a supported headless primitive set alongside Radix —
+  pick one per project; both give ARIA/keyboard/focus correctly.
+- **Tailwind v4**: container queries are built-in; `@theme` + `@theme inline`; oklch tokens.
+
 ## Component stack (recommended defaults)
 
 | Need | Recommended | Why |
 |------|-------------|-----|
-| Headless primitives | Radix UI | Accessibility built in (ARIA, keyboard, focus) |
-| Styled components | shadcn/ui | Copy-paste, fully customisable, Radix foundation |
-| Styling | Tailwind CSS v4 | Utility-first, design token system via `@theme` |
+| Headless primitives | Radix UI (unified `radix-ui`) or Base UI | Accessibility built in (ARIA, keyboard, focus) |
+| Styled components | shadcn/ui (CLI v4 / MCP) | Copy-paste, fully customisable, Radix/Base foundation |
+| Styling | Tailwind CSS v4 | Utility-first, token system via `@theme`, container queries |
 | Floating UI (dropdowns, tooltips, popovers) | floating-ui | Correct positioning, collision detection |
 | Drawers / sheets | vaul (Emil Kowalski) | Native feel, smooth gesture support |
 | Toast / notifications | sonner (Emil Kowalski) | Clean, accessible, stacks correctly |
@@ -37,8 +63,9 @@ Building or extending a component library, adding a new UI primitive, establishi
 
 ## shadcn/ui usage pattern
 
-shadcn/ui is **not a package** — it's copy-paste source code.
-- Run `npx shadcn@latest add button` to copy the component into your project
+shadcn/ui is **not a runtime package** — it's copy-paste source code (now also installable via
+the shadcn MCP server / registries).
+- Run `npx shadcn@latest add button` (or use the MCP server) to copy the component into your project
 - Customise the copy — it's yours
 - Never fight the component — modify it at source
 
@@ -46,7 +73,7 @@ shadcn/ui is **not a package** — it's copy-paste source code.
 
 - Config is now CSS-first: `@theme { --color-primary: oklch(...); }` in CSS file
 - `tailwind.config.js` is optional for most projects
-- `@apply` still works but prefer direct utility classes
+- Container queries are built-in (no plugin); `@theme inline` for referencing existing vars
 - New `oklch()` colour space for design tokens
 - Check version before applying v3 patterns
 

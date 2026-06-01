@@ -1,23 +1,35 @@
 ---
 skill: apex-design-system
 backend: deepseek
-version: 1.0.0
-last_updated: 2026-05-28
+version: 1.1.0
+last_updated: 2026-06-01
 sources:
-  - shadcn/ui — ui.shadcn.com
-  - Radix Primitives — radix-ui.com/primitives
+  - shadcn/ui (CLI v4, MCP) — ui.shadcn.com
+  - Radix UI (unified package) — radix-ui.com
+  - Base UI — base-ui.com
   - Tailwind CSS v4 — tailwindcss.com
   - Storybook — storybook.js.org
 staleness_threshold: 14d
+description: >
+  Coding-mode enforcement for design systems — Radix/Base primitives, design tokens via
+  Tailwind v4 `@theme`, `cn()` composition, Storybook stories. Web-stack (React + Tailwind);
+  native design systems → apex-swift. Loads when building component-library code.
 ---
 
 # Design System Implementation Rules
 
+## Stack assumptions
+
+**Web-stack** — React + Tailwind v4 + shadcn/ui on **Radix or Base UI**. Code below is web;
+native token systems (SwiftUI Asset Catalog + semantic colours + Dynamic Type) → apex-swift.
+Verify commands come from the bound stack's `## Verification Recipe`, not hardcoded.
+
 ## NEVER do
 
-- Build interactive components from scratch (dialog, dropdown, tooltip) — use Radix primitives
+- Build interactive components from scratch (dialog, dropdown, tooltip) — use Radix or Base UI primitives
+- Add individual `@radix-ui/react-*` packages — use the unified `radix-ui` package (new-york style)
 - Hardcode colour values (hex/RGB) in components — use design tokens via `@theme`
-- Import all of shadcn — use `npx shadcn@latest add <component>` per component
+- Import all of shadcn — use `npx shadcn@latest add <component>` (or the shadcn MCP server) per component
 - Use pixels for spacing — use Tailwind scale (4px base unit)
 - Create a custom table component — use TanStack Table
 - Override shadcn styles via external CSS — edit the copied source directly
@@ -80,8 +92,8 @@ export function Button({ variant = 'default', size = 'md', className, ...props }
 
 ## Verification checklist
 
-- [ ] Run: `npm run build` — 0 TypeScript errors
-- [ ] Run: `yarn storybook` — all new component stories render
+- [ ] Run the bound stack's Verification Recipe (typecheck + build) — 0 errors
+- [ ] Run Storybook — all new component stories render
 - [ ] Check: no hardcoded hex/RGB/px values in components
 - [ ] Check: all interactive components use Radix primitive as base
 - [ ] Check: `cn()` used for all conditional class merging
