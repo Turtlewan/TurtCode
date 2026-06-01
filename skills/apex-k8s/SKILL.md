@@ -1,29 +1,57 @@
 ---
 skill: apex-k8s
-version: 1.0.0
-last_updated: 2026-05-28
+backend: claude
+version: 1.1.0
+last_updated: 2026-06-01
 sources:
   - Kubernetes Docs — kubernetes.io/docs
+  - Gateway API — gateway-api.sigs.k8s.io
   - Helm Docs — helm.sh/docs
-  - ArgoCD Docs — argo-cd.readthedocs.io
+  - Argo CD Docs — argo-cd.readthedocs.io
+  - Karpenter — karpenter.sh
 staleness_threshold: 14d
+description: >
+  Use when designing or reviewing Kubernetes workloads, Helm charts, cluster architecture,
+  GitOps (Argo CD/Flux), networking (Gateway API, Network Policies), RBAC, or autoscaling
+  (HPA/VPA/Karpenter/in-place resize). Triggers: a spec mentioning k8s, kubectl, pods,
+  Deployments, StatefulSets, Helm, ArgoCD, EKS/GKE/AKS workloads, "deploy to Kubernetes".
+  Not: container image build (no Dockerfile authoring), cloud infra provisioning (→ apex-iac),
+  or a project that hasn't yet outgrown a managed platform (Cloud Run / App Runner /
+  Container Apps) — see § When NOT to use Kubernetes.
 ---
 
 # Kubernetes Specialist — Planning Mode
 
+## When NOT to use Kubernetes (scale-gate — check first)
+
+Kubernetes is the wrong default for most small projects. Reach for a managed container
+platform (**Cloud Run, App Runner, Azure Container Apps, Fly.io, Render**) — or a single VM —
+when any of these hold:
+- Team < ~5 infra-capable engineers, or no one who'll own cluster upgrades.
+- Fewer than ~10 services, no multi-tenant/complex-networking need.
+- A single-server / local hub (e.g. an Artemis-style personal assistant) — Compose or a
+  systemd unit beats a cluster.
+
+Use Kubernetes when you genuinely need: many services with complex orchestration, bin-packing
+across a fleet, mature multi-team RBAC/quota isolation, or portability across clouds. **If the
+scale-gate doesn't clear, say so and stop** — don't spec a cluster the project doesn't need.
+
 ## When to activate
 Any spec involving Kubernetes workload design, Helm chart creation, cluster operations,
-GitOps setup (ArgoCD/Flux), ingress/networking, autoscaling, RBAC, or migrating
-containerised workloads to Kubernetes.
+GitOps setup (Argo CD/Flux), ingress/networking, autoscaling, RBAC, or migrating
+containerised workloads to Kubernetes — **after** the scale-gate clears.
 
 ## Questions to ask before designing
 
-- Managed K8s (EKS/GKE/AKS) or self-managed? (almost always managed)
-- GitOps with ArgoCD/Flux, or imperative kubectl? (GitOps for production)
+- Managed K8s (EKS/GKE/AKS) or self-managed? (managed unless there's a hard reason — self-managed
+  means you own cgroup/containerd/version upgrades)
+- GitOps with Argo CD/Flux, or imperative kubectl? (GitOps for production)
 - What are the resource requirements? (sets requests/limits, node sizing)
-- Is there a service mesh requirement? (Istio/Linkerd for mTLS, traffic management)
-- What is the ingress strategy? (Nginx, Traefik, cloud-native ALB/GCE)
+- Is there a service mesh requirement? (Istio/Linkerd for mTLS, traffic management — both now use
+  **native sidecars**)
+- North-south traffic strategy? (**Gateway API** for new clusters — see Networking)
 - Stateful workloads? (StatefulSets, PVCs, storage class selection)
+- GPU / accelerator workloads? (use **Dynamic Resource Allocation** — see Workload selection)
 
 ## Workload type selection
 
@@ -31,225 +59,108 @@ containerised workloads to Kubernetes.
 |---------|----------|------|
 | Long-running HTTP service | Deployment + HPA | Web APIs, background workers |
 | Ordered, stateful service | StatefulSet | Databases, Kafka, ZooKeeper |
-| One per node | DaemonSet | Log collectors (Fluentd), monitoring agents |
+| One per node | DaemonSet | Log collectors, monitoring agents |
 | Run-to-completion | Job / CronJob | Batch, scheduled tasks, DB migrations |
-| Cluster-wide service | Deployment in `kube-system` | Ingress controllers, cert-manager |
+| Sidecar (log/proxy/mesh) | **init container with `restartPolicy: Always`** | Native sidecar (GA 1.33) — correct start/stop ordering |
+| GPU / accelerator | Deployment + **DRA** `ResourceClaim` | AI/ML inference & training (DRA GA 1.34 replaces the device-plugin model) |
 
 ## Resource requests and limits — mandatory
 
-Every pod must have requests AND limits. Without requests: poor scheduling. Without limits: noisy neighbour kills cluster.
+Every pod must have requests AND limits. Without requests: poor scheduling. Without limits:
+noisy neighbour. **Memory limit = hard ceiling (OOMKill); CPU limit = throttle (not kill).**
+Set memory limit ~2× request for headroom.
 
 ```yaml
 resources:
-  requests:
-    cpu: "100m"      # 0.1 CPU — scheduler uses this for placement
-    memory: "128Mi"
-  limits:
-    cpu: "500m"      # 0.5 CPU — throttled at this
-    memory: "256Mi"  # OOMKilled if exceeded — size this generously
+  requests: { cpu: "100m", memory: "128Mi" }   # scheduler places on requests
+  limits:   { cpu: "500m", memory: "256Mi" }    # mem exceed → OOMKilled
 ```
 
-**Memory limit = hard ceiling** (OOMKill). **CPU limit = throttle** (not kill). Set memory limit ~2× memory request for headroom.
+Since **in-place pod resize is GA (1.35)**, CPU/memory requests can be adjusted without a pod
+restart — VPA's `InPlaceOrRecreate` mode (beta) uses this.
 
 ## Autoscaling
 
-```yaml
-# Horizontal Pod Autoscaler — scale on CPU or custom metrics
-apiVersion: autoscaling/v2
-kind: HorizontalPodAutoscaler
-spec:
-  scaleTargetRef:
-    apiVersion: apps/v1
-    kind: Deployment
-    name: my-app
-  minReplicas: 2
-  maxReplicas: 20
-  metrics:
-    - type: Resource
-      resource:
-        name: cpu
-        target:
-          type: Utilization
-          averageUtilization: 70
-```
+HPA scales pod count on CPU/custom metrics (`autoscaling/v2`, `minReplicas ≥ 2` in prod). For
+right-sizing requests use **VPA** (`InPlaceOrRecreate`). For nodes, **Karpenter v1** is the
+default node autoscaler across **EKS / GKE / AKS / OCI** (faster + more cost-aware than Cluster
+Autoscaler, which remains the fallback where Karpenter has no provider).
 
-**Cluster Autoscaler (or Karpenter on EKS):** Adds/removes nodes based on pending pods. Karpenter is faster and more cost-aware than Cluster Autoscaler.
+> HPA + PDB + VPA + in-place-resize manifests: `references/manifests.md`.
 
 ## Helm — chart structure
 
 ```
 mychart/
-├── Chart.yaml          # metadata: name, version, appVersion
-├── values.yaml         # default values
-├── values-prod.yaml    # production overrides
-└── templates/
-    ├── deployment.yaml
-    ├── service.yaml
-    ├── ingress.yaml
-    ├── hpa.yaml
-    ├── _helpers.tpl    # named templates
-    └── NOTES.txt
+├── Chart.yaml          # name, version, appVersion
+├── values.yaml         # defaults
+├── values-prod.yaml    # prod overrides
+└── templates/          # deployment, service, httproute, hpa, _helpers.tpl, NOTES.txt
 ```
 
-```bash
-# Install / upgrade
-helm upgrade --install myapp ./mychart -f values-prod.yaml -n myapp --create-namespace
+**Never hardcode image tags in templates** — pass `--set image.tag=$(git rev-parse --short HEAD)`
+in CI. Install/upgrade/rollback patterns + values.yaml: `references/manifests.md`.
 
-# Dry run
-helm upgrade --install myapp ./mychart --dry-run --debug
+## GitOps with Argo CD
 
-# Rollback
-helm rollback myapp 1
-```
-
-**Never hardcode image tags in templates** — pass via `--set image.tag=$(git rev-parse --short HEAD)` in CI.
-
-## GitOps with ArgoCD
-
-```yaml
-# Application manifest (declarative app definition)
-apiVersion: argoproj.io/v1alpha1
-kind: Application
-metadata:
-  name: my-app
-  namespace: argocd
-spec:
-  project: default
-  source:
-    repoURL: https://github.com/myorg/k8s-manifests
-    targetRevision: main
-    path: apps/my-app
-  destination:
-    server: https://kubernetes.default.svc
-    namespace: my-app
-  syncPolicy:
-    automated:
-      prune: true        # delete resources removed from git
-      selfHeal: true     # revert manual changes
-    syncOptions:
-      - CreateNamespace=true
-```
-
-**GitOps workflow:** Code PR → merge to main → ArgoCD detects diff → syncs to cluster. No manual `kubectl apply` in production.
+Code PR → merge to main → Argo CD detects diff → syncs (`automated: { prune, selfHeal }`,
+`CreateNamespace=true`). No manual `kubectl apply` in production. Application manifest:
+`references/manifests.md`.
 
 ## Networking
 
-**Services:**
-- `ClusterIP`: internal only (default)
-- `NodePort`: external via node IP (dev/testing only)
-- `LoadBalancer`: cloud-managed LB (production external)
+**Services:** `ClusterIP` (internal, default) · `NodePort` (dev only) · `LoadBalancer` (cloud LB).
 
-**Ingress (Nginx):**
-```yaml
-apiVersion: networking.k8s.io/v1
-kind: Ingress
-metadata:
-  annotations:
-    cert-manager.io/cluster-issuer: "letsencrypt-prod"
-spec:
-  ingressClassName: nginx
-  tls:
-    - hosts: [api.example.com]
-      secretName: api-tls
-  rules:
-    - host: api.example.com
-      http:
-        paths:
-          - path: /
-            pathType: Prefix
-            backend:
-              service:
-                name: my-app
-                port:
-                  number: 3000
-```
+**North-south traffic — Gateway API (new clusters).** Use the Gateway API (`GatewayClass` +
+`Gateway` + `HTTPRoute`), not Ingress, for new work. **`ingress-nginx` is retired (read-only
+since Mar 2026, no security patches)** — do not spec it for new clusters. Default implementation:
+**Envoy Gateway** (or Cilium Gateway if the CNI is Cilium, or Istio Gateway if a mesh is present).
+Ingress as an API is feature-frozen, not deprecated — existing clusters can stay, but migrate via
+`ingress2gateway`.
 
-**Network Policies:** Default-deny-all + explicit allow. Required for any production cluster handling sensitive data.
+> Gateway API `HTTPRoute` example + the Ingress→Gateway migration note: `references/gateway-api.md`.
+
+**Network Policies:** default-deny-all + explicit allow. Required for any production cluster
+handling sensitive data. Triplet (deny-all / allow-ingress / allow-DNS): `references/manifests.md`.
 
 ## RBAC — least privilege
 
-```yaml
-# ServiceAccount per workload — never use default SA
-apiVersion: v1
-kind: ServiceAccount
-metadata:
-  name: my-app
----
-# Role with minimum permissions
-apiVersion: rbac.authorization.k8s.io/v1
-kind: Role
-rules:
-  - apiGroups: [""]
-    resources: ["configmaps"]
-    verbs: ["get", "list"]
----
-kind: RoleBinding
-# bind ServiceAccount to Role
-```
-
-Never use `cluster-admin` for application service accounts.
+Dedicated `ServiceAccount` per workload (never `default`); `Role` with the minimum verbs;
+`RoleBinding` to the SA. **Never `cluster-admin` for application service accounts.** Manifest:
+`references/manifests.md`.
 
 ## Secrets management
 
-```yaml
-# DO NOT put secrets in plain Kubernetes Secrets committed to git
-# Use External Secrets Operator to sync from AWS Secrets Manager / Vault / GCP Secret Manager
-apiVersion: external-secrets.io/v1beta1
-kind: ExternalSecret
-spec:
-  secretStoreRef:
-    name: aws-secretsmanager
-    kind: ClusterSecretStore
-  target:
-    name: my-app-secrets
-  data:
-    - secretKey: DATABASE_URL
-      remoteRef:
-        key: my-app/production
-        property: database_url
-```
+Do NOT commit plain Kubernetes Secrets (base64 ≠ encrypted). Use the **External Secrets Operator**
+(API `external-secrets.io/v1` — `v1beta1` is removed in ESO ≥ 0.17) to sync from AWS Secrets
+Manager / Vault / GCP Secret Manager. `ClusterSecretStore` + `ExternalSecret`: `references/manifests.md`.
 
 ## Health checks — mandatory for every deployment
 
-```yaml
-livenessProbe:
-  httpGet:
-    path: /health/live
-    port: 3000
-  initialDelaySeconds: 10
-  periodSeconds: 10
-  failureThreshold: 3
-
-readinessProbe:
-  httpGet:
-    path: /health/ready
-    port: 3000
-  initialDelaySeconds: 5
-  periodSeconds: 5
-
-startupProbe:   # for slow-starting apps
-  httpGet:
-    path: /health/live
-    port: 3000
-  failureThreshold: 30
-  periodSeconds: 10
-```
+`livenessProbe` + `readinessProbe` on every container; `startupProbe` for slow starters. Full
+probe block is in the deployment template (`references/manifests.md`).
 
 ## Review checklist
 
+- [ ] Scale-gate cleared — Kubernetes is actually warranted (not a managed platform's job)
 - [ ] All pods have resource requests AND limits defined
 - [ ] HPA configured for production Deployments (min ≥ 2 replicas)
 - [ ] Health probes: liveness + readiness on every container
 - [ ] Dedicated ServiceAccount per workload — not default SA
-- [ ] Secrets from External Secrets Operator (not plain K8s Secrets with sensitive values in git)
+- [ ] Secrets from External Secrets Operator (`v1` API), not plain K8s Secrets in git
 - [ ] Network Policies: default-deny with explicit ingress/egress rules
-- [ ] GitOps: manifests in git, ArgoCD/Flux deploying — no manual kubectl apply in prod
+- [ ] North-south via **Gateway API** (Envoy/Cilium/Istio) — not new `ingress-nginx`
+- [ ] Sidecars use the **native sidecar** pattern (init container + `restartPolicy: Always`)
+- [ ] GitOps: manifests in git, Argo CD/Flux deploying — no manual kubectl apply in prod
 - [ ] Non-root container user (`securityContext.runAsNonRoot: true`)
 - [ ] PodDisruptionBudget for production Deployments (`minAvailable: 1`)
+- [ ] Self-managed nodes only: on **cgroup v2** (cgroup v1 refused by kubelet in 1.35) and
+      **not IPVS kube-proxy** (deprecated 1.35, removed 1.36)
 
 ## Standards
 
-Kubernetes Docs: kubernetes.io/docs
-Helm Best Practices: helm.sh/docs/chart_best_practices
-ArgoCD: argo-cd.readthedocs.io
-Karpenter (EKS node provisioner): karpenter.sh
+- Kubernetes Docs — `kubernetes.io/docs` (API reference, concepts)
+- Gateway API — `gateway-api.sigs.k8s.io` (new north-south standard; `ingress2gateway` migration)
+- Helm chart best practices — `helm.sh/docs/chart_best_practices`
+- Argo CD — `argo-cd.readthedocs.io` (GitOps)
+- Karpenter — `karpenter.sh` (node autoscaling, EKS/GKE/AKS/OCI)

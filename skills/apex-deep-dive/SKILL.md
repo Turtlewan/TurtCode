@@ -1,8 +1,8 @@
 ---
 skill: apex-deep-dive
 backend: claude
-version: 1.1.0
-last_updated: 2026-05-28
+version: 1.2.0
+last_updated: 2026-06-01
 sources:
   - APEX Design Specification 2026-05-24
   - Firecrawl — github.com/firecrawl/firecrawl
@@ -10,6 +10,12 @@ sources:
   - Context7 (Upstash) — github.com/upstash/context7
   - Planning with Files — github.com/OthmanAdi/planning-with-files
 staleness_threshold: 30d
+description: >
+  Use when you're genuinely uncertain which approach to take and need researched analysis
+  before deciding — 2-3 options compared with trade-offs, risks, and a project-specific
+  recommendation (analysis only, no code or spec). Triggers: "/apex-deep-dive <domain>",
+  "research X deeply", "explore options for Y", "should we do A or B?". Not when the approach
+  is already known (→ apex-plan) or for the implementation itself.
 ---
 
 # APEX Deep Dive
@@ -34,7 +40,7 @@ Read the corresponding specialist SKILL.md:
 - apex-security/SKILL.md for security
 - apex-architecture/SKILL.md for architecture
 - apex-performance/SKILL.md for performance
-- (etc. — any of the 13 registered domains)
+- (etc. — any specialist domain registered in `~/.claude/registry/domains.md`)
 
 ### Step 2: Read project context
 
@@ -129,8 +135,9 @@ If yes: transition to apex-plan with the deep-dive findings as specialist contex
 
 ## Available domains
 
-security, frontend, backend, architecture, devops, testing, performance,
-observability, accessibility, ai-systems, data
+Any specialist domain registered in `~/.claude/registry/domains.md` (the source of truth) —
+e.g. security, frontend, backend, architecture, system-design, devops, testing, performance,
+observability, accessibility, ai-systems, data, auth, search, and the rest of the apex-* set.
 
 For topics that span multiple domains (e.g., "how should we handle auth for our API?"):
 Load the primary domain (security) and note where other domains are relevant.

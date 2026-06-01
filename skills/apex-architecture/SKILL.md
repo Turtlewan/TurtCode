@@ -1,12 +1,19 @@
 ---
 skill: apex-architecture
 backend: claude
-version: 1.0.0
-last_updated: 2026-05-28
+version: 1.1.0
+last_updated: 2026-06-01
 sources:
   - Clean Architecture — Robert Martin
   - Twelve-Factor App — 12factor.net
 staleness_threshold: 60d
+description: >
+  Use when making codebase-structure and system-shape decisions — monolith vs microservices,
+  module/domain boundaries (DDD bounded contexts), data-model shape, dependency direction, or
+  whether a decision needs an ADR. Triggers: "how should we structure this", "split into
+  services?", "where do the boundaries go", "is this over-engineered". Not the distributed-
+  systems / scale operational layer (→ apex-system-design), nor ADR file format & the doc
+  system (→ apex-docs-technical).
 ---
 
 # Architecture Specialist — Planning Mode (Claude only)

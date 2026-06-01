@@ -1,16 +1,30 @@
 ---
 skill: apex-homelab
 backend: claude
-version: 1.0.0
-last_updated: 2026-05-28
+version: 1.1.0
+last_updated: 2026-06-01
 sources:
-  - Home Assistant Developer Docs — developers.home-assistant.io
-  - ESPHome Docs — esphome.io/components
   - Home Assistant Docs — home-assistant.io/docs
+  - ESPHome Docs / Changelog — esphome.io
+  - HA Connect ZBT-2 — home-assistant.io/connect/zbt-2
+  - Matter / Thread 1.4 — csa-iot.org
 staleness_threshold: 30d
+description: >
+  Use when planning home automation, IoT sensor builds, or smart-home infrastructure. Triggers:
+  Home Assistant, ESPHome, Zigbee, Z-Wave, Matter, Thread, MQTT, "home lab", "smart home",
+  presence/occupancy detection, local voice assistant (Wyoming/Whisper), ESP32 sensor.
+  Not: cloud IoT platforms (AWS IoT / Azure IoT Hub) or commercial building automation
+  (BACnet / KNX).
 ---
 
 # Home Lab / Home Automation Specialist — Planning Mode
+
+## Stack assumptions
+
+Assumes the **Home Assistant + ESPHome + MQTT** stack (the dominant local-first home-automation
+platform) — not openHAB/Hubitat/cloud ecosystems. Cohesive enough that no swap-table is needed.
+The impl.md API-client examples show two languages (Python `httpx`, TypeScript `ws`) as
+illustrations; use whichever the consuming app is in.
 
 ## When to activate
 Building home automation applications, integrating with smart home devices, creating custom
@@ -32,7 +46,7 @@ voice, energy monitoring), or connecting services to Home Assistant.
 Physical devices
     ↓ (Zigbee / Z-Wave / Matter / WiFi / MQTT)
 Home Assistant (hub — orchestration, automations, dashboard)
-    ├── ESPHome (custom ESP32/ESP8266 firmware — sensors, switches)
+    ├── ESPHome (custom ESP32 firmware — sensors, switches)
     ├── Zigbee2MQTT or ZHA (Zigbee coordinator bridge)
     ├── Mosquitto (MQTT broker — message bus for custom devices)
     └── Node-RED (complex flows, external API integration)
@@ -45,129 +59,67 @@ Your applications (via REST API / WebSocket API / webhooks)
 | Protocol | Use when | Notes |
 |----------|----------|-------|
 | **Zigbee** | Large sensor network, battery devices | Mesh; local-only; needs USB coordinator |
-| **Z-Wave** | Locks, security, reliable mesh | 30m range; more expensive devices |
+| **Z-Wave** | Locks, security, reliable mesh | Z-Wave JS; 30m range; pricier devices |
 | **MQTT** | Custom devices (ESPHome), inter-service | Pub/sub; broker required (Mosquitto) |
-| **Matter/Thread** | New devices, cross-platform future | Thread needs border router (HA ZBT-1/ZBT-2) |
+| **Matter/Thread** | New cross-platform devices | **Matter 1.4** + **Thread 1.4** now share credentials across Apple/Google/Amazon border routers (the old "one mesh per brand" problem is largely solved for 1.4-certified gear). Needs a Thread border router (**HA ZBT-2** — ZBT-1 is discontinued). Matter 1.5 cameras not yet supported by HA (as of 2026-06). |
 | **WiFi** | High-bandwidth (cameras), powerful MCUs | Cloud-dependency risk unless local API used |
 | **Bluetooth LE** | Presence detection, beacons | ESPHome BT proxy extends range |
 
-**Default stack for new sensor projects:** ESP32 + ESPHome + MQTT → Home Assistant
+**Default stack for new sensor projects:** ESP32 + ESPHome + MQTT (or native HA API) → Home Assistant
 
 ## Hardware platforms
 
 **ESP32** — default for custom sensors and actuators:
 - ESP32 (classic): general purpose, WiFi + BLE, 2 cores
 - ESP32-S3: BLE 5.0, native USB, 45 GPIO — use for USB-connected devices
-- ESP32-C3: cheaper, lower power, RISC-V — use for battery-powered nodes
-- Never use ESP8266 for new projects — legacy, WiFi-only, limited RAM
+- ESP32-C3: cheaper, lower power, RISC-V — **preferred for new battery-powered nodes**
+- Prefer ESP32-C3 over ESP8266 for new projects (ESP8266 is WiFi-only, RAM-limited — still
+  maintained, but ESP32-C3 wins on every axis; reserve ESP8266 for migrating existing hardware)
 
 **Raspberry Pi** — for running Home Assistant OS or custom hub services:
 - Pi 4/5: full HA OS host; Pi 5 recommended for local Whisper STT
 - Pi Zero 2 W: lightweight local service node
 
-**USB Zigbee coordinators:** Sonoff Zigbee 3.0 USB Dongle Plus or Conbee III (verify current community recommendations).
+**USB Zigbee coordinators:** prefer **EFR32MG24-based** — Sonoff **ZBDongle-E (MG24)** or the
+**HA ZBT-2**; **SMLIGHT SLZB-06MG24** for PoE/LAN. Avoid the EOL **Conbee II**. Note the ZBT-2 is
+Zigbee **or** Thread, not both at once.
 
 ## ESPHome — declarative firmware
 
-ESPHome converts YAML to C++ firmware. No code needed for 90% of sensor projects.
+ESPHome converts YAML to firmware. No code needed for 90% of sensor projects. As of **ESPHome
+2026.1, ESP-IDF is the default framework** for ESP32 (was Arduino) — only set
+`framework: type: arduino` when a specific component requires it.
 
-```yaml
-# secrets.yaml (never commit)
-wifi_ssid: "MyNetwork"
-wifi_password: "secret"
-api_key: "BASE64_KEY"    # openssl rand -base64 32
+> Full secure device config + mmWave (LD2450) example: `references/esphome-configs.md`.
 
-# device.yaml
-esphome:
-  name: living-room-sensor
-
-esp32:
-  board: esp32dev
-
-wifi:
-  ssid: !secret wifi_ssid
-  password: !secret wifi_password
-  ap:
-    ssid: "Fallback"
-    password: !secret fallback_password
-
-api:
-  encryption:
-    key: !secret api_key
-
-ota:
-  - platform: esphome
-    password: !secret ota_password
-
-sensor:
-  - platform: bme280_i2c
-    temperature:
-      name: "Temperature"
-    humidity:
-      name: "Humidity"
-    address: 0x77
-    update_interval: 60s
-```
-
-**Key ESPHome pitfalls:**
-- Default `reboot_timeout: 15min` — device reboots if it can't reach HA. Set `api: reboot_timeout: 0s` for always-on devices.
-- Use unique OTA passwords per device. Shared passwords = one compromised device = all exposed.
+**Key ESPHome pitfalls (2026):**
+- **API `password:` auth was removed in 2026.1** — use `api: encryption: key:` only; a config
+  still using `api: password:` won't compile.
+- Default `reboot_timeout: 15min` — device reboots if it can't reach HA. Set
+  `api: reboot_timeout: 0s` for always-on devices.
+- Use unique OTA passwords per device. OTA gained **SHA256 auth in 2026.5** — confirm the OTA
+  block matches current platform options.
 - API encryption key required — never skip it.
 
 ## Home Assistant integration patterns
 
-**Custom integration** (Python, `custom_components/`):
-```python
-# config_flow.py + coordinator.py + sensor.py
-# Standard pattern: DataUpdateCoordinator + async_setup_entry
-```
+- **Custom integration** (Python, `custom_components/`): `DataUpdateCoordinator` +
+  `async_setup_entry` + `config_flow.py`.
+- **REST API** (external apps → HA): `GET /api/states/<entity>`, `POST /api/services/<domain>/<svc>`
+  with a Bearer Long-Lived Access Token.
+- **WebSocket API** (real-time): auth → `subscribe_events` → `state_changed` stream.
+- **Webhook triggers** (push → HA): `POST /api/webhook/<secret-id>`.
 
-**REST API** (for external apps calling HA):
-```bash
-# Read state
-curl -H "Authorization: Bearer TOKEN" http://ha.local:8123/api/states/sensor.temp
-
-# Set state / trigger service
-curl -X POST -H "Authorization: Bearer TOKEN" \
-  -d '{"entity_id":"light.living_room"}' \
-  http://ha.local:8123/api/services/light/turn_on
-```
-
-**WebSocket API** (real-time state subscription from apps):
-```javascript
-const ws = new WebSocket('ws://ha.local:8123/api/websocket');
-// Auth → subscribe_events → state_changed events stream in real-time
-```
-
-**Webhook triggers** (push to HA from external services):
-```
-POST http://ha.local:8123/api/webhook/my-secret-webhook-id
-```
+> Worked Python (`httpx`) + TypeScript (`ws`) clients: `references/ha-api-clients.md`.
 
 ## Automation design
 
-**Use native YAML automations** for simple trigger-condition-action patterns:
-```yaml
-automation:
-  - alias: "Turn off lights left on"
-    triggers:
-      - trigger: state
-        entity_id: light.bedroom
-        to: "on"
-        for: "00:30:00"
-    conditions:
-      - condition: time
-        after: "22:00:00"
-    actions:
-      - action: light.turn_off
-        target:
-          entity_id: light.bedroom
-```
+Use native YAML automations (HA 2025.12+ uses the plural `triggers:`/`conditions:`/`actions:`
+purpose-specific syntax) for simple trigger-condition-action patterns. Use **Node-RED** for
+multi-step decision trees, stateful flows, external HTTP calls, or visual debugging.
 
-**Use Node-RED** when you need: multi-step decision trees, stateful flows, external HTTP API calls, or visual debugging.
-
-**mmWave radar** for occupancy (detects stationary people, unlike PIR):
-- LD2450 / LD2410 via ESPHome → binary_sensor `has_target` (presence) + `has_still_target` (stationary)
+**mmWave radar** for occupancy (detects stationary people, unlike PIR): LD2450 / LD2410 via
+ESPHome → `has_target` (presence) + `has_still_target` (stationary).
 
 ## Daily life integration patterns
 
@@ -185,22 +137,22 @@ automation:
 
 Always design for internet outage. Core automations must work without cloud:
 - Use `iot_class: local_push` or `local_polling` for all critical integrations
-- Nabu Casa ($7/mo) for remote access — better than exposing port 8123 directly
+- Nabu Casa (**$6.50/mo**, or $65/yr) for remote access — better than exposing port 8123 directly
 - Or self-host: WireGuard/Tailscale VPN to reach HA remotely
 
 ## Security practices
 
 - Never expose port 8123 directly to internet — use reverse proxy (Caddy/nginx) with HTTPS + auth
-- IoT VLAN: separate network segment for smart devices (pfSense/OPNsense VLAN rule: IoT → internet OK, IoT → trusted LAN blocked)
-- ESPHome: unique API key and OTA password per device
+- IoT VLAN: separate network segment for smart devices (IoT → internet OK, IoT → trusted LAN blocked)
+- ESPHome: unique API encryption key and OTA password per device
 - HACS custom integrations: audit before installing — they have full Python access to HA
 
 ## Review checklist
 
-- [ ] ESPHome devices have API encryption key and unique OTA password
+- [ ] ESPHome devices use `api: encryption:` (not removed `api: password:`) + unique OTA password
 - [ ] `secrets.yaml` is in `.gitignore` (never committed)
 - [ ] HA accessible remotely via Nabu Casa or VPN (never bare port 8123)
-- [ ] Zigbee mesh has mains-powered router devices (not battery-only mesh)
+- [ ] Zigbee mesh has mains-powered router devices (not battery-only mesh); MG24 coordinator
 - [ ] Critical automations don't require cloud/internet to function
 - [ ] USB Zigbee dongle uses persistent udev symlink (not `/dev/ttyUSB0`)
 - [ ] mmWave radar used for occupancy (not PIR-only) where stationary detection matters
@@ -208,7 +160,7 @@ Always design for internet outage. Core automations must work without cloud:
 
 ## Standards
 
-Home Assistant Developer Docs: developers.home-assistant.io
-ESPHome: esphome.io
-Zigbee2MQTT: zigbee2mqtt.io
-Wyoming Protocol (local voice): github.com/rhasspy/wyoming
+- Home Assistant Developer Docs — `developers.home-assistant.io`
+- ESPHome — `esphome.io` (check the changelog — fast-moving breaking changes)
+- Zigbee2MQTT — `zigbee2mqtt.io`
+- Wyoming Protocol (local voice) — `github.com/rhasspy/wyoming`

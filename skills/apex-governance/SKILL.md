@@ -1,14 +1,20 @@
 ---
 skill: apex-governance
 backend: claude
-version: 1.1.0
-last_updated: 2026-05-28
+version: 1.2.0
+last_updated: 2026-06-01
 sources:
   - APEX Design Specification 2026-05-24
   - Superpowers (obra) — github.com/obra/superpowers
   - gstack (garrytan) — github.com/garrytan/gstack
   - Claude Code Action — github.com/anthropics/claude-code-action
 staleness_threshold: 30d
+description: >
+  Defines the APEX autonomy model — operating modes (Build/AFK vs Edit), autonomy levels L0–L5,
+  approval gates, permanently-forbidden hard blocks, critical-file confirmation, and the L4+
+  audit log. Referenced by apex-orchestrate and apex-code. Triggers: "what level am I at",
+  "set autonomy to L{n}", "is this action allowed", "run in build/edit mode", reviewing an
+  approval gate or a hard block. Stack-neutral.
 ---
 
 # APEX Governance
@@ -41,11 +47,11 @@ See levels/ directory for full definition of each level.
 ## Critical files — always require explicit confirmation regardless of level
 
 - *.env and *.env.*
-- prisma/migrations/**
-- src/middleware/auth*
-- .github/workflows/**
+- Any migrations directory (`**/migrations/**`, `**/alembic/versions/**`) — schema-altering, hard to reverse
+- Auth middleware / guard / handler files (`**/auth*`, `**/middleware/auth*`, `**/*guard*`)
+- .github/workflows/** (and other CI pipeline definitions)
 - Any file containing the word "secret" or "credential" in its path
-- Infrastructure config files (terraform/, k8s/, docker-compose.yml)
+- Infrastructure config files (terraform/, opentofu/, k8s/, docker-compose.yml)
 
 ## Hard blocks — permanently forbidden at every level
 
