@@ -1,18 +1,42 @@
 ---
 skill: apex-realtime
 backend: claude
-version: 1.0.1
-last_updated: 2026-05-28
+version: 1.1.0
+last_updated: 2026-06-01
 sources:
   - Socket.io Docs — socket.io/docs
   - Socket.io Redis Adapter — github.com/socketio/socket.io-redis-adapter
+  - sse-starlette — github.com/sysid/sse-starlette
+  - FastAPI WebSockets — fastapi.tiangolo.com/advanced/websockets
   - MDN SSE — developer.mozilla.org/en-US/docs/Web/API/Server-sent_events
 staleness_threshold: 30d
+description: >
+  Use when designing real-time / live push — live updates, WebSocket, SSE, AI/LLM token streaming,
+  presence, live dashboards/feeds. Pick the transport by direction (SSE = 2026 default for
+  server→client streams incl. LLM tokens; WebSocket for bidirectional); the invariants are
+  stack-neutral (auth-before-connect, identity-from-token, room-scoped emits, clean close,
+  reconnect+catch-up). Library is per-stack — Socket.io (TS) / sse-starlette + native WebSocket
+  (Python) / URLSessionWebSocketTask (Swift), see § Stack assumptions. Not the coding rules (impl.md).
 ---
 
 # apex-realtime — Real-time Push
 
-## Research findings
+## Stack assumptions
+
+The invariants here are **stack-neutral** (auth-before-connect, identity-from-token, room-scoped
+emits, named events, clean stream close, reconnect + REST catch-up). **Choose the transport by
+direction, then the library by stack:**
+
+- **Server→client streaming** (LLM tokens, feeds, notifications) → **SSE** (the 2026 default — HTTP,
+  auto-reconnect, proxy-friendly, no sticky sessions). Node: Express SSE. **Python:** `sse-starlette`. **Swift:** `EventSource`/`URLSession`.
+- **Bidirectional / interactive** → **WebSocket**. Node: Socket.io. **Python:** native `WebSocket` / `python-socketio`. **Swift:** `URLSessionWebSocketTask`.
+- **Multi-instance fan-out** → a pub/sub backplane (Socket.io Redis adapter / Redis / Postgres LISTEN-NOTIFY). **Single-user local hub (Artemis): not needed** — one process, emit directly.
+
+The research findings + Socket.io/Redis examples below are the **JS-ecosystem illustration** (still
+current, re-verified for JS). For a Python/Swift Artemis surface the *patterns* carry; the *products*
+are per the matrix above — start with SSE for streaming, add a WebSocket only when you need two-way.
+
+## Research findings (JS ecosystem — 2026-05-28, still current)
 
 | Technology | Finding | Tag |
 |------------|---------|-----|
@@ -50,7 +74,11 @@ staleness_threshold: 30d
 | Raw bidirectional, full control | `ws` library | Lighter than Socket.io, manual room management |
 | Managed, no infra | Ably / Pusher | Hosted, pay-per-message, no Redis needed |
 
-**Primary recommendation: Socket.io + Redis adapter.** Covers all project use cases (finance, Home Assistant, Telegram, AI brain) through named events and user-scoped rooms. Redis adapter ensures multi-instance correctness when scaling to AWS.
+**Recommendation — pick by direction, not one-size-fits-all:** for **server→client streaming** (AI
+tokens, feeds) use **SSE**; for **bidirectional/interactive** use a **WebSocket** (Socket.io on JS,
+native WebSocket / python-socketio on Python). The Redis adapter / pub-sub backplane is only for
+**multi-instance** deployments — a **single-user local hub (Artemis) does not need it** (one process,
+emit directly). The earlier "Socket.io + Redis everywhere" default was a JS-cloud-scale assumption.
 
 ## Room / channel architecture
 
