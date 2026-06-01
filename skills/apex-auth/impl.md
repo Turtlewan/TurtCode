@@ -1,193 +1,81 @@
 ---
 skill: apex-auth
 backend: deepseek
-version: 1.0.0
-last_updated: 2026-05-28
+version: 1.1.0
+last_updated: 2026-06-01
 sources:
-  - Auth.js Docs — authjs.dev
+  - OWASP Password Storage Cheat Sheet — cheatsheetseries.owasp.org
   - Better Auth Docs — better-auth.com
+  - Auth.js Docs — authjs.dev
+  - FastAPI Users — fastapi-users.github.io
+  - py_webauthn — github.com/duo-labs/py_webauthn
   - SimpleWebAuthn Docs — simplewebauthn.dev
-  - OWASP Auth Cheat Sheet — cheatsheetseries.owasp.org
+  - SP5 de-coupling + 2026 refresh (stack-neutral core; references/ illustration)
 staleness_threshold: 30d
+description: >
+  Coding-mode rules for authentication — stack-neutral invariants (argon2id hashing,
+  httpOnly/secure-storage sessions, server-derived tenant scoping, generic auth errors,
+  refresh-token rotation, WebAuthn counter check, rate-limited auth endpoints). Loaded when a
+  task implements login/signup/sessions/passkeys/route-protection. Concrete code is
+  stack-specific — the Node + TypeScript worked examples live in references/nodejs-typescript.md;
+  Python (FastAPI Users / argon2-cffi / py_webauthn) and native (Keychain) swaps in § Stack
+  assumptions.
 ---
 
-# apex-auth — Implementation patterns
+# apex-auth — authentication implementation rules
 
-Coding-mode patterns for authentication implementation: password hashing, session cookies, multi-tenant query scoping, route protection middleware, and auth verification.
+Capability skill — **stack-neutral**. The invariants below are OWASP-grade and apply on any stack;
+the concrete hashing lib, session transport, and route-guard mechanism come from the bound stack
+(see § Stack assumptions). The bound stack skill's Verification Recipe is the verifier.
 
----
+## Stack assumptions
+
+Rules below are stack-neutral; the worked examples assume **Node.js + TypeScript**
+(`references/nodejs-typescript.md`). On the bound stack, swap:
+
+- **Password hashing:** `@node-rs/argon2` → **Python:** `argon2-cffi` (PyCA) or `passlib[argon2]`; **Apple:** a vetted argon2/bcrypt lib server-side (never roll your own). Use **argon2id**, OWASP params **m=19456 / t=2 / p=1** *or* **m=47104 / t=1 / p=1** (equivalent strength); `bcrypt` cost ≥ 12 as fallback.
+- **Auth framework (new projects, 2026):** **Node:** **Better Auth** (lean core + plugins for 2FA / passkeys / orgs) is the current default; Auth.js v5 for OAuth-heavy or migrating apps. **Python/FastAPI:** **FastAPI Users** (sessions + JWT + OAuth, async) + Authlib for social login. **Lucia is deprecated** (maintenance-mode since late 2024 — read it to learn, do not install).
+- **Session transport:** httpOnly + secure + SameSite cookie (web, any stack) → same concept. **Native app (Swift/mobile):** store the token in the **OS keychain / secure enclave**, never `UserDefaults` / `localStorage`.
+- **Route protection:** Express/Hono middleware → **FastAPI:** `Depends(...)` dependencies; **Starlette/other:** middleware. Same shape: authenticate → 401, authorize role → 403, *before* DB work.
+- **WebAuthn / passkeys:** SimpleWebAuthn (JS) → **Python:** `py_webauthn`; **Apple:** `AuthenticationServices`.
 
 ## NEVER do
 
-- Hash passwords with MD5, SHA-1, SHA-256, or any reversible/unsalted method
-- Store session tokens in `localStorage` or `sessionStorage` — httpOnly cookies only
-- Put auth/role checks inside route handlers after DB work has already started — middleware first, fail fast
-- Derive `tenantId` from URL params, query strings, or request body
-- Return different error messages for "user not found" vs "wrong password" (user enumeration)
-- Share JWT secrets or signing keys across environments (dev, staging, prod)
-- Skip verifying the WebAuthn counter on passkey authentication
-- Log tokens, session IDs, password reset links, or raw passwords
-- Return password hash in any API response or error message
+- Hash passwords with MD5, SHA-1, SHA-256, or any reversible/unsalted method.
+- Store session tokens in `localStorage` / `sessionStorage` (web) or `UserDefaults` / plaintext (native) — httpOnly cookies on the web, OS keychain/secure storage on native.
+- Put auth/role checks *after* DB work has started — authenticate/authorize first, fail fast.
+- Derive `tenantId` (or any authorization key) from URL params, query strings, or request body.
+- Return different error messages for "user not found" vs "wrong password" (user enumeration).
+- Share JWT secrets or signing keys across environments (dev, staging, prod).
+- Skip verifying the WebAuthn counter on passkey authentication.
+- Log tokens, session IDs, password-reset links, or raw passwords.
+- Return a password hash in any API response or error message.
 
 ## ALWAYS do
 
-- Hash passwords with `argon2id` via `@node-rs/argon2` (preferred), or `bcrypt` with cost >= 12. On edge: use `@noble/hashes` Scrypt or WebCrypto PBKDF2-SHA256 with 600K iterations.
-- Set cookies with `httpOnly: true, secure: true (prod), sameSite: 'lax', path: '/'`
-- Scope every tenant-scoped query to `tenantId` pulled from the server-side session
-- Return `{ error: 'Invalid credentials' }` (or equivalent) for all auth failures
-- Rotate refresh tokens on every use and invalidate the previous one immediately
-- Invalidate all sessions (except current) when user changes password
-- Verify the WebAuthn counter is strictly greater than the stored value on every authentication
-- Use generic error messages on login, signup, and password reset endpoints
-- Rate-limit auth endpoints per IP and per email
+- Hash passwords with **argon2id** (OWASP params above) via the stack's vetted binding; `bcrypt` cost ≥ 12 only as fallback.
+- Set web session cookies `httpOnly: true, secure: true (prod), sameSite: 'lax', path: '/'`; on native, persist the token in the OS keychain.
+- Scope every tenant-scoped query to a `tenantId` pulled from the server-side session.
+- Return one generic message (e.g. `Invalid credentials`) for all login/signup/reset failures.
+- Rotate refresh tokens on every use and invalidate the previous one immediately.
+- Invalidate all other sessions when the user changes their password.
+- Verify the WebAuthn counter is strictly greater than the stored value, then update it, on every authentication.
+- Rate-limit auth endpoints per IP and per email.
 
----
+## Acceptance checks (stack-neutral)
 
-## Code example — password hashing (Node.js server)
+- Signup with a weak password → 400 (not 500/crash).
+- Login with wrong password **and** login with a non-existent email → identical generic error.
+- Protected route without a session → 401; role-gated route with insufficient role → 403.
+- Multi-tenant: a `tenantId` spoofed in the request body is ignored — the session's tenantId is used.
+- Session cookie has `httpOnly` + `Secure` (prod) + `SameSite=Lax` (web); native token lives in the keychain, not plaintext.
+- Changing the password invalidates other live sessions.
+- Passkey auth verifies and advances the WebAuthn counter.
 
-```typescript
-import { hash, verify } from '@node-rs/argon2'
+## Worked examples (load on demand)
 
-// On signup / password creation
-async function createPasswordHash(password: string): Promise<string> {
-  return await hash(password, {
-    memoryCost: 19456, // 19 MB
-    timeCost: 2,       // 2 iterations
-    outputLen: 32,     // 32-byte output
-    parallelism: 1,    // single thread
-  })
-}
-
-// On login / password verification
-async function verifyPassword(hash: string, password: string): Promise<boolean> {
-  return await verify(hash, password)
-}
-```
-
-**Edge runtime alternative** (Cloudflare Workers, Vercel Edge):
-
-```typescript
-import { scrypt } from '@noble/hashes/scrypt'
-import { bytesToHex, hexToBytes } from '@noble/hashes/utils'
-
-// On signup
-async function hashPasswordEdge(password: string): Promise<string> {
-  const salt = crypto.getRandomValues(new Uint8Array(16))
-  const key = await scrypt(password, salt, { N: 2 ** 17, r: 8, p: 1, dkLen: 32 })
-  return `${bytesToHex(salt)}:${bytesToHex(key)}` // store salt:hash
-}
-
-// On login
-async function verifyPasswordEdge(stored: string, password: string): Promise<boolean> {
-  const [saltHex, hashHex] = stored.split(':')
-  const salt = hexToBytes(saltHex)
-  const key = await scrypt(password, salt, { N: 2 ** 17, r: 8, p: 1, dkLen: 32 })
-  return bytesToHex(key) === hashHex
-}
-```
-
----
-
-## Code example — session cookie config
-
-```typescript
-// Set session cookie on login
-function setSessionCookie(res: Response, token: string, rememberMe = false): void {
-  res.cookie('session', token, {
-    httpOnly: true,
-    secure: process.env.NODE_ENV === 'production',
-    sameSite: 'lax',
-    path: '/',
-    maxAge: rememberMe ? 60 * 60 * 24 * 30 : 60 * 60 * 24 * 7, // 30 days / 7 days
-  })
-}
-
-// Clear session cookie on logout
-function clearSessionCookie(res: Response): void {
-  res.cookie('session', '', {
-    httpOnly: true,
-    secure: process.env.NODE_ENV === 'production',
-    sameSite: 'lax',
-    path: '/',
-    maxAge: 0, // expires immediately
-  })
-}
-```
-
----
-
-## Code example — multi-tenant query scoping
-
-```typescript
-// CORRECT — tenantId from authenticated session, never from request
-async function getTenantItems(req: Request, res: Response) {
-  const session = await getSession(req)
-  if (!session) return res.status(401).json({ error: 'Unauthenticated' })
-
-  const { tenantId } = session // <-- from session, not request params
-  const items = await db.item.findMany({
-    where: {
-      tenantId,
-      deletedAt: null,
-    },
-  })
-  return res.json({ items })
-}
-
-// WRONG — tenantId from request (attacker can spoof tenant)
-async function vulnerableGetItems(req: Request, res: Response) {
-  const { tenantId } = req.params // <-- NEVER do this
-  const items = await db.item.findMany({ where: { tenantId } })
-  return res.json({ items })
-}
-```
-
----
-
-## Code example — route protection middleware
-
-```typescript
-// Framework-agnostic pattern — adapt to Express, Hono, Fastify, etc.
-
-// Middleware: require authentication (returns 401)
-async function requireAuth(req: Request, res: Response, next: NextFunction) {
-  const session = await getSession(req)
-  if (!session) {
-    return res.status(401).json({ error: 'Unauthenticated' })
-  }
-  req.session = session // attach session to request
-  next()
-}
-
-// Middleware: require specific role(s) (returns 403)
-function requireRole(...roles: string[]) {
-  return async (req: Request, res: Response, next: NextFunction) => {
-    if (!req.session || !roles.includes(req.session.role)) {
-      return res.status(403).json({ error: 'Forbidden' })
-    }
-    next()
-  }
-}
-
-// Usage
-router.get('/api/admin/users', requireAuth, requireRole('admin', 'owner'), getAdminUsers)
-router.get('/api/documents', requireAuth, getDocuments) // any authenticated user
-```
-
----
-
-## Verification checklist
-
-Run through these checks after implementing auth:
-
-- [ ] `npm run build` (or equivalent) — 0 TypeScript/compile errors
-- [ ] POST /signup with weak password (e.g., "abc") -> 400 error (not 500 or crash)
-- [ ] POST /login with wrong password -> `{ error: 'Invalid credentials' }` (not "Wrong password" or "User not found")
-- [ ] POST /login with non-existent email -> `{ error: 'Invalid credentials' }` (same message as wrong password)
-- [ ] Accessing protected route without session cookie -> 401
-- [ ] Accessing admin route with member role -> 403
-- [ ] Multi-tenant: user in tenant A tries `GET /api/tenants/B/items` -> 401 or 403 (not tenant B's data)
-- [ ] Multi-tenant: tenantId spoofed in request body is ignored -> session's tenantId used instead
-- [ ] Session cookie in DevTools: `httpOnly` checked, `Secure` checked (in prod), `SameSite` = `Lax`
-- [ ] Password change invalidates other sessions (log in on two devices, change password on one -> old session on the other no longer works)
-- [ ] Passkey counter is verified and updated after each authentication
+> The concrete **Node + TypeScript** implementation (argon2 + edge scrypt hashing, cookie set/clear,
+> multi-tenant query scoping, route-protection middleware, library map) is in
+> **`references/nodejs-typescript.md`** — load it **only when the bound stack is Node + TypeScript**.
+> On Python use FastAPI Users + argon2-cffi + py_webauthn; on Apple use AuthenticationServices +
+> Keychain — following the swaps in § Stack assumptions.

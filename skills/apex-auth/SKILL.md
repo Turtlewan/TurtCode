@@ -1,16 +1,25 @@
 ---
 skill: apex-auth
 backend: claude
-version: 1.0.0
-last_updated: 2026-05-28
+version: 1.1.0
+last_updated: 2026-06-01
 sources:
   - Auth.js Docs — authjs.dev
   - Better Auth Docs — better-auth.com
+  - FastAPI Users — fastapi-users.github.io
+  - py_webauthn — github.com/duo-labs/py_webauthn
   - SimpleWebAuthn Docs — simplewebauthn.dev
   - Lucia Docs — lucia-auth.com
   - WebAuthn Spec — w3.org/TR/webauthn-3
   - OWASP Auth Cheat Sheet — cheatsheetseries.owasp.org
 staleness_threshold: 30d
+description: >
+  Use when designing or choosing an authentication system — login/signup, sessions vs JWT, OAuth2 /
+  social login, passkeys/WebAuthn, multi-tenant orgs/workspaces, RBAC, invite flows, password
+  security. The design invariants are stack-neutral (OWASP hashing, session-derived tenant scoping,
+  passkey counter, OAuth state); the concrete library differs by stack — Better Auth (TS) vs FastAPI
+  Users (Python) vs AuthenticationServices (Apple), see § Stack assumptions. Not the coding-mode
+  enforcement rules (that's impl.md).
 ---
 
 # apex-auth — Authentication & Authorisation
@@ -19,7 +28,29 @@ Planning-mode guidance for choosing and designing authentication systems: sessio
 
 ---
 
-## Research findings (current as of 2026-05-28)
+## Stack assumptions
+
+The **design invariants** in this skill are stack-neutral and apply on any stack: OWASP argon2id
+hashing, session-vs-JWT trade-offs, multi-tenant tenant-from-session scoping, the passkey counter
+check, the OAuth `state` parameter, invite-token hashing, RBAC-on-membership. The **library
+decision table and code below assume the TypeScript/JS ecosystem** (Better Auth is TS-only). On the
+bound stack, swap the concrete auth framework:
+
+| Concept (stack-neutral) | TypeScript/JS (illustrated) | Swap on the bound stack |
+|---|---|---|
+| Auth framework | **Better Auth** (orgs/passkeys/2FA plugins) | **Python/FastAPI:** FastAPI Users (sessions+JWT+OAuth) + Authlib (social). **Apple:** AuthenticationServices + a server. |
+| Password hashing | `@node-rs/argon2` | **Python:** argon2-cffi / passlib[argon2]. argon2id, OWASP params (see impl.md). |
+| Passkeys / WebAuthn | `@simplewebauthn/server` | **Python:** py_webauthn. **Apple:** AuthenticationServices / ASAuthorization. |
+| Session token storage | httpOnly cookie | Same on web; **native app:** OS keychain / secure enclave, never `UserDefaults`/`localStorage`. |
+| Route protection | Express/Hono middleware | **FastAPI:** `Depends(...)`; Starlette: middleware. |
+
+The findings table and library comparison below are accurate for the **JS ecosystem** (re-verified
+June 2026). For a Python/native Artemis surface, the *patterns* carry over; the *products* do not —
+pick the per-stack framework above.
+
+---
+
+## Research findings (JS ecosystem — re-verified 2026-06-01, still current)
 
 | Topic | Finding | Tag |
 |-------|---------|-----|
