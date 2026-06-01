@@ -1,17 +1,30 @@
 ---
 skill: apex-devcontainer
 backend: claude
-version: 1.0.0
-last_updated: 2026-05-28
+version: 1.1.0
+last_updated: 2026-06-01
 sources:
   - Dev Container Spec — containers.dev
   - devcontainers/spec — github.com/devcontainers/spec
   - devcontainers/features — github.com/devcontainers/features
   - Docker Best Practices — docs.docker.com
 staleness_threshold: 30d
+description: >
+  Use when setting up a dev container — reproducible/isolated dev environments, containerising Claude
+  Code with skill access, dependency isolation, the ~/.claude copy-on-start pattern, DinD vs DooD,
+  secrets, Windows/WSL2 mounts. Container-hygiene principles are stack-neutral; the language Feature,
+  base image, and dependency-volume are per-stack (Node ↔ Python), see § Stack assumptions. Not the
+  coding-mode enforcement rules (that's impl.md).
 ---
 
 # Dev Container Specialist — Planning Mode
+
+## Stack assumptions
+
+The container-hygiene principles here are **stack-neutral** (non-root user, secrets handling, DinD
+vs DooD, the `~/.claude` copy-on-start pattern, WSL2 mounts). The base-image table already lists Node
+**and** Python; the per-stack swaps (language Feature, dependency volume node_modules↔.venv/uv-cache,
+install command npm↔uv) are detailed in impl.md § Stack assumptions.
 
 ## When to activate
 Setting up an isolated development environment, containerising Claude Code or other AI assistants,

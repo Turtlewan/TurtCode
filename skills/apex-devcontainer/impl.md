@@ -1,15 +1,34 @@
 ---
 skill: apex-devcontainer
 backend: deepseek
-version: 1.0.0
-last_updated: 2026-05-28
+version: 1.1.0
+last_updated: 2026-06-01
 sources:
   - Dev Container Spec — containers.dev
   - Docker Docs — docs.docker.com
+  - SP5 de-coupling (stack-neutral core; Node devcontainer illustration)
 staleness_threshold: 30d
+description: >
+  Coding-mode rules for dev containers — stack-neutral invariants (non-root remoteUser, secrets via
+  the `secrets:` property not ENV, named volume for the dependency dir, updateRemoteUserUID, SSH
+  read-only, pass ANTHROPIC_BASE_URL via remoteEnv for backend-switching). Loaded on .devcontainer
+  work. The language Feature + dependency volume + install command are stack-specific (Node feature /
+  node_modules / npm ci → Python feature / uv cache / uv sync); see § Stack assumptions.
 ---
 
 # Dev Container Implementation Rules
+
+## Stack assumptions
+
+The container-hygiene invariants here are **stack-neutral** (non-root user, `secrets:` not ENV,
+named volume for the dependency dir, `updateRemoteUserUID`, read-only SSH). The example below is a
+**Node devcontainer**; on the bound stack swap three things:
+
+- **Language Feature:** `features/node` → **Python:** `features/python` (+ install uv); **Go:** `features/go`. (Swift/Apple apps generally build on macOS/Xcode, not a Linux devcontainer.)
+- **Dependency volume:** `node-modules-${devcontainerId}` on `/workspace/node_modules` → **Python:** a named volume for `.venv` or the uv cache.
+- **Install command:** `postCreateCommand` `npm ci` → `uv sync` / `pip install -e .` / `go mod download`.
+
+The `~/.claude` mount + `ANTHROPIC_BASE_URL` remoteEnv (APEX backend-switching) are stack-neutral — keep.
 
 ## NEVER do
 
@@ -24,12 +43,12 @@ staleness_threshold: 30d
 
 - Use an official MCR base image or Dockerfile that creates a non-root user
 - Set `updateRemoteUserUID: true` on Linux (prevents bind-mount UID mismatch)
-- Add `node-modules-${devcontainerId}` named volume for Node.js projects
+- Add a named volume for the dependency dir (`node-modules-${devcontainerId}` for Node; `.venv` / uv-cache volume for Python) — never bind-mount it from the host
 - Use the `secrets:` spec property for all API keys and tokens
 - Mount `~/.ssh` read-only for git access
 - Pass `ANTHROPIC_BASE_URL` via `remoteEnv` so backend-switching works inside container
 
-## Complete AI-assisted devcontainer.json
+## Complete AI-assisted devcontainer.json (Node illustration — swap the 3 items in § Stack assumptions)
 
 ```jsonc
 // .devcontainer/devcontainer.json
