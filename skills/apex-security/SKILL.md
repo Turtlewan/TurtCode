@@ -1,23 +1,42 @@
 ---
 skill: apex-security
 backend: claude
-version: 1.1.0
-last_updated: 2026-05-28
+version: 1.2.0
+last_updated: 2026-06-01
 sources:
-  - OWASP Top 10 (2021) — owasp.org/Top10
+  - OWASP Top 10 (2025) — owasp.org/Top10/2025
   - NIST SP 800-63B — pages.nist.gov/800-63-3/sp800-63b
   - Trail of Bits Skills — github.com/trailofbits/skills
   - Claude Code Security Review — github.com/anthropics/claude-code-security-review
   - Snyk Agent Scan — github.com/snyk/agent-scan
 staleness_threshold: 14d
+description: >
+  Use when designing for security — auth, authorisation, user data, secrets, crypto, file uploads,
+  SQL, session handling, user-generated HTML, dependency/supply-chain risk. Threat-models and sets
+  escalation gates (BLOCK/FLAG). Aligned to OWASP Top 10:2025 (incl. A03 Software Supply Chain, A10
+  Exceptional Conditions). Principles are stack-neutral; crypto/validation/audit tooling is per-stack
+  (see § Stack assumptions). Not the coding-mode enforcement rules (that's impl.md).
 ---
 
 # Security Specialist — Planning Mode
 
+## Stack assumptions
+
+Security principles here are **stack-neutral** — threat boundaries, OWASP categories, and the
+escalation gates apply on any stack. Only the concrete tooling differs: secure RNG
+(`crypto.randomBytes` / `secrets` / `SecRandomCopyBytes`), hashing (argon2id via the stack's lib),
+validation (Zod / pydantic), parameterised queries (Prisma / SQLAlchemy / DB-API), and dependency
+audit (`npm audit` / `pip-audit`). See impl.md § Stack assumptions for the swaps.
+
+**OWASP Top 10:2025 (released Nov 2025) — what changed vs 2021:** A01 Broken Access Control still #1;
+**A02 Security Misconfiguration** up to #2; **A03 Software Supply Chain Failures** is new (pin + audit
+dependencies, commit lockfiles); **A10 Mishandling of Exceptional Conditions** is new (fail closed,
+no leaked internals); SSRF merged into Broken Access Control.
+
 ## When to activate
 Any spec involving: authentication, authorisation, user data, external APIs,
 file uploads, cryptography, secrets management, session handling, SQL queries,
-user-generated content rendered as HTML.
+dependency/supply-chain integrity, user-generated content rendered as HTML.
 
 ## Questions to ask before designing
 
@@ -94,6 +113,6 @@ Use `anthropics/claude-code-security-review` GitHub Action on PRs:
 
 ## Standards
 
-OWASP Top 10 (2021) — owasp.org/Top10
+OWASP Top 10 (2025) — owasp.org/Top10/2025
 NIST SP 800-63B — Authentication guidelines
 Trail of Bits Skills — github.com/trailofbits/skills
