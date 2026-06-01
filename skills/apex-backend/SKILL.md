@@ -1,17 +1,31 @@
 ---
 skill: apex-backend
 backend: claude
-version: 1.1.0
-last_updated: 2026-05-28
+version: 1.2.0
+last_updated: 2026-06-01
 sources:
   - Fastify Docs — fastify.dev
+  - FastAPI Docs — fastapi.tiangolo.com
   - Prisma Docs — prisma.io/docs
   - HTTP Semantics RFC 9110
   - Agent Skills (addyosmani) — github.com/addyosmani/agent-skills
 staleness_threshold: 14d
+description: >
+  Use when designing backend APIs or services — REST endpoints, status codes, pagination, input
+  validation, transactions, error contracts, external-call resilience, server-side business logic.
+  The design principles are stack-neutral (HTTP semantics, validate-at-boundary, services-not-handlers,
+  transactions, timeouts); validation lib + ORM are per-stack — Zod+Prisma (TS) / pydantic+SQLAlchemy
+  (Python), see § Stack assumptions. Not the coding-mode enforcement rules (that's impl.md).
 ---
 
 # Backend Specialist — Planning Mode
+
+## Stack assumptions
+
+The API/service design principles here are **stack-neutral** (HTTP semantics, validate-at-the-edge,
+logic-in-services, transactions, timeouts). The concrete validation library and ORM are per-stack:
+**Zod + Prisma** (TypeScript / Fastify / Hono) / **pydantic + SQLAlchemy** (Python / FastAPI). Where
+a rule names Zod or Prisma below, read it as the illustration — the rule is framework-agnostic.
 
 ## When to activate
 Any spec involving: API endpoints, database queries, caching, background jobs,
@@ -39,10 +53,10 @@ Pagination:
 
 ## Review checklist
 
-- [ ] Input validated with Zod before any processing
+- [ ] Input validated at the boundary (Zod / pydantic / the stack's validator) before any processing
 - [ ] Error responses use consistent format: { error: string, code?: string }
-- [ ] Database queries use Prisma — no raw SQL unless proven necessary
-- [ ] N+1 queries prevented — use include/select appropriately
+- [ ] Database queries go through the ORM — no raw SQL unless proven necessary
+- [ ] N+1 queries prevented — use include/select (or eager-load) appropriately
 - [ ] Transactions used for multi-step writes
 - [ ] Idempotency considered for POST endpoints that create resources
 - [ ] Timeouts set for all external service calls
