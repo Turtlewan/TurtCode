@@ -1,8 +1,8 @@
 ---
 skill: apex-deep-dive
 backend: claude
-version: 1.2.0
-last_updated: 2026-06-01
+version: 1.3.0
+last_updated: 2026-06-02
 sources:
   - APEX Design Specification 2026-05-24
   - Firecrawl — github.com/firecrawl/firecrawl
@@ -30,6 +30,7 @@ Output is analysis only — no code, no spec produced.
 /apex-deep-dive architecture "should we split auth into a microservice?"
 /apex-deep-dive performance "API response times degrading under load"
 /apex-deep-dive {domain} "{specific question or context}"
+/apex-deep-dive council "{a genuine go/no-go decision}"   → runs Council mode (below)
 
 ## Deep dive workflow
 
@@ -132,6 +133,41 @@ After delivering the analysis:
 "This analysis feeds into your next spec. Want me to start planning the implementation?"
 
 If yes: transition to apex-plan with the deep-dive findings as specialist context.
+
+## Council mode — anti-anchoring four-voice (ADR-010)
+
+Use for a genuine **go/no-go** decision where the proposal already on the table risks anchoring
+the analysis (the model rationalises the answer it first reached). Invoked explicitly
+(`/apex-deep-dive council "{question}"`), or accepted when `apex-plan` offers it at a judgment fork.
+Council *replaces* the lone "Opposing View" with three independent dissents.
+
+**The four voices:**
+1. **Architect — you, in-context.** State the proposal and the reasoning for it. This is the
+   anchored voice; everything else exists to counter its bias.
+2. **Three fresh-context voices.** Dispatch three `general-purpose` subagents **in parallel**, each
+   given **only the decision question** — no proposal, no your reasoning, no conversation history.
+   That deprivation is the mechanism: a voice that never saw the proposed answer cannot anchor to it.
+   (No dedicated agent files — the stance lives in the prompt, per ADR-007 leanness.)
+
+**Voice dispatch template** (one per voice, `subagent_type: general-purpose`):
+```
+You are the {Skeptic | Pragmatist | Critic}. Decision question: "{question}".
+You have ONLY this question — no proposed answer, no prior discussion. Do not assume any
+answer is preferred; reason from the question alone.
+{stance line:
+  Skeptic    → "Argue the strongest case that this FAILS. What breaks, and why?"
+  Pragmatist → "What is the simplest thing that actually works? Is the obvious approach over-built?"
+  Critic     → "What is being assumed? What is missing from the framing — the question not being asked?"}
+Return exactly:
+  POSITION: go | no-go | depends-on{...}
+  REASONING: 2-4 bullets, your strongest points only
+  BIGGEST RISK: one line
+```
+
+**Synthesis (Architect).** Reconcile the four voices into the Recommendation. **Surface explicitly
+where the three independent voices diverged from the proposal** — convergent dissent is a stop
+signal; a lone dissent the others reject is usually noise. In the output structure, put the
+strongest independent dissent under "## Opposing View" (it supersedes the single-voice version).
 
 ## Available domains
 

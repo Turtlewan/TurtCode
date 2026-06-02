@@ -1,12 +1,19 @@
 ---
 skill: apex-plan
 backend: claude
-version: 1.9.0
-last_updated: 2026-06-01
+version: 1.12.0
+last_updated: 2026-06-02
 sources:
   - APEX Design Specification 2026-05-24
   - GSD (Get Shit Done) — github.com/gsd-build/get-shit-done
+  - docs/technical/adr/ADR-010-multi-pass-review.md
 staleness_threshold: 30d
+description: >
+  Use when planning — turning requirements into executable docs/changes specs, designing an
+  approach, or shaping a build. Triggers (routed by apex-orchestrate): plan / design / architect /
+  spec / "let's build" / "what if". Owns the planning-mode toggle, upfront intent elicitation, the
+  research/council widen-options gate, dispatched domain review, the readiness gate, ADRs, and the
+  confirmation digest. Not the build itself (apex-code) or standalone research (apex-deep-dive).
 ---
 
 # APEX Planning Workflow
@@ -111,6 +118,41 @@ For **data-bearing projects**, capture the conceptual data model (entities + rel
 `docs/technical/architecture/data-model.md` **early — before per-phase schema specs** — so per-phase
 schema stays coherent against one anchor (ADR-008) — **Deep Details only**.
 
+### Widen the options — research gate
+
+At a **meaningful** solution-branch point — when ≥2 candidate approaches are in play *and* the
+choice has real trade-offs, touches architecture, or rests on knowledge that may be stale — do
+**not** jump straight to a recommendation from in-context knowledge. First surface the candidates
+(one line each), then ask:
+
+> "I have {N} candidate approaches: {one-liner each}. Want me to search online for more before we choose?"
+
+- **Yes** → research, **picking depth by magnitude and stating which you're running first**:
+  - *Most forks* → `apex-research` (light gather: additional/better options, tiered sources, confidence tags).
+  - *Heavy / architectural fork* → `apex-deep-dive` (full 2-3 option comparison + project-specific recommendation).
+  Then fold what comes back into the option set, re-present, and recommend/decide.
+- **No** → proceed with the in-context options.
+
+**Judgment fork (not facts) → offer council instead (ADR-010).** When the candidate approaches are
+already well understood and the uncertainty is a *judgment* call — a load-bearing go/no-go with no
+factual tiebreaker, where more searching won't help — offer the anti-anchoring council in place of
+web research:
+
+> "This is a judgment call, not a facts gap. Want me to run a council — three fresh-context voices
+> (Skeptic / Pragmatist / Critic) that haven't seen my lean — before we decide?"
+
+- **Yes** → run **Council mode** in `apex-deep-dive`, fold the independent dissent into the
+  recommendation, then decide.
+- **No** → proceed with your call.
+
+Never *auto-run* council — offer only, and only at a genuine judgment fork (same tight-scope rule
+below). Facts-uncertainty stays with `apex-research` / `apex-deep-dive` above.
+
+**Scope it tightly — this is a deliberate mid-stream interrupt.** Fire it only on meaningful forks.
+A clear default with no real trade-off follows *defaults-not-menus* (above) and never triggers the
+gate — trivial picks must not nag. This is the one sanctioned exception to batch-the-questions:
+widening the option set is worth the interrupt precisely when the decision is load-bearing.
+
 ## Writing the spec — by mode
 
 ### Deep Details mode
@@ -130,6 +172,12 @@ As you build the spec, enforce these rules inline:
 - Permissions section must cover every action the build will take
 - Specialist context section captures any specialist findings
 - Risks/Open Questions must be empty before spec is ready
+- **Task granularity:** size each task as one concern layer — API layer, DB layer, UI layer,
+  test layer. One task should not span multiple layers; one layer should not be split into
+  multiple thin tasks. Independent concern layers run in parallel waves in coding mode;
+  artificially thin tasks (one import, one function, one file) cost more in agent-spawn
+  overhead than they save in parallelism. Natural independence is the signal — do not
+  manufacture it.
 
 **A spec is an execution script, not a design doc — rich on the *what*, stripped of the *why*:**
 - **Scope = a one-line identity** (what this builds, for routing/review/recall), optionally
@@ -250,6 +298,7 @@ Tasks
   [ ] Every task has a concrete acceptance criterion
   [ ] No task contains "or", "maybe", "depending on", "TBD"
   [ ] Task dependencies are explicit (if Task 3 needs Task 1, say so)
+  [ ] Task granularity: each task is one concern layer — not one file and not multiple features; no artificially thin tasks manufactured to increase worker count
 
 Permissions
   [ ] All files to write are listed with full paths

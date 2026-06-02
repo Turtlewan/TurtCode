@@ -1,12 +1,13 @@
 ---
 skill: apex-code
 backend: claude
-version: 1.6.0
-last_updated: 2026-05-31
+version: 1.8.0
+last_updated: 2026-06-02
 sources:
   - APEX Design Specification 2026-05-24
   - GSD (Get Shit Done) — github.com/gsd-build/get-shit-done
   - docs/technical/adr/ADR-006-buildability-layer-verification-inversion.md
+  - docs/technical/adr/ADR-010-multi-pass-review.md
 staleness_threshold: 30d
 description: >
   APEX coding-mode workflow (DeepSeek) — executes docs/changes/ specs: session start,
@@ -99,13 +100,17 @@ Pre-flight:
    - Wave with **1 task** → execute that task directly (no agent spawn)
    - All tasks sequential (every wave has exactly 1 task) → execute directly in order; no agents needed
 
+**Task granularity** is fixed at spec authoring time by apex-plan — do not re-decompose
+tasks during Wave Analysis. If a task appears too coarse to verify atomically after
+completion, treat it as a GRAY fork and route back to planning.
+
 Context note: each worker agent starts with a fresh ~200k context scoped to its assigned tasks.
 The main window stays lean. All shared state flows through spec files and git history — not handoff docs or conversation memory.
 
 During execution:
 - Execute waves in the order produced by Wave Analysis
 - Within each wave: apply the dispatch rule (parallel agents or direct execution)
-- After each wave completes: verify wave outputs before starting the next wave
+- After each wave completes: run the wave domain review (see § Wave domain review) before starting the next wave
 - After completing each task: check it off in ## Progress
 - **In-task micro-ambiguity** (which existing pattern to follow, a name, a local detail that
   does NOT change the spec's approach): make the conservative choice, log it in the decisions table.
@@ -124,6 +129,10 @@ During execution:
 apex-code is a **stack-agnostic runner**: it owns the *loop*; the stack skill owns the
 *commands*. There are **no npm/test/lint/build commands baked into this skill** — get them from
 the recipe (ADR-006).
+
+**Universal coding rules (load once, every build):**
+Read `~/.claude/skills/apex-coding-principles/impl.md` in full before writing any code.
+These rules apply to all files in this build, regardless of stack.
 
 **Load the bound impl.md core (once, at pre-flight) — not the whole file:**
 1. Read `stack_skills` from status.md (session start).
@@ -156,6 +165,60 @@ the recipe (ADR-006).
 **context7 at the write step:** before writing non-trivial code against the active stack/
 framework, consult **context7** for its current API/syntax — getting it right first means fewer
 recovery iterations.
+
+## Wave domain review — selective dispatch
+
+Runs after each wave's recipe passes, before the next wave starts. Skipped entirely for
+waves that touch no high-risk domain — proceed directly to next wave.
+
+**Step 1 — domain check (file-path substring match, case-insensitive):**
+
+Collect all file paths written in this wave. Check each path and filename against:
+
+| Domain   | Trigger substrings (path or filename)                                      |
+|----------|----------------------------------------------------------------------------|
+| auth     | `/auth/`, `/session/`, `auth`, `session`, `jwt`, `oauth`, `login`, `signup`, `password` |
+| security | `/security/`, `/crypto/`, `guard`, `middleware`, `sanitize`, `encrypt`, `hash` |
+| data     | `/migrations/`, `/schema/`, `migration`, `schema`, `seed`                  |
+
+If no file matches any row → skip. Proceed to next wave.
+
+**Step 2 — dispatch (santa-method dual-pass, in parallel — ADR-010):**
+
+The matched domains (auth/security/data) are the critical subset, so each is reviewed by **two**
+independent `apex-wave-reviewer` instances by default — a missed violation here is shipped-code
+defect-grade. For each matched domain dispatch **two** reviewers in parallel, each with identical
+inputs:
+- `changed_files`: list of file paths written in this wave
+- `domain_impl_path`: `~/.claude/skills/apex-{domain}/impl.md`
+- `acceptance_criteria`: the "done when:" clauses for this wave's tasks
+
+The two passes run in isolated contexts — do not share state between them.
+
+**Single-pass override:** if the spec frontmatter sets `risk: low`, dispatch **one** reviewer per
+matched domain instead of two (the planner judged it low-stakes despite touching a critical path).
+`risk: high` or absent → dual-pass (the default).
+
+Wait for all dispatched reviewers to complete before proceeding.
+
+**Step 2b — union the dual pass (per matched domain):** combine the domain's two verdicts into one,
+taking the worst:
+- **BLOCK** if *either* pass returns BLOCK
+- else **FLAG** if *either* pass returns FLAG
+- else **CLEAN** (only when *both* passes are CLEAN)
+
+Union the two findings lists; dedupe findings that point at the same file+rule. Use this single
+unioned verdict in Step 3. (Single-pass override → the one verdict is used as-is.)
+
+**Step 3 — handle findings (unioned verdict per domain):**
+
+| Verdict | Action |
+|---------|--------|
+| CLEAN   | Proceed to next wave |
+| FLAG    | Log to decisions table: `"Wave {N} {domain} review: {finding}"`. Proceed to next wave. |
+| BLOCK   | Re-run the specific task that produced the violation with the unioned finding prepended to its context. Re-run the recipe. Re-dispatch **both** passes for this domain (one retry only). If still BLOCK after re-union: BIG fork — capture-at-halt, mark spec blocked. Do not attempt a second retry. |
+
+The one-retry cap on BLOCK is a hard limit. A second BLOCK means the issue requires planning judgment — do not loop.
 
 ## Forks — when the spec is wrong or not optimum
 
