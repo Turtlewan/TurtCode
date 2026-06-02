@@ -1,8 +1,8 @@
 ---
 skill: apex-ui-testing
 backend: deepseek
-version: 1.1.0
-last_updated: 2026-06-01
+version: 1.2.0
+last_updated: 2026-06-02
 sources:
   - Playwright Docs — playwright.dev
   - Storybook (Vitest addon) — storybook.js.org/docs/writing-tests
@@ -32,6 +32,8 @@ apex-mobile; backend/API tests → apex-testing.
 - Import Playwright test utilities outside of test files
 - Use `axe-playwright` / `checkA11y` (legacy community pkg) — use `@axe-core/playwright` `AxeBuilder`
 - Start a new project on Cypress — Playwright is the default; keep Cypress only if already in use
+- Pull a screenshot into context to "check" a UI (`browser_take_screenshot`) — the DeepSeek backend has no image support, so it is a wasted turn; observe via `browser_snapshot` (text a11y tree) instead
+- Reflexively render/screenshot a UI just because it changed — only the visual-by-nature cases below justify pixels
 
 ## ALWAYS do
 
@@ -40,6 +42,9 @@ apex-mobile; backend/API tests → apex-testing.
 - Use Playwright locators over CSS selectors (prefer `getByRole`, `getByLabel`)
 - Approve Chromatic baseline before merging a PR with visual changes
 - Test the critical user flow for every new page
+- Observe a running UI agentically via `browser_snapshot` (accessibility tree), never `browser_take_screenshot`
+- For a human to *see* the UI, surface the running dev-server URL (e.g. `http://localhost:3000`) for them to open — do not render it into context
+- Keep visual-by-nature judgment headless or deferred: layout/CSS regression → Chromatic (automated); design fidelity → flag to planning-mode (Claude), the only backend that can see pixels
 
 ## Storybook story pattern
 
@@ -100,3 +105,4 @@ test('contact page has no a11y violations', async ({ page }) => {
 - Visual regression baseline unclear — first run always needs human approval in Chromatic
 - E2E tests failing due to auth — flag to apex-backend for session fixture setup
 - axe-core reports contrast violations — flag to apex-accessibility
+- Visual judgment needed (design fidelity, a layout/CSS regression Chromatic can't adjudicate) — flag to planning-mode (Claude); DeepSeek cannot see pixels
