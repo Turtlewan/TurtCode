@@ -1,8 +1,8 @@
 ---
 skill: apex-ui-ux-design
 backend: claude
-version: 1.1.0
-last_updated: 2026-06-01
+version: 1.2.0
+last_updated: 2026-06-02
 sources:
   - Apple HIG + Liquid Glass (WWDC25) — developer.apple.com/design/human-interface-guidelines
   - Vercel Web Design Guidelines — github.com/vercel-labs/agent-skills
@@ -93,6 +93,43 @@ Before any UI spec is marked ready:
 - [ ] Loading states defined for all async UI
 - [ ] Empty states defined (no blank screens) — message + CTA
 - [ ] Error states defined (inline, not just toasts)
+
+## Generic-AI ("slop") detection — reject these before shipping a UI spec
+
+LLM-generated UI converges on a recognisable generic look. Treat any of these as a FLAG to
+redesign with product-specific intent (see § Industry-specific design reasoning):
+
+- Gratuitous gradients on everything; the purple→blue default palette
+- Glassmorphism / blur cards used decoratively with no depth purpose
+- Generic centred hero: oversized heading + vague copy over a stock/atmospheric gradient
+- Uniform `grid-cols-3` / `grid-cols-4` card walls where the content isn't actually uniform
+- Filler CTA copy ("Get Started", "Learn more") instead of action-specific labels
+- Default font stack with no personality (plain `font-sans` / Inter everywhere)
+- Cards nested inside cards; rounded corners on things that shouldn't be rounded
+- The UI describing its own features in prose when the controls already speak for themselves
+
+The fix is always the same: pick an explicit direction (purpose / audience / tone / one
+memorable detail / constraints) and design to the product domain, not the template.
+
+## Scored visual audit (review mode — "is this UI good?")
+
+When asked to review/audit an existing UI, score each dimension **0–10** and give a specific
+fix at `file:line` (not vague praise). Lead with the lowest scores.
+
+| # | Dimension | Looks for |
+|---|-----------|-----------|
+| 1 | Colour consistency | palette tokens used, not random hex |
+| 2 | Typography hierarchy | clear h1>h2>h3>body>caption |
+| 3 | Spacing rhythm | consistent 4/8/16 scale, not arbitrary |
+| 4 | Component consistency | similar elements look similar |
+| 5 | Responsive behaviour | fluid, not broken at breakpoints |
+| 6 | Dark mode | complete, not half-done |
+| 7 | Motion | purposeful, not gratuitous (→ apex-animation) |
+| 8 | Accessibility | contrast, focus, touch targets (→ apex-accessibility) |
+| 9 | Information density | matched to product category, not cluttered/sparse |
+| 10 | Polish | hover/focus/active, loading, empty, micro-details (concentric radius, tabular-nums, optical alignment) |
+
+Report shape: per-dimension score + one concrete fix each; then the 3 highest-impact fixes.
 
 ## Interaction design rules
 

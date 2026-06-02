@@ -1,8 +1,8 @@
 ---
 skill: apex-animation
 backend: deepseek
-version: 1.1.0
-last_updated: 2026-06-01
+version: 1.2.0
+last_updated: 2026-06-02
 sources:
   - Motion — motion.dev
   - GSAP (100% free since Apr 2025) — gsap.com/docs
@@ -31,6 +31,8 @@ The reduced-motion + cheap-property + spring rules below are universal.
 - Use GSAP for simple show/hide transitions achievable with CSS or Motion
 - Create looping animations with no pause mechanism
 - Use hardcoded pixel values in spring animations — use unitless stiffness/damping
+- Set a Motion `initial` that differs from server-rendered output — causes a hydration mismatch (web SSR). Match `initial` to what the server renders, or gate the animation behind a mounted flag
+- Read `window`/`navigator` at module top level — guard with `typeof window !== "undefined"` (web SSR)
 
 ## ALWAYS do
 
@@ -38,7 +40,11 @@ The reduced-motion + cheap-property + spring rules below are universal.
 - Use spring physics for component animations, not duration-based easing (web `type:"spring"` / SwiftUI spring presets)
 - Use `AnimatePresence` for all mount/unmount animations (web)
 - Use `layout` prop (web) / `matchedGeometryEffect` (SwiftUI) for size/position change animations
+- Use `layoutId` (web) for shared-element transitions — same element moving across route/layout contexts
+- Stagger list/children entrances at **0.05–0.10s** per item (below feels mechanical, above feels sluggish)
+- Use `mode="wait"` on `AnimatePresence` for page/route transitions so exit finishes before enter starts
 - Apply `will-change-transform` (Tailwind) for GPU-composited animations (web)
+- Use `viewport={{ once: true }}` on scroll-reveals — repeating on scroll-out distracts, not informs
 
 ## Motion enter/exit pattern
 

@@ -1,8 +1,8 @@
 ---
 skill: apex-skill-author
 backend: claude
-version: 1.3.0
-last_updated: 2026-05-31
+version: 1.4.0
+last_updated: 2026-06-02
 sources:
   - agentskills.io — skill spec & authoring best practices
   - superpowers:writing-skills — TDD-for-skills methodology
@@ -47,6 +47,15 @@ The loop (TDD for documentation):
 3. **REFACTOR** — find new loopholes/omissions, add explicit counters, re-test until solid.
 
 Verify GREEN by reading the actual output, not the subagent's self-report.
+
+**Prompt-independence — test at falling strictness (discipline/gate skills especially).**
+Absence-of-skill is only the floor. A skill that fires only when the prompt explicitly supports
+it is not reliable — the real failure is a prompt that nudges *against* the rule. Run the
+GREEN/REFACTOR task across three strictness levels and confirm the skill holds at each:
+**supportive** (prompt asks for the right thing) → **neutral** (prompt is silent on it) →
+**competing** (prompt pushes the other way — time pressure, "just skip the test", authority, sunk
+cost). A rule that survives only the supportive prompt is a FLAG, not a pass; tighten until it
+holds under the competing prompt. (Adapted from ECC `skill-comply`'s prompt-independence model.)
 
 ## When to activate
 

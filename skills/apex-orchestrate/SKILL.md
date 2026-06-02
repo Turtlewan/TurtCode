@@ -1,8 +1,8 @@
 ---
 skill: apex-orchestrate
 backend: claude
-version: 1.1.5
-last_updated: 2026-06-01
+version: 1.2.0
+last_updated: 2026-06-02
 sources:
   - APEX Design Specification 2026-05-24
   - GSD (Get Shit Done) — github.com/gsd-build/get-shit-done
@@ -26,6 +26,18 @@ As a session grows, token windows fill and quality degrades ("context rot"). APE
 - Storing decisions in persistent artifacts (docs/status.md, handoff docs) so context survives session boundaries
 
 New agents load project vision + decisions before acting — they don't rely on conversation memory.
+
+### Strategic compaction — compact at phase boundaries, not arbitrary thresholds
+
+Auto-compaction fires at an arbitrary % and often mid-task, losing live state. For the *main*
+session, prefer a deliberate `/compact` at a logical boundary instead:
+
+- **Compact after** research→planning, planning→implementation, a completed milestone, or a
+  failed/dead-end approach (clear the wrong reasoning before retrying).
+- **Don't compact mid-implementation** — losing file paths, names, and partial state is costly.
+- **Safe to compact because these survive:** CLAUDE.md, the In-Flight / status.md, handoff docs,
+  memory files, git state, files on disk. **Lost:** intermediate reasoning, prior file reads, tool
+  history. So **write durable state to its artifact first**, then compact. (From ECC `strategic-compact`.)
 
 ## Step 1: Orient
 

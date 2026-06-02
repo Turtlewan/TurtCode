@@ -1,8 +1,8 @@
 ---
 skill: apex-ui-ux-design
 backend: deepseek
-version: 1.1.0
-last_updated: 2026-06-01
+version: 1.2.0
+last_updated: 2026-06-02
 sources:
   - Apple HIG + Liquid Glass (WWDC25) — developer.apple.com/design/human-interface-guidelines
   - Vercel Design Guidelines — vercel.com/design
@@ -47,6 +47,9 @@ no `:hover`, no px breakpoints on native.
 - (web) Use `focus-visible:ring-2` (not `focus:ring`) to avoid mouse-click focus rings
 - (web) Reflect filter/search state in URL params for shareable links
 - (web) Test layout at 375px, 768px, 1024px, 1440px
+- (web) `tabular-nums` on any updating/aligned numbers — counters, timers, prices, table figures
+- (web) `text-wrap: balance` on headings/short titles; `text-wrap: pretty` on captions/short body (not long prose, code, or `pre`)
+- (web) Nested rounded surfaces use **concentric radius**: `outer = inner + padding`
 
 ## Interactive element pattern  (web — React + Tailwind)
 
@@ -105,9 +108,40 @@ function validate(value: string) {
 )}
 ```
 
+## Micro-polish details  (web — the small things that compound into "polished")
+
+These are the corrections a bare agent omits. Apply during build, not as a later pass.
+
+- **Concentric radius** — nested rounded surfaces: `outer = inner + padding`. If padding is
+  large, treat the layers as separate surfaces instead of forcing the formula (optical
+  coherence, not formula worship).
+- **Optical alignment** — geometric centring ≠ visual centring. Asymmetric glyphs (play ▶,
+  arrows, stars, some icons) need a small offset. Fix the SVG/viewBox when possible; else nudge
+  with a 1px margin/padding.
+- **Tabular numbers** — `font-variant-numeric: tabular-nums` (Tailwind `tabular-nums`) on
+  counters, timers, prices, and table figures so digits don't jitter as they update.
+- **Text wrapping** — `text-wrap: balance` on headings/short titles; `text-wrap: pretty` on
+  captions/short-to-medium body. Use **neither** on long prose, code, or `pre`.
+- **Font smoothing** — on macOS targets, set at the root if the project doesn't already:
+  `html { -webkit-font-smoothing: antialiased; -moz-osx-font-smoothing: grayscale; }`
+- **Image edges** — give images a subtle inset outline so edges don't blur into the surface:
+  `img { outline: 1px solid rgb(0 0 0 / 0.1); outline-offset: -1px; }` (lighten in dark mode).
+
+```css
+/* polish primitives — drop into the base layer */
+.tabnums { font-variant-numeric: tabular-nums; }
+h1, h2, h3 { text-wrap: balance; }
+p.caption, li { text-wrap: pretty; }
+```
+
+> SwiftUI: tabular figures via `.monospacedDigit()`; optical alignment via `Image` baseline
+> offset / `alignmentGuide`; no font-smoothing or image-outline equivalents needed.
+
 ## Verification checklist
 
 - [ ] Check: no emoji icons — SVG / SF Symbols only
+- [ ] (web) Check: updating numbers use `tabular-nums`; headings use `text-wrap: balance`
+- [ ] (web) Check: nested rounded surfaces follow concentric radius
 - [ ] Check: all interactive elements have visible focus state (keyboard/switch test)
 - [ ] Check: contrast ratio ≥ 4.5:1 (devtools / Polypane / native colour check)
 - [ ] Check: empty state and error state defined for all dynamic content
