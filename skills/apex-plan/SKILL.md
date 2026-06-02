@@ -1,12 +1,13 @@
 ---
 skill: apex-plan
 backend: claude
-version: 1.12.0
+version: 1.13.0
 last_updated: 2026-06-02
 sources:
   - APEX Design Specification 2026-05-24
   - GSD (Get Shit Done) — github.com/gsd-build/get-shit-done
   - docs/technical/adr/ADR-010-multi-pass-review.md
+  - docs/technical/adr/ADR-011-instinct-loop-no-engine.md
 staleness_threshold: 30d
 description: >
   Use when planning — turning requirements into executable docs/changes specs, designing an
@@ -60,11 +61,20 @@ The handoff is a read-once inbox. Surfacing an item is **not** landing it — an
 and not filed is lost. **Every handoff item must terminate in exactly one of:**
 1. **Pending Spec** — queue/write a spec (blocked actions and "review needed ⚠️" decisions often land here)
 2. **Open Question** — add to status.md Open Questions (an unresolved decision, e.g. an architecture call to make later)
-3. **Folded** — incorporated into existing state *now* (e.g. a gotcha written into a spec/skill/ADR)
+3. **Folded** — incorporated into existing state *now* (e.g. a gotcha written into a spec/skill/ADR,
+   or a recurring build lesson / user correction written to a `feedback` **memory** so it re-surfaces)
 4. **Discarded** — explicitly judged not actionable
 
 Land each item's disposition **this session** — do not defer it to "later." The latest
 handoff is read once and never auto-read again, so an undrained item is gone.
+
+**The learning loop (no engine — this rail is it).** A build lesson reaches planning only through the
+handoff; the drain is where it's caught. Most fold into a `feedback` memory. When the *same* lesson
+recurs across multiple handoffs (the memory's recall is your tally — no separate ledger), it has earned
+promotion: treat it as a candidate for `apex-refresh --stocktake` (cross-skill principle) or a direct
+`apex-skill-author` edit. Promotion is always human-gated through those rails — the Iron Law's
+failing-baseline test stays in force, so an instinct-sourced edit is held to the same bar as any other.
+(Why no automatic capture/confidence engine: ADR-011 / `docs/findings/instinct-loop-deep-dive.md`.)
 
 ## Planning mode toggle
 
