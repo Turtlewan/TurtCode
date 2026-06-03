@@ -1,13 +1,14 @@
 ---
 skill: apex-governance
 backend: claude
-version: 1.2.0
-last_updated: 2026-06-01
+version: 1.3.0
+last_updated: 2026-06-03
 sources:
   - APEX Design Specification 2026-05-24
   - Superpowers (obra) — github.com/obra/superpowers
   - gstack (garrytan) — github.com/garrytan/gstack
   - Claude Code Action — github.com/anthropics/claude-code-action
+  - Odysseus analysis (PewDiePie) — docs/research/odysseus-analysis.md
 staleness_threshold: 30d
 description: >
   Defines the APEX autonomy model — operating modes (Build/AFK vs Edit), autonomy levels L0–L5,
@@ -121,6 +122,17 @@ For high-stakes builds (security, auth, data migrations):
 Request an independent review from a different model before shipping.
 Overlapping findings from two models = high confidence.
 Divergent findings = flag for human review.
+
+## Evaluator independence (anti-collusion invariant)
+
+Any APEX mechanism that scores, votes on, or selects among candidate outputs must keep the
+**evaluator disjoint from the evaluated**, **stake-free**, and (when multiple evaluators weigh in)
+**independent** — judgements formed without seeing each other or any consequence tied to the result.
+Break any of the three and evaluators optimise the scoring rule instead of the task (reward
+hacking / collusion). This is *why* APEX's council (ADR-010) uses fresh-context, advisory, stake-free
+voices and folds dissent rather than running a survival-weighted vote, and why cross-model review
+keeps the second model independent. Honour the same rule before adding any vote- or score-based gate.
+_Origin: `docs/research/odysseus-analysis.md` (A1) — distilled from the Odysseus council collusion._
 
 ## Claude Code Action (CI integration)
 

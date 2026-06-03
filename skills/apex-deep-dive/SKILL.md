@@ -1,8 +1,8 @@
 ---
 skill: apex-deep-dive
 backend: claude
-version: 1.3.0
-last_updated: 2026-06-02
+version: 1.4.0
+last_updated: 2026-06-03
 sources:
   - APEX Design Specification 2026-05-24
   - Firecrawl — github.com/firecrawl/firecrawl
@@ -148,6 +148,12 @@ Council *replaces* the lone "Opposing View" with three independent dissents.
    given **only the decision question** — no proposal, no your reasoning, no conversation history.
    That deprivation is the mechanism: a voice that never saw the proposed answer cannot anchor to it.
    (No dedicated agent files — the stance lives in the prompt, per ADR-007 leanness.)
+
+**Voices are advisory and stake-free** — they never decide and nothing rides on their position; the
+Architect folds their dissent. That independence (evaluator disjoint from evaluated, no stake, blind
+to each other) is the *evaluator-independence invariant* in `apex-governance` — preserve it for any
+future vote- or score-based variant, or evaluators game the rule instead of the task (the Odysseus
+council-collusion failure; `docs/research/odysseus-analysis.md`).
 
 **Voice dispatch template** (one per voice, `subagent_type: general-purpose`):
 ```
