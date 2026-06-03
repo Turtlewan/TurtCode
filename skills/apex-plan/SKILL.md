@@ -1,7 +1,7 @@
 ---
 skill: apex-plan
 backend: claude
-version: 1.14.0
+version: 1.14.1
 last_updated: 2026-06-03
 sources:
   - APEX Design Specification 2026-05-24
@@ -424,43 +424,21 @@ no context switch from deciding to auditing.
 
 ## ADR workflow — Deep Details only
 
-When an architectural decision is reached during planning:
+When an architectural decision is reached during planning, write an ADR **immediately** (don't defer):
+assign the next ADR number, write `docs/technical/adr/ADR-{NNN}-{short-title}.md`, and reference it in
+the spec's Documentation section. **Light / Bug Fix:** note decisions inline; skip formal ADRs.
 
-1. Assign the next ADR number (read docs/technical/adr/ to find highest existing number)
-2. Write immediately to docs/technical/adr/ADR-{NNN}-{short-title}.md:
-
-```markdown
-# ADR-{NNN}: {title}
-**Date:** {YYYY-MM-DD}
-**Status:** Accepted
-
-## Context
-{Why this decision was needed — the forces at play}
-
-## Decision
-{What was decided, stated clearly}
-
-## Consequences
-{What this means going forward — good and bad}
-```
-
-3. Reference the ADR in the spec's Documentation section
-
-**Light / Bug Fix modes:** note decisions inline in the spec doc. Skip formal ADRs.
+> Full procedure + ADR template: read `references/adr-and-status-procedures.md` § ADR workflow when
+> writing an ADR.
 
 ## Updating docs/status.md — by mode
 
-### Deep Details / Light
-At the end of every planning session:
-1. Read current docs/status.md
-2. Rewrite content between <!-- PLANNING:START --> and <!-- PLANNING:END -->:
-   - Pending table: scan docs/changes/*.md (not done/). One row per spec, alphabetical
-   - Open questions: carry over unresolved, add new, remove resolved
-3. Update _Last updated by planning mode:_ line to today's date
-4. Write file back
+At the end of every Deep Details / Light planning session, rewrite the PLANNING block of
+docs/status.md (Pending Specs from docs/changes/*.md + Open Questions) and bump the
+_Last updated by planning mode:_ date. **Bug Fix:** no status.md update (ephemeral).
 
-### Bug Fix
-No status.md update. Bug fix docs are ephemeral — consumed and archived in one coding session.
+> Full rewrite mechanics (markers, table rules): read `references/adr-and-status-procedures.md`
+> § status.md update when closing the session.
 
 ## Specialist knowledge — two roles (Deep Details only)
 
