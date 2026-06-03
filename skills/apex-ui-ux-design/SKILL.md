@@ -1,10 +1,11 @@
 ---
 skill: apex-ui-ux-design
 backend: claude
-version: 1.2.0
-last_updated: 2026-06-02
+version: 1.3.0
+last_updated: 2026-06-03
 sources:
   - Apple HIG + Liquid Glass (WWDC25) — developer.apple.com/design/human-interface-guidelines
+  - docs/technical/adr/ADR-013-app-flow-artifact.md
   - Vercel Web Design Guidelines — github.com/vercel-labs/agent-skills
   - UI UX Pro Max (nextlevelbuilder) — github.com/nextlevelbuilder/ui-ux-pro-max-skill
   - Web Quality Skills (addyosmani) — github.com/addyosmani/web-quality-skills
@@ -26,6 +27,22 @@ description: >
 ## When to activate
 Any spec involving new screens, redesigns, user flows, onboarding, forms, dashboards, or
 visual identity — on any surface (web, iOS/macOS, Android).
+
+## App-flow artifact (persisted — ADR-013)
+
+For any UI-bearing project the screen-map and user journeys are a **persisted artifact**, not
+session-only judgment: `docs/technical/architecture/app-flow.md` (seeded by apex-init, owned here).
+This skill owns the *technique*; apex-docs-technical owns the doc's place in the doc system.
+
+- **Capture early** — before per-screen feature specs, map: **screens/routes** (name · purpose · how
+  reached), **primary user journeys** (key end-to-end paths), and **screen states + transitions**
+  (empty / loading / error / loaded). Keep it flow-level.
+- **Flow only, not visual design.** Layout, spacing, colour, component styling, and taste stay
+  un-persisted planning judgment (+ Figma). Do not turn app-flow.md into a visual spec — that boundary
+  is what keeps it Low-cost and stable.
+- **Keep it current** — a new screen or journey updates app-flow.md; a UI feature spec should name
+  which app-flow screen(s)/journey it implements (apex-plan's readiness gate checks this for UI specs).
+- **Scope-gate** — headless / API-only / pure-CLI projects have no app-flow doc.
 
 ## Stack assumptions
 

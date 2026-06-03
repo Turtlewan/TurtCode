@@ -1,13 +1,16 @@
 ---
 skill: apex-plan
 backend: claude
-version: 1.13.0
-last_updated: 2026-06-02
+version: 1.14.0
+last_updated: 2026-06-03
 sources:
   - APEX Design Specification 2026-05-24
   - GSD (Get Shit Done) — github.com/gsd-build/get-shit-done
   - docs/technical/adr/ADR-010-multi-pass-review.md
   - docs/technical/adr/ADR-011-instinct-loop-no-engine.md
+  - docs/technical/adr/ADR-013-app-flow-artifact.md
+  - docs/technical/adr/ADR-014-living-capability-overview.md
+  - donor-analysis (Spec-Kit clarify/analyze, Superpowers self-review, BMAD scale-adaptive) — docs/research/donor-analysis/
 staleness_threshold: 30d
 description: >
   Use when planning — turning requirements into executable docs/changes specs, designing an
@@ -46,12 +49,17 @@ Compute three signals and report them in one line (say "clean" if none fire):
 2. **Decisions not yet ADR'd** — any architectural decision in the latest handoff's
    "Decisions Made" or in status.md that has no matching `docs/technical/adr/ADR-NNN-*.md` →
    flag "{n} decision(s) not yet ADR'd."
-3. **Overview staleness** — overview.md older than the newest ADR (an architectural change
-   landed but the story wasn't updated) → flag "overview may be stale vs ADR-NNN."
+3. **Overview staleness** — overview.md older than the newest ADR, **or not updated since the last
+   spec archived to docs/changes/done/** (a change shipped but the capability list wasn't merged —
+   ADR-014) → flag "overview may be stale vs ADR-NNN / vs last archive."
 4. **Conceptual data model still a stub** (data-bearing projects only) — does
    `docs/technical/architecture/data-model.md` exist and still carry the `<!-- apex:data-model:stub -->`
    marker while a spec touches data/schema? → flag "data model is still a stub." Skip for stateless
    projects (no such file by design — ADR-008).
+5. **App-flow still a stub** (UI-bearing projects only) — does
+   `docs/technical/architecture/app-flow.md` exist and still carry the `<!-- apex:app-flow:stub -->`
+   marker while a UI/screen spec is in play? → flag "app-flow is still a stub." Skip for headless
+   projects (no such file by design — ADR-013).
 
 Example: "Doc coverage: overview is still a stub; 1 decision not yet ADR'd."
 
@@ -85,7 +93,9 @@ Before any planning work, ask the user which mode to use:
 > - **Light** (medium) — intent doc only, key decisions, acceptance criteria, no gate
 > - **Bug Fix** (lightest) — bug description, root cause, fix approach, files to touch"
 
-Wait for their choice. This determines everything below.
+Wait for their choice. This determines everything below. **Recommend the lightest mode that fits the
+change size** — collapse ceremony for trivial L0/L1 work; don't default to Deep Details for a one-file
+change (scale-adaptive routing). Reserve Deep Details for multi-file / architectural work.
 
 ## Planning conversation
 
@@ -97,7 +107,9 @@ need *before* drafting; do not draft-then-validate.
 
 - **Resolve yourself — don't ask:** codebase facts (read the files), clear technical defaults
   (defaults-not-menus), anything derivable from patterns or research. Asking these wastes the
-  user's attention.
+  user's attention. **Brownfield:** if planning touches an existing codebase you haven't mapped, run a
+  codebase-mapping pass first (reuse `gsd-map-codebase` if installed) — gate it to onboarding; it's a
+  HIGH-token whole-repo scan, so do it once and persist to overview/data-model, not every session.
 - **Ask the user — before drafting:** product intent, preferences among technically-valid
   options (taste/business), edge-case priorities, "what does good look like." Judgment, not facts.
 - **Bound the ask:** surface only decisions that (a) planning cannot resolve itself **and**
@@ -120,13 +132,18 @@ If multiple interpretations are valid, present them — do not silently pick one
 > Does that match your intent?"
 
 If something is genuinely unclear, stop. Name what's confusing. Do not fill in the gap
-with an assumption that isn't written down somewhere — write it in `## Assumptions` instead.
+with an assumption that isn't written down somewhere — write it in `## Assumptions` instead, or drop a
+greppable `[NEEDS CLARIFICATION: …]` marker at the exact spot; the readiness gate blocks while any
+marker remains (Spec-Kit clarify discipline).
 Present trade-offs and alternatives before deciding.
 Write ADRs immediately for every architectural decision made (see ADR workflow below) — **Deep Details only**.
 Load specialist skills when domain keywords appear (orchestrator handles this) — **Deep Details only**.
 For **data-bearing projects**, capture the conceptual data model (entities + relationships) in
 `docs/technical/architecture/data-model.md` **early — before per-phase schema specs** — so per-phase
 schema stays coherent against one anchor (ADR-008) — **Deep Details only**.
+For **UI-bearing projects**, likewise capture the app-flow (screens + journeys) in
+`docs/technical/architecture/app-flow.md` **early — before per-screen specs** — so screens stay coherent
+against one navigation anchor (ADR-013; technique owned by apex-ui-ux-design) — **Deep Details only**.
 
 ### Widen the options — research gate
 
@@ -309,6 +326,7 @@ Tasks
   [ ] No task contains "or", "maybe", "depending on", "TBD"
   [ ] Task dependencies are explicit (if Task 3 needs Task 1, say so)
   [ ] Task granularity: each task is one concern layer — not one file and not multiple features; no artificially thin tasks manufactured to increase worker count
+  [ ] Coverage audit: every acceptance criterion maps to ≥1 task, and every task traces to ≥1 criterion — no orphan tasks, no uncovered criteria (Spec-Kit /analyze)
 
 Permissions
   [ ] All files to write are listed with full paths
@@ -325,6 +343,11 @@ Specialist flags
 Questions
   [ ] Risks/Open Questions section removed from spec (not emptied — deleted)
   [ ] No ambiguity in any acceptance criterion
+  [ ] No unresolved `[NEEDS CLARIFICATION: …]` markers remain anywhere in the spec
+
+Self-review (Superpowers)
+  [ ] No leftover placeholders — no TODO / TBD / "…" / bare brackets left in the spec
+  [ ] Internal consistency — no section contradicts another (file paths, names, criteria all agree)
 
 Karpathy Quality Gate
   [ ] Assumptions: every non-obvious assumption is written in ## Assumptions with impact level
@@ -344,6 +367,8 @@ Documentation
   [ ] Overview currency: if the architecture changed, docs/technical/architecture/overview.md
       is updated — and de-stubbed (the `<!-- apex:overview:stub -->` marker removed) if it was
       still a stub. Shaping decisions link to their ADRs.
+  [ ] App-flow currency: every UI/screen spec names which app-flow screen(s)/journey it implements,
+      and app-flow.md is de-stubbed if it was still a stub (UI-bearing projects — ADR-013)
 ```
 
 If any item fails: surface what is unresolved, revise in-place, re-run gate from top. Repeat until clean.

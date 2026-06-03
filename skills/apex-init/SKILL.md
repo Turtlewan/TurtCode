@@ -1,12 +1,14 @@
 ---
 skill: apex-init
 backend: claude
-version: 1.3.0
-last_updated: 2026-06-01
+version: 1.4.0
+last_updated: 2026-06-03
 sources:
   - APEX Design Specification 2026-05-24
   - GSD (Get Shit Done) — github.com/gsd-build/get-shit-done
   - docs/technical/adr/ADR-005-stack-best-practice-skills.md
+  - docs/technical/adr/ADR-013-app-flow-artifact.md
+  - docs/technical/adr/ADR-014-living-capability-overview.md
 staleness_threshold: 30d
 description: >
   Use when bootstrapping a brand-new APEX project — triggered automatically by
@@ -93,6 +95,13 @@ carries the `<!-- apex:data-model:stub -->` marker for the coverage check. If th
 persistent data model" under REQUIREMENTS.md → Out of scope. Leave it as a stub — planning fills the
 entities/relationships in early; do not model data during bootstrap.
 
+**App-flow stub — only for UI-bearing projects (ADR-013).** If the confirmed stack (Question 3)
+includes a frontend / screen surface (web UI, mobile, desktop app), also seed the **app-flow stub**
+at `docs/technical/architecture/app-flow.md` (template below). It carries the
+`<!-- apex:app-flow:stub -->` marker for the coverage check. If the project is **headless** (API-only,
+pure CLI, library), skip this file and add a line "No UI flow" under REQUIREMENTS.md → Out of scope.
+Leave it as a stub — planning maps screens/journeys early; do not design flows during bootstrap.
+
 ## Step 3: Write docs/status.md
 
 Use the template from ~/.claude/skills/apex-orchestrate/templates/status-template.md.
@@ -113,8 +122,9 @@ Fill in:
     drafts/         ← specs-in-progress
     handoff/        ← session summaries
     technical/      ← ADRs, runbooks, architecture docs
-      architecture/overview.md  ← System Overview (stub — planning fills it in)
+      architecture/overview.md  ← System Overview + living capability index (stub — planning fills it in)
       architecture/data-model.md ← conceptual data model (stub — data-bearing projects only)
+      architecture/app-flow.md   ← app-flow: screens + journeys (stub — UI-bearing projects only)
     product/        ← user guides, API docs, changelog
   PROJECT.md        ← vision — loaded by every new agent
   REQUIREMENTS.md   ← scope boundaries — loaded by every new agent
@@ -207,6 +217,11 @@ check greps for. Do not fill the sections during bootstrap.
 ## What it does
 _One or two paragraphs: what the system does, for whom, top-to-bottom readable._
 
+## Capabilities (current truth)
+_What the system does today — one terse line each (+ link to ADR/spec). Updated on every spec archive
+to docs/changes/done/ (merge-on-archive, ADR-014). Keep it a terse index, not a scenario corpus._
+-
+
 ## How it's structured
 _The major pieces and how they fit — the shape of the system, not an API dump._
 
@@ -248,5 +263,36 @@ _How entities relate, with cardinality._
 
 ## Invariants
 _Rules that must always hold across entities (e.g. "an Order always has ≥1 LineItem")._
+-
+```
+
+## docs/technical/architecture/app-flow.md initial content
+
+Seed this **only for UI-bearing projects** (substitute `{project-name}`). The
+`<!-- apex:app-flow:stub -->` marker stays until planning maps the flows — it is what the
+doc-coverage check greps for. Flow only — do **not** add visual design (layout/colour/component
+styling); that stays planning judgment + Figma.
+
+```markdown
+# {project-name} — App-Flow (screens + journeys)
+
+<!-- apex:app-flow:stub -->
+> **STATUS: STUB.** The screen/route map and primary user journeys. Planning fills this in early,
+> before per-screen feature specs. Flow only: screens, navigation, journeys, screen states +
+> transitions. **Not** visual design — layout/styling stay judgment + Figma.
+
+## Screens / routes
+_Each: name · purpose · how it's reached._
+
+| Screen / route | Purpose | Reached from |
+|----------------|---------|--------------|
+
+## Primary user journeys
+_The key end-to-end paths a user takes through the screens._
+
+1.
+
+## Screen states & transitions
+_Per screen: the states (empty / loading / error / loaded) and what transitions between them._
 -
 ```

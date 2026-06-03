@@ -1,10 +1,11 @@
 ---
 skill: apex-context-budget
 backend: claude
-version: 1.0.0
-last_updated: 2026-06-02
+version: 1.1.0
+last_updated: 2026-06-03
 sources:
   - ECC context-budget — github.com/affaan-m/ECC
+  - donor-analysis (Kiro steering inclusion modes, GSD context tripwire, Cline focus-chain) — docs/research/donor-analysis/
 staleness_threshold: 60d
 description: >
   Use when auditing or reducing this setup's Claude Code context/token overhead —
@@ -90,6 +91,7 @@ Sort **every** inventoried item into one bucket with an action:
 - **MCP over-subscription:** live (non-deferred) tools unrelated to the workflow; servers wrapping a CLI that's free via Bash.
 - **Latent context-bombs:** a single agent/skill body so large that one accidental invocation drops a 10k-token block — call it out even though it's latent.
 - **Cap violations:** any `SKILL.md` > 500 lines.
+- **Unconditional always-on docs/rules:** a rule or doc loaded every session that applies to only *some* tasks — a candidate for conditional/glob-gated loading (see § Two levers) rather than the always-on chain.
 
 ### Phase 4 — Report (template below)
 
@@ -137,6 +139,21 @@ Headroom: always-on floor ≈ XX% of a 200k window.  Adding {planned components}
 
 Rank savings by **always-on** impact first (every-turn cost), latent second. Always force a
 top-3 — the audit's value is the prioritized cut, not the spreadsheet.
+
+## Two levers beyond trimming
+
+Deleting content is not the only way to cut the always-on floor:
+
+- **Conditional / glob-gated loading.** Not everything in the always-on chain must be always-on. Give
+  a rule or doc a load condition — *always* / *file-match glob* / *manual* — so it loads only when a
+  task touches its domain, moving cost from every-turn to on-demand **without deleting content**. Flag
+  always-on items that apply to only *some* tasks as conditional-loading candidates. (Kiro steering
+  inclusion modes; mirrors APEX's own impl.md core/references split.)
+- **Live-context tripwire.** This audit is static (the per-turn floor). At *runtime*, when live
+  context passes **~70%** of the window, recommend a deliberate `/compact` at the next phase boundary
+  rather than waiting for mid-task auto-compaction — and keep the In-Flight task list re-injected so
+  position survives. (GSD `health --context`; Cline focus-chain; pairs with apex-orchestrate
+  § Strategic compaction.)
 
 ## Rules
 

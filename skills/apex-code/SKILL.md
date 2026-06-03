@@ -1,13 +1,15 @@
 ---
 skill: apex-code
 backend: claude
-version: 1.8.0
-last_updated: 2026-06-02
+version: 1.9.0
+last_updated: 2026-06-03
 sources:
   - APEX Design Specification 2026-05-24
   - GSD (Get Shit Done) — github.com/gsd-build/get-shit-done
   - docs/technical/adr/ADR-006-buildability-layer-verification-inversion.md
   - docs/technical/adr/ADR-010-multi-pass-review.md
+  - docs/technical/adr/ADR-014-living-capability-overview.md
+  - donor-analysis (Superpowers 4-status worker contract) — docs/research/donor-analysis/
 staleness_threshold: 30d
 description: >
   APEX coding-mode workflow (DeepSeek) — executes docs/changes/ specs: session start,
@@ -99,6 +101,11 @@ Pre-flight:
    - Wave with **2+ independent tasks** → spawn one code-worker agent per task; dispatch all in parallel; wait for all to complete before starting the next wave
    - Wave with **1 task** → execute that task directly (no agent spawn)
    - All tasks sequential (every wave has exactly 1 task) → execute directly in order; no agents needed
+
+   **Worker return contract** — each dispatched code-worker returns one status, not prose
+   (Superpowers): `DONE` (complete, verified) · `DONE_WITH_CONCERNS` (complete, flag noted) ·
+   `BLOCKED` (could not complete — reason) · `NEEDS_CONTEXT` (missing a fact/file to proceed). Route
+   `DONE_WITH_CONCERNS` to the decisions table; `BLOCKED` / `NEEDS_CONTEXT` through Forks.
 
 **Task granularity** is fixed at spec authoring time by apex-plan — do not re-decompose
 tasks during Wave Analysis. If a task appears too coarse to verify atomically after
@@ -290,6 +297,10 @@ Execute in this order:
 
 2. Spawn apex-docs-technical-agent:
    Inputs: spec_path, coder_summary, reviewer_findings, docs_summary, today's date
+   It writes the handoff and archives the spec to docs/changes/done/. **On archive it also folds the
+   spec's shipped capability into docs/technical/architecture/overview.md → Capabilities (current
+   truth) as one terse line — added / modified / removed (merge-on-archive, ADR-014).** A one-liner,
+   never a scenario dump.
    Wait for completion.
 
 3. Report to user:

@@ -1,7 +1,7 @@
 ---
 skill: apex-governance
 backend: claude
-version: 1.3.0
+version: 1.4.0
 last_updated: 2026-06-03
 sources:
   - APEX Design Specification 2026-05-24
@@ -9,6 +9,7 @@ sources:
   - gstack (garrytan) — github.com/garrytan/gstack
   - Claude Code Action — github.com/anthropics/claude-code-action
   - Odysseus analysis (PewDiePie) — docs/research/odysseus-analysis.md
+  - donor-analysis (Superpowers receiving-code-review) — docs/research/donor-analysis/
 staleness_threshold: 30d
 description: >
   Defines the APEX autonomy model — operating modes (Build/AFK vs Edit), autonomy levels L0–L5,
@@ -105,6 +106,12 @@ For every build, run two distinct review passes:
 
 Running both prevents the spec becoming a ceiling rather than a floor.
 Route output of both reviews to the handoff's ## Decisions Made and Reviewer sections.
+
+**Acting on review findings (Superpowers — receiving-code-review).** When an agent or human consumes
+review output, the discipline is: **verify before implementing** — a finding can be wrong; confirm it
+against the code before acting. No performative agreement ("you're absolutely right"); push back with
+evidence when a finding is mistaken; YAGNI-check any *suggested addition* before adding it. A review is
+input to judgement, not an order to comply.
 
 ## Safety guardrails (scope limiting)
 

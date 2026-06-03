@@ -1,12 +1,13 @@
 ---
 skill: apex-coding-principles
 backend: deepseek
-version: 1.1.0
-last_updated: 2026-06-02
+version: 1.2.0
+last_updated: 2026-06-03
 sources:
   - User-prescribed coding standards specification (2026-06-01)
   - Cursor rules best practices 2026
   - APEX rules-distill probe across 37 impl.md cores (2026-06-02)
+  - donor-analysis (Aider edit-format reliability, Cline workspace rewind) — docs/research/donor-analysis/
 staleness_threshold: 365d
 description: >
   Universal coding enforcement rules. Loaded by apex-code at pre-flight before any code
@@ -47,6 +48,8 @@ description: >
 - ALWAYS use environment variables or config files for secrets, API keys, and environment-specific URLs
 - ALWAYS separate business logic from UI — services, backend routes, helpers, and domain modules own the logic; UI only displays and captures input
 - ALWAYS understand the data flow before writing code: User action → Frontend → API → Backend logic → Database → Response → UI update
+- ALWAYS treat a failed edit-apply (no match, or the file is not what you expected) as a verification failure — STOP, re-read the file, and retry; never continue assuming an edit landed
+- ALWAYS checkpoint before a risky change — make sure prior work is committed (or `git stash` the working tree) before a multi-file edit you might need to undo, so the tree can be restored cleanly instead of hand-reverted
 
 ## Pre-coding checklist
 
