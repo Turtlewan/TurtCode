@@ -1,8 +1,8 @@
 ---
 skill: apex-skill-author
 backend: claude
-version: 1.4.0
-last_updated: 2026-06-02
+version: 1.5.0
+last_updated: 2026-06-08
 sources:
   - agentskills.io — skill spec & authoring best practices
   - superpowers:writing-skills — TDD-for-skills methodology
@@ -266,6 +266,10 @@ The model ignores what it already knows. Spend lines only on what it doesn't:
 - **Defaults, not menus** — "Use X; for the OCR case, Y" beats listing four equal options.
 - **Procedures over declarations** — teach the approach to a class of problems, not one answer.
 - **Output templates** — give the concrete structure; agents pattern-match it better than prose.
+- **Dispatch sites get a bounded return contract** — if the skill dispatches a subagent, specify
+  what the child *returns*: a fixed structured shape (verdict/status), or for deep/exploratory work
+  "write full output to disk, return a ≤1–2k-token summary or pointer". Never let a child return its
+  raw transcript into the orchestrator. (The dispatch return-contract invariant — apex-orchestrate / ADR-015.)
 - **NEVER/ALWAYS + Hard blocks at the top** — read first, most reliable behavior control.
 - **Omit**: explanations of things the model knows (HTTP, SQL), vague directives ("write
   clean code"), and "when to use" prose buried in the body (too late for discovery — that's

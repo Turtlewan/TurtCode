@@ -1,8 +1,8 @@
 ---
 skill: apex-orchestrate
 backend: claude
-version: 1.2.0
-last_updated: 2026-06-02
+version: 1.3.0
+last_updated: 2026-06-08
 sources:
   - APEX Design Specification 2026-05-24
   - GSD (Get Shit Done) — github.com/gsd-build/get-shit-done
@@ -26,6 +26,19 @@ As a session grows, token windows fill and quality degrades ("context rot"). APE
 - Storing decisions in persistent artifacts (docs/status.md, handoff docs) so context survives session boundaries
 
 New agents load project vision + decisions before acting — they don't rely on conversation memory.
+
+### Dispatch return contract (invariant — ADR-015)
+
+The fork boundary protects the main window only if children return *small*. Every dispatched
+child gets a **bounded return contract**:
+- A child that explores widely (research, stocktake, any deep/exploratory dispatch) **writes its
+  full output to disk and returns only a ≤1–2k-token summary or a pointer** — never its raw
+  working output.
+- A child that produces a verdict/status (workers, reviewers, council voices) returns the **fixed
+  structured shape** its dispatcher specified, nothing more.
+
+The orchestrator never absorbs a child's full transcript. This is a named dispatch invariant
+alongside *evaluator-independence* (apex-governance) — preserve it for any new dispatch site.
 
 ### Strategic compaction — compact at phase boundaries, not arbitrary thresholds
 
