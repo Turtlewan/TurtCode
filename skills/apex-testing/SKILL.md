@@ -1,8 +1,8 @@
 ---
 skill: apex-testing
 backend: claude
-version: 1.1.0
-last_updated: 2026-05-31
+version: 1.2.0
+last_updated: 2026-06-09
 sources:
   - Superpowers (obra) — github.com/obra/superpowers
   - Agent Skills (addyosmani) — github.com/addyosmani/agent-skills
@@ -91,6 +91,7 @@ axe-core finds ~57% of WCAG issues automatically. Covers WCAG 2.0, 2.1, 2.2 at A
 - [ ] Failing test written before implementation (RED phase documented)
 - [ ] Tests named descriptively (behaviour, not function name)
 - [ ] No test verifies implementation details — only observable behaviour
+- [ ] Each check is **discriminating** — a pass rules out the competing failure hypotheses, not merely consistent with success. To prove a threshold ≥X, succeed at a value only the favourable hypothesis admits; never trigger a failure at a value *every* hypothesis rejects (that proves nothing but "the limit is below what I sent"). Verify any hidden assumption the test's validity rests on (e.g. "the error names the exact limit").
 - [ ] Integration tests hit real dependencies (not mocked DB unless justified)
 - [ ] E2E tests cover the happy path only; edge cases handled at unit level
 - [ ] Regression test added for every bug fixed
