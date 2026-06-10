@@ -1,7 +1,7 @@
 ---
 skill: apex-plan
 backend: claude
-version: 1.15.0
+version: 1.16.0
 last_updated: 2026-06-10
 sources:
   - APEX Design Specification 2026-05-24
@@ -220,6 +220,12 @@ As you build the spec, enforce these rules inline:
 (`Wave 1: [task 1, task 2] | Wave 2: [task 3]`). You are the stronger reasoner — do the
 dependency analysis here so coding mode executes the grouping verbatim with zero inference.
 Tasks whose independence you can't establish go in sequential waves.
+
+**Cross-model review — set the flag for high-stakes builds.** For an auth / security /
+data-migration spec, set `cross_model_review: true` in the spec frontmatter so coding mode runs
+an independent second review on the *other* model family before shipping (apex-governance
+§ Cross-model review). It spends Claude-side capped-pool tokens and needs a second backend
+(Mac), so set it deliberately for the builds that earn it — never as a default.
 
 Then dispatch domain review (below), resolve its findings, and run the Readiness Gate (below).
 Only move to docs/changes/ when the gate passes.

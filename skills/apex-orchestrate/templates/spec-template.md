@@ -3,6 +3,10 @@ spec: {short-name}
 status: draft
 token_profile: balanced
 autonomy_level: L2
+# cross_model_review: true   # optional — high-stakes builds (auth / security / data). Runs an
+#                              independent 2nd review on the OTHER model family post-build
+#                              (apex-governance § Cross-model review). Needs a 2nd backend (Mac);
+#                              spends Claude-side capped-pool tokens — set deliberately, not default.
 ---
 
 # Spec: {title}

@@ -1,7 +1,7 @@
 ---
 skill: apex-code
 backend: deepseek
-version: 1.10.0
+version: 1.11.0
 last_updated: 2026-06-10
 sources:
   - APEX Design Specification 2026-05-24
@@ -300,6 +300,19 @@ Execute in this order:
    - apex-docs-product-agent — inputs: files_changed, spec_path, today's date
    - apex-reviewer (skip if token_profile is "lean") — inputs: spec_path, files_changed
    Wait for both to complete. Collect docs_summary and reviewer_findings.
+
+   **Cross-model review — only if the spec frontmatter has `cross_model_review: true`**
+   (apex-governance § Cross-model review). After apex-reviewer returns:
+   - Check a second backend is available — a host configured to route a subagent to the
+     *other* model family (this build is on DeepSeek and Claude is reachable, or vice versa).
+   - **Available** → dispatch one more `apex-reviewer` on that other backend. Inputs:
+     spec_path, files_changed — and NOTHING from the first review (it must not see the first
+     findings). Combine: a finding **both** reviews raise → high-confidence, must resolve
+     before reporting "complete"; a finding **only one** raises → add to the decisions table as
+     "cross-model divergence — human adjudication ⚠️."
+   - **Not available** → do NOT skip silently. Record in the decisions table: "cross_model_review
+     requested but no second backend — single-model review only ⚠️" and continue. (On a
+     single-backend host this is the expected path.)
 
 2. Spawn apex-docs-technical-agent:
    Inputs: spec_path, coder_summary, reviewer_findings, docs_summary, today's date

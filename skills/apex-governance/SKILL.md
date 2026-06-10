@@ -1,7 +1,7 @@
 ---
 skill: apex-governance
 backend: claude
-version: 1.5.0
+version: 1.6.0
 last_updated: 2026-06-10
 sources:
   - APEX Design Specification 2026-05-24
@@ -131,12 +131,32 @@ Use these to prevent accidental scope creep during execution:
 Coding mode must honour these signals from the spec's ## Permissions section.
 Add `scope: directory/path` to Permissions to activate freeze for that build.
 
-## Cross-model review
+## Cross-model review (opt-in — spec flag `cross_model_review: true`)
 
-For high-stakes builds (security, auth, data migrations):
-Request an independent review from a different model before shipping.
-Overlapping findings from two models = high confidence.
-Divergent findings = flag for human review.
+A second, **independent review by a different model family** before shipping a high-stakes
+build (auth / security / data migrations). Opt-in, not default — it spends the *stronger*
+model's tokens (Claude reviewing DeepSeek-built code), which on the headless path draw from the
+capped credit pool. The planner sets the flag deliberately for the builds that earn it.
+
+**How it runs (coding-side, wired in apex-code post-build):**
+1. The normal single-model review runs first (`apex-reviewer`, same backend as the build).
+2. If the spec sets `cross_model_review: true` **and a second backend is available**, dispatch
+   one more independent review on the **other** model family — the one that did *not* write the
+   code (standard path: DeepSeek built → Claude reviews). Give it only the spec + changed files,
+   **never the first review's findings** (evaluator independence — it must judge the code, not
+   anchor on the first verdict).
+3. Combine the two verdicts:
+   - **Both models flag the same issue** → high-confidence finding; resolve before shipping.
+   - **Only one flags it** → divergent; route to the human to adjudicate — do not auto-dismiss.
+
+**Prerequisite / graceful degrade:** this needs a host that can route a review to the other
+backend (the Mac co-locating Claude + DeepSeek). If no second backend is available, do **not**
+silently pass: run the single-model review and emit a flag — "cross-model review requested but
+second backend unavailable — single-model only; flagged for human." It never becomes a silent skip.
+
+The value is the *independence* — a different family has different blind spots, so agreement is
+real signal. Two passes of the *same* model is the santa-method dual-pass (apex-code wave review,
+ADR-010), which is weaker here because it shares blind spots. See § Evaluator independence.
 
 ## Evaluator independence (anti-collusion invariant)
 

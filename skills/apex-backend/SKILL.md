@@ -1,7 +1,7 @@
 ---
 skill: apex-backend
 backend: claude
-version: 1.3.0
+version: 1.3.1
 last_updated: 2026-06-10
 sources:
   - Fastify Docs — fastify.dev
@@ -39,13 +39,11 @@ service integrations, data models, server-side business logic.
 - What are the failure modes? What happens when downstream services fail?
 - Does this need a transaction? What is the rollback strategy?
 
-## API design principles
+## API design decisions
 
-- Version the API if it's consumed by external clients
-
-Pagination:
-- Cursor-based for large datasets or real-time data
-- Offset-based for simple admin UIs with predictable dataset sizes
+- **Versioning:** version the API only when it's consumed by external clients.
+- **Pagination:** cursor-based for large or real-time datasets; offset-based for simple admin
+  UIs with predictable, bounded sizes.
 
 ## Review checklist
 
