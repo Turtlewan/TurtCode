@@ -1,9 +1,18 @@
 ---
 skill: apex-aws
 backend: deepseek
-mode: coding
-version: 1.0.0
-last_updated: 2026-05-28
+version: 1.1.0
+last_updated: 2026-06-10
+sources:
+  - AWS Docs — docs.aws.amazon.com
+  - AWS CDK v2 — docs.aws.amazon.com/cdk/v2/guide
+staleness_threshold: 14d
+description: >
+  Coding-mode enforcement for AWS — least-privilege IAM (no `"*"` resources), execution
+  roles not access keys, secure S3 baseline (versioning + KMS encryption + public-access
+  block), ECS/Lambda task patterns, DynamoDB table baseline, OIDC CI auth with repo-scoped
+  trust policy, no hardcoded account IDs/regions/ARNs. Examples are Terraform HCL + CDK v2
+  TypeScript. Loads when writing AWS infrastructure code.
 ---
 
 # AWS — Coding Patterns
@@ -237,7 +246,7 @@ permissions:
   contents: read
 
 - name: Configure AWS credentials
-  uses: aws-actions/configure-aws-credentials@v4
+  uses: aws-actions/configure-aws-credentials@ececac1a45f3b08a01d2dd070d28d111c5fe6722 # v4.1.0
   with:
     role-to-assume: arn:aws:iam::${{ vars.AWS_ACCOUNT_ID }}:role/github-actions-deploy
     aws-region: us-east-1

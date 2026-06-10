@@ -1,15 +1,15 @@
 ---
 skill: apex-nextjs
 backend: claude
-version: 1.0.0
-last_updated: 2026-05-31
+version: 1.1.0
+last_updated: 2026-06-10
 sources:
   - Context7 /vercel/next.js (App Router docs, fetched 2026-05-31)
   - Next.js Data Security Guide — nextjs.org/docs/app/guides/data-security
   - Next.js v15 upgrade guide — nextjs.org/docs/app/guides/upgrading/version-15
 staleness_threshold: 14d
 description: >
-  Use when building or designing a Next.js App Router app (Next 15+, React 19) — Server/Client
+  Use when building or designing a Next.js App Router app (Next.js 15+ (16 current), React 19) — Server/Client
   component boundaries, rendering & caching strategy, Server Actions, data fetching, App Router
   file conventions. Not for generic React (apex-frontend), auth mechanics (apex-auth), or whether
   to pick Next at all (apex-stack).
@@ -17,7 +17,7 @@ description: >
 
 # apex-nextjs — Next.js App Router (planning)
 
-Stack skill (ADR-005) for Next.js **15+ App Router**, TypeScript, React 19. The meat is in
+Stack skill (ADR-005) for Next.js **15+ (16 current) App Router**, TypeScript, React 19. The meat is in
 `impl.md`; this file is the planning "what to weigh."
 
 ## Boundary — what this skill is NOT

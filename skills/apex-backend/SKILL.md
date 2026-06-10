@@ -1,8 +1,8 @@
 ---
 skill: apex-backend
 backend: claude
-version: 1.2.0
-last_updated: 2026-06-01
+version: 1.3.0
+last_updated: 2026-06-10
 sources:
   - Fastify Docs — fastify.dev
   - FastAPI Docs — fastapi.tiangolo.com
@@ -41,10 +41,6 @@ service integrations, data models, server-side business logic.
 
 ## API design principles
 
-REST conventions:
-- GET for reads, POST for creates, PUT/PATCH for updates, DELETE for deletes
-- Return appropriate HTTP status codes (201 for create, 204 for delete, etc.)
-- Consistent error response format across all endpoints
 - Version the API if it's consumed by external clients
 
 Pagination:
@@ -68,14 +64,6 @@ Before implementing any API pattern, verify against current official docs via Co
 - Prisma query API evolves — don't rely on training data for syntax
 
 Use `mcp__context7__query-docs` with the library ID and your specific question.
-
-## Doubt-driven review (for auth and data endpoints)
-
-For high-stakes endpoints (auth, payments, user data), apply before marking complete:
-1. **CLAIM**: state what security assumptions this endpoint makes
-2. **EXTRACT**: find every other endpoint that shares those assumptions
-3. **DOUBT**: challenge each: "could an attacker violate this assumption?"
-4. **RECONCILE**: fix before shipping, or explicitly accept and document the risk
 
 ## Standards
 

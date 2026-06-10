@@ -1,11 +1,17 @@
 ---
 skill: apex-research
 backend: claude
-version: 1.1.0
-last_updated: 2026-05-29
+version: 1.2.1
+last_updated: 2026-06-10
 sources:
   - Context7 MCP — context7.com
-staleness_threshold: 7d
+staleness_threshold: 30d
+description: >
+  Use when researching before a decision — comparing tools/options, verifying current best
+  practice, or studying external repos/systems to absorb. Triggers: "research X", "compare A vs
+  B", "is this still current", "study repo Y", absorption/compare-and-absorb passes. Spawns
+  source-grounded parallel agents and synthesises with confidence + token-cost tags. Not the
+  decision/spec itself (apex-plan) or an uncertain-approach deep dive (apex-deep-dive).
 ---
 
 # Deep Research Specialist — Planning Mode
@@ -165,6 +171,31 @@ Agent 3: Research Tool C — same focus areas
 ```
 Use `run_in_background: true` per agent, then synthesise together. Never spawn
 overlapping agents — redundant research wastes runs.
+
+### External-repo / absorption ("compare-and-absorb") passes
+
+Studying real repos to decide what to adopt has two recurring failure modes — agents skipping
+the source (confabulating stars/versions from web/training) and prompt-variance across
+hand-written agents. Follow this recipe; use the per-agent prompt template in
+**`references/external-repo-study-template.md`** (read it before dispatching such a pass):
+
+1. **Scale to stakes.** Full parallel-clone ceremony only when results drive a real decision
+   (an ADR or skill edit). A quick "what's in repo X?" is one agent, or inline.
+2. **One agent per repo/facet, never overlapping. Fill the template — do NOT hand-roll
+   divergent prompts.** Prompt variance is the root failure: a hedged "clone if helpful" in
+   one prompt is the off-ramp a cheap model takes.
+3. **Source-grounding is mandatory** (baked into the template): resolve URL first → `git clone`
+   (required, not optional) → cite-or-drop → identity = URL + SHA + license-from-file.
+4. **Model tier:** Sonnet gather + Opus synthesis by default (gather is mechanical; the judgment
+   is in synthesis). Opus gather only when there is **no** synthesis layer (single-agent study)
+   or the dedup is high-stakes/subtle. Escalate any thin/uncited result to Opus.
+5. **`run_in_background` per agent**; agents write full analysis to disk and return a compact
+   summary (keeps the orchestrator window lean).
+6. **Verify before trusting** — check every result has `CLONED: yes` + cited candidates +
+   URL/SHA *before* synthesising; re-dispatch (hardened) any that skipped grounding.
+7. **Report first, no edits.** Synthesise dedup-across-agents (convergent candidates = highest
+   confidence) + a token-cost watchlist + ranked bundles; let the user bundle-select before any
+   skill edit (per the absorption-pass-protocol convention).
 
 ## Topic-specific patterns
 

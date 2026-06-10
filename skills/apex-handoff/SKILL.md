@@ -1,13 +1,21 @@
 ---
 skill: apex-handoff
 backend: claude
-version: 1.3.0
-last_updated: 2026-05-31
+version: 1.4.0
+last_updated: 2026-06-10
 sources:
   - APEX Design Specification 2026-05-24
   - Planning with Files (OthmanAdi) — github.com/OthmanAdi/planning-with-files
   - gstack (garrytan) — github.com/garrytan/gstack
 staleness_threshold: 30d
+description: >
+  Use when writing or consuming a session handoff — the coding→planning narrative inbox
+  (docs/handoff/YYYY-MM-DD.md) or the planning→coding spec boundary. Triggers: "write the
+  handoff", end of any coding session, "what did the last build learn", draining the handoff
+  at planning session start, deciding where a fact lives (one-home-per-fact routing).
+  CANONICAL home of the four-section handoff contract — apex-plan, apex-code, and global
+  CLAUDE.md carry summaries of it; on conflict, this file wins. Not the spec format itself
+  (apex-plan) or status.md mechanics (apex-orchestrate templates).
 ---
 
 # APEX Handoff Protocol
@@ -107,11 +115,12 @@ status.md In-Flight row:
 
 ## Persistent research files (for complex builds)
 
-For large or research-heavy builds, spawn three persistent files alongside the spec:
+For large or research-heavy builds, spawn two persistent files alongside the spec:
 
 ```
 docs/findings/{spec-name}.md   ← research results (save every 2 tool calls)
-docs/progress/{spec-name}.md   ← session log + test results
+docs/progress/{spec-name}.md   ← session log + test results (also capture-at-halt records —
+                                  drained by apex-plan at session start)
 ```
 
 Purpose: filesystem as memory — these survive context resets and `/clear`.

@@ -1,14 +1,15 @@
 ---
 skill: apex-animation
 backend: claude
-version: 1.1.0
-last_updated: 2026-06-01
+version: 1.3.0
+last_updated: 2026-06-10
 sources:
   - Motion — motion.dev
   - GSAP (now 100% free) — gsap.com
   - SwiftUI Animations — developer.apple.com/documentation/swiftui/animations
   - MagicUI — github.com/magicuidesign/magicui
   - Vercel React View Transitions — github.com/vercel-labs/agent-skills
+  - Emil Kowalski design-engineering — animations.dev
 staleness_threshold: 30d
 description: >
   Use when adding motion — transitions, entrance/exit, scroll effects, gestures, page
@@ -50,40 +51,7 @@ native, SwiftUI provides them built-in; never reach for a JS animation lib on an
 | Page transitions (Next.js) | React View Transitions API | Native browser API, zero JS overhead |
 | Copy-paste animated components | MagicUI | Pre-built, production-ready, MIT licensed |
 
-## Motion (Framer Motion) patterns
-
-```javascript
-import { motion, AnimatePresence } from "motion/react"
-
-// Entrance/exit
-<AnimatePresence>
-  {show && <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} />}
-</AnimatePresence>
-
-// Spring physics (preferred over duration-based)
-<motion.div animate={{ x: 100 }} transition={{ type: "spring", stiffness: 300, damping: 30 }} />
-
-// Layout animations
-<motion.div layout />  // auto-animates size/position changes
-```
-
-## GSAP patterns
-
-```javascript
-import gsap from "gsap"
-import { ScrollTrigger } from "gsap/ScrollTrigger"
-
-// Timeline sequence
-const tl = gsap.timeline()
-tl.to(".hero", { opacity: 1, y: 0, duration: 0.6 })
-  .to(".subtitle", { opacity: 1, y: 0, duration: 0.4 }, "-=0.2")
-
-// Scroll-linked
-gsap.to(".panel", {
-  xPercent: -100 * (panels.length - 1),
-  scrollTrigger: { trigger: ".container", pin: true, scrub: 1 }
-})
-```
+## GSAP licensing
 
 **GSAP is 100% free** (since 30 Apr 2025, after the Webflow acquisition) — including all
 formerly-paid Club plugins (SplitText, MorphSVG, DrawSVG, etc.) for personal and commercial
@@ -94,15 +62,29 @@ use. SplitText was rewritten ~50% smaller. No licence gate to consider any more.
 - **Always** wrap animations in `prefers-reduced-motion` check
 - Motion must add meaning — not decoration for its own sake
 - No looping animations that cannot be paused
+- Reduced motion means *fewer and gentler*, not none — keep opacity/colour transitions that aid
+  comprehension; remove movement, position, and scale. (The impl global kill-all is the safe
+  floor; prefer per-component reduced variants where feasible.)
 
-```css
-@media (prefers-reduced-motion: reduce) {
-  *, *::before, *::after { animation-duration: 0.01ms !important; transition-duration: 0.01ms !important; }
-}
-```
+Ownership: apex-animation owns the reduced-motion *implementation* (the global CSS kill-switch
+lives in impl.md); apex-accessibility owns the requirement.
 
 In Motion: `useReducedMotion()` hook returns `true` when user prefers reduced motion — use it.
 In SwiftUI: read `@Environment(\.accessibilityReduceMotion)` and drop/shorten the animation.
+
+## Should it animate at all? (decide before "how")
+
+Motion budget is a function of frequency — decide by how often the user sees it:
+
+| Frequency | Decision |
+|-----------|----------|
+| 100+×/day (keyboard shortcuts, command palette) | No animation, ever |
+| Tens×/day (hover, list nav) | Remove or drastically reduce |
+| Occasional (modals, drawers, toasts) | Standard animation |
+| Rare / first-time (onboarding, celebration) | Can add delight |
+
+**Never animate keyboard-initiated actions** — they repeat hundreds of times/day; motion makes
+them feel laggy (Raycast's command palette has no open/close animation by design).
 
 ## Timing guidelines
 
@@ -112,6 +94,10 @@ In SwiftUI: read `@Environment(\.accessibilityReduceMotion)` and drop/shorten th
 | Component (modal, drawer) | 250–350ms | spring or ease-in-out |
 | Page transition | 300–500ms | ease-in-out |
 | Scroll storytelling | scrub-based | linear (ScrollTrigger) |
+
+**Never use `ease-in` for UI** — it delays the start, exactly where the eye is watching, so it
+feels slower than `ease-out` at the same duration. Built-in curves are weak; prefer a strong
+custom curve, e.g. `--ease-out: cubic-bezier(0.23, 1, 0.32, 1)`.
 
 ## Escalation rules
 

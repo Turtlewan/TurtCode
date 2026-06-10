@@ -5,6 +5,27 @@ On another stack, follow the bound stack skill's patterns and the swaps in `impl
 assumptions (e.g. Python arq / APScheduler / a SQLite-backed queue). These are *one stack's
 illustration* of the stack-neutral rules in `impl.md`.
 
+## Core BullMQ concepts
+
+- **Queue** — named channel for jobs; producers add jobs here
+- **Worker** — consumes jobs from a queue; runs in a separate process
+- **Job** — unit of work with a name, data payload, and options
+- **Repeatable job** — cron-scheduled job managed by BullMQ
+- **FlowProducer** — chains jobs with parent/child dependencies
+- **Dead letter queue** — failed jobs moved here after max retries exhausted
+
+## Job options decision table
+
+| Option | When to use | Example value |
+|--------|------------|---------------|
+| `attempts` | Any job that can fail transiently | 3–5 |
+| `backoff` | Always pair with attempts | `{ type: 'exponential', delay: 2000 }` |
+| `delay` | Schedule job for future execution | `5000` (ms) |
+| `priority` | Time-sensitive jobs mixed with bulk | `1` (higher = more urgent) |
+| `removeOnComplete` | High-volume queues (keep last N) | `{ count: 1000 }` |
+| `removeOnFail` | Debugging mode (keep failed jobs) | `false` (default — keep them) |
+| `timeout` | Long-running jobs with a time limit | `60000` (ms) |
+
 ## Redis connection (required config)
 
 ```typescript
@@ -71,6 +92,10 @@ await queue.add(
   }
 )
 ```
+
+- Use `repeat: { pattern: '0 * * * *' }` for cron expressions; `repeat: { every: 60000 }` for interval-based (every 60 seconds)
+- Always name repeatable jobs — the stable `jobId` prevents duplicates on restart
+- Remove stale repeatable jobs on deploy: call `queue.removeRepeatable()` for old patterns
 
 ## Bull Board setup (Express, auth-gated)
 

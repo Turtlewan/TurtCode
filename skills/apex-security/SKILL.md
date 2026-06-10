@@ -1,8 +1,8 @@
 ---
 skill: apex-security
 backend: claude
-version: 1.2.0
-last_updated: 2026-06-01
+version: 1.3.0
+last_updated: 2026-06-10
 sources:
   - OWASP Top 10 (2025) — owasp.org/Top10/2025
   - NIST SP 800-63B — pages.nist.gov/800-63-3/sp800-63b
@@ -46,17 +46,7 @@ dependency/supply-chain integrity, user-generated content rendered as HTML.
 - Are we building auth from scratch or extending existing?
 - What third-party services have access to user data?
 
-## Trade-off frameworks
-
-Session tokens vs JWTs:
-- Sessions: server-side revocation, simpler, requires session store
-- JWTs: stateless, harder to revoke, suitable for microservices
-- Default recommendation: sessions for monoliths, JWTs for distributed systems
-
-RBAC vs ABAC:
-- RBAC: simple, role-based, good for most apps
-- ABAC: flexible, attribute-based, needed for fine-grained permissions
-- Default: RBAC unless requirements demand ABAC
+For session-vs-JWT and RBAC trade-off decisions, defer to apex-auth's deeper decision tables.
 
 ## Review checklist
 

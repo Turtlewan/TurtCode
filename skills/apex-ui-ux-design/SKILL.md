@@ -1,8 +1,8 @@
 ---
 skill: apex-ui-ux-design
 backend: claude
-version: 1.3.0
-last_updated: 2026-06-03
+version: 1.5.0
+last_updated: 2026-06-10
 sources:
   - Apple HIG + Liquid Glass (WWDC25) — developer.apple.com/design/human-interface-guidelines
   - docs/technical/adr/ADR-013-app-flow-artifact.md
@@ -10,6 +10,7 @@ sources:
   - UI UX Pro Max (nextlevelbuilder) — github.com/nextlevelbuilder/ui-ux-pro-max-skill
   - Web Quality Skills (addyosmani) — github.com/addyosmani/web-quality-skills
   - UX/UI 2026 trend surveys — uxpin / envato / uxdesign.cc
+  - design-taste-frontend (taste-skill) — github.com/Leonxlnx/taste-skill
 staleness_threshold: 30d
 description: >
   Use when designing screens, flows, or visual identity — new screens, redesigns,
@@ -83,6 +84,9 @@ holds but the mechanism changes. Prefer the platform's native components over re
 - What is the emotional tone? (trustworthy, energetic, minimal, bold)
 - What existing design system / component library / platform conventions apply?
 - Are there brand colours, typography, or motion constraints?
+- Does the target platform have an *official* design system (GOV.UK, IBM Carbon, Microsoft
+  Fluent, GitHub Primer, Shopify Polaris)? If so, install and use the official package — don't
+  reinvent it.
 
 ## Industry-specific design reasoning
 
@@ -103,13 +107,14 @@ Before any UI spec is marked ready:
 - [ ] No emoji as icons — SVG (web: Lucide/Heroicons) or SF Symbols (native)
 - [ ] Clear pointer affordance on clickable elements (web: `cursor-pointer`; native: standard controls)
 - [ ] Hover/press transitions 150–300ms (web `:hover`; native press states — hover only where a pointer exists)
-- [ ] Text contrast ≥ 4.5:1 (light), ≥ 3:1 (dark / large text & UI)
 - [ ] Visible focus states for keyboard/switch navigation
-- [ ] `prefers-reduced-motion` (web) / Reduce Motion (native) respected — no mandatory animations
 - [ ] Adaptive across the target surfaces (web: 375/768/1024/1440; native: size classes)
 - [ ] Loading states defined for all async UI
 - [ ] Empty states defined (no blank screens) — message + CTA
 - [ ] Error states defined (inline, not just toasts)
+- [ ] Full-height/hero sections use `min-h-[100dvh]`, never `h-screen` (iOS Safari toolbar collapse causes a layout jump)
+
+Contrast / touch targets / reduced motion: owned by apex-accessibility — defer.
 
 ## Generic-AI ("slop") detection — reject these before shipping a UI spec
 
@@ -124,6 +129,10 @@ redesign with product-specific intent (see § Industry-specific design reasoning
 - Default font stack with no personality (plain `font-sans` / Inter everywhere)
 - Cards nested inside cards; rounded corners on things that shouldn't be rounded
 - The UI describing its own features in prose when the controls already speak for themselves
+- Template placeholder content: "John Doe" names, generic egg/Lucide-user avatars, round fake
+  numbers (`99.99%`, `50%`), "Acme"/"Nexus" brand names, filler verbs ("Elevate", "Seamless",
+  "Unleash", "Next-Gen"). Use organic names, believable data (`47.2%`), concrete verbs.
+- Em-dashes in UI copy as a writing tell — prefer commas/parentheses/restructured sentences.
 
 The fix is always the same: pick an explicit direction (purpose / audience / tone / one
 memorable detail / constraints) and design to the product domain, not the template.
@@ -151,7 +160,6 @@ Report shape: per-dimension score + one concrete fix each; then the 3 highest-im
 ## Interaction design rules
 
 - **Animation**: 150–300ms micro-interactions, 300–500ms transitions; motion communicates state change
-- **Touch targets**: ≥ 44×44pt (iOS) / 48dp (Android) / 24×24px min (web, WCAG 2.2 §2.5.8)
 - **Form validation**: inline, real-time — not on submit only
 - **State persistence**: web → reflect filter/search in URL (shareable); native → app navigation state
 - **Dark mode**: required if the product offers it — test both
@@ -160,13 +168,11 @@ Report shape: per-dimension score + one concrete fix each; then the 3 highest-im
 ## Escalation rules
 
 BLOCK (halt spec):
-- Colour contrast below 4.5:1 for body text
 - No keyboard/switch navigation defined for interactive elements
-- Animations with no reduced-motion fallback
 
 FLAG (note in spec):
 - Layout untested at smallest target (web 375px / native compact size class)
 - Missing empty or error state definition
-- Icon-only buttons without accessible label
 - Decorative-only motion → apex-animation for necessity check
 - Undefined dark-mode / design tokens → apex-design-system
+- Redesign silently changes a URL/slug, nav label, or form field `name` — preserve it or call out the change (SEO / muscle-memory / integration breakage)

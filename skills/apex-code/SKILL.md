@@ -1,8 +1,8 @@
 ---
 skill: apex-code
-backend: claude
-version: 1.9.0
-last_updated: 2026-06-03
+backend: deepseek
+version: 1.10.0
+last_updated: 2026-06-10
 sources:
   - APEX Design Specification 2026-05-24
   - GSD (Get Shit Done) — github.com/gsd-build/get-shit-done
@@ -63,13 +63,14 @@ Pre-flight:
    - If assumption is wrong AND impact is `Low` → log, proceed
    - If ## Assumptions section is missing → note it in decisions log, proceed (spec was written before this rule)
 
-   **b. Simplicity sweep (Simplicity First)**
+   **b. Simplicity flag (Simplicity First — flag, don't act)**
+   The spec is authored by the stronger planning model — do NOT second-guess its approach.
    For each task in ## Tasks, before implementing:
-   - Estimate: could this task be done with significantly less code than the spec implies?
-   - If yes: implement the simpler version. Log the decision:
-     "Task N: simplified from [spec approach] to [simpler approach] — same acceptance criteria met."
-   - Simpler is always preferred if acceptance criteria are still satisfied.
-   - If spec says 200 lines and 50 lines does the job: write 50. Document why.
+   - If you see a significantly simpler implementation that would meet the same acceptance
+     criteria: implement the task **as specified**, and log the alternative in the decisions
+     table: "Task N: simpler alternative exists — [one line]. Review needed ⚠️."
+   - Exception (apply + log, no flag): purely mechanical reductions — a branch the spec itself
+     makes unreachable, a literal the spec lists twice. Nothing that changes the approach.
 
    **c. Surgical scope lock (Surgical Changes)**
    List every file you intend to touch. Cross-reference against ## Files to Change.
@@ -87,10 +88,15 @@ Pre-flight:
 
 7. **Wave Analysis** — runs after Karpathy Pre-Flight, before the first file is touched:
 
-   For every pair of tasks (A, B) in ## Tasks, check all three:
+   **If the spec ships a `## Wave plan` section, use it verbatim — skip the pairwise analysis
+   entirely.** Otherwise, for every pair of tasks (A, B) in ## Tasks, check all three:
    - **File conflict**: both tasks write to the same file path → B depends on A
-   - **Output dependency**: B's inputs are produced by A (stated in spec or inferable) → B depends on A
+   - **Output dependency**: B's inputs are produced by A, as stated in the spec → B depends on A
    - **Shared state**: both tasks modify the same schema, migration, or shared config file → B depends on A
+
+   Never infer an unstated dependency relationship: if you are uncertain whether B depends on A,
+   treat it as dependent (run sequentially). Independence must be evident from the spec's stated
+   files and inputs — not guessed.
 
    Group tasks with no dependencies on each other into the same wave.
 
@@ -351,6 +357,7 @@ At session end, append:
 
 ## Hard blocks — never do regardless of autonomy level
 
+(Summary — **apex-governance owns the canonical list**; on any conflict, governance wins.)
 These actions are permanently forbidden. Do not attempt them:
 - git push to main or master
 - git merge
@@ -361,6 +368,10 @@ These actions are permanently forbidden. Do not attempt them:
 - Any action that disables or bypasses governance rules
 
 ## Autonomy level reference
+
+(Summary for in-build checks — **apex-governance owns the canonical definitions**; on any
+conflict, governance wins. Note: the per-spec commit prompt in global CLAUDE.md applies at
+every level — committing with the user's explicit approval is never blocked by L2/L3.)
 
 L0: Read only — no writes, no commands
 L1: Write files with per-file confirmation — no commands

@@ -45,6 +45,11 @@ Simplicity check: {considered simpler approach? yes/no — if yes, why this vers
 - [ ] Task 2: {description} — files: {full/path/c.ts} — done when: {observable outcome}
 - [ ] Task 3: {description} — files: {full/path/d.ts} — done when: {observable outcome}
 
+## Wave plan
+<!-- Required for specs with ≥3 tasks. Planning derives this from stated dependencies; coding
+     executes it verbatim (no dependency inference). Tasks in the same wave run in parallel. -->
+Wave 1: [task 1, task 2] | Wave 2: [task 3]
+
 ## Permissions
 
 The following actions will run autonomously during build.

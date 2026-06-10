@@ -1,15 +1,11 @@
 ---
 skill: apex-data
 backend: claude
-version: 1.3.0
-last_updated: 2026-06-01
+version: 1.4.0
+last_updated: 2026-06-10
 sources:
   - Prisma Migrations — prisma.io/docs/guides/database/developing-with-prisma-migrate
   - Alembic — alembic.sqlalchemy.org
-  - Firecrawl — github.com/firecrawl/firecrawl
-  - Firecrawl MCP — github.com/firecrawl/firecrawl-mcp-server
-  - Repomix — github.com/yamadashy/repomix
-  - Context7 — github.com/upstash/context7
 staleness_threshold: 30d
 description: >
   Use when designing database schema or migrations — new tables/columns/indexes, breaking schema
@@ -62,19 +58,4 @@ Never rename a column in one migration — add new, backfill, remove old.
 - [ ] Large table migrations reviewed for lock impact
 - [ ] Schema reconciles with the conceptual model (`data-model.md`); any new entity added to it
 
-## External data gathering tools
-
-When specs require pulling data from external sources or the web:
-
-**Firecrawl**: converts any URL to clean markdown/JSON for LLM consumption
-- Single URL scraping, full site crawling, or batch processing thousands of URLs
-- Agent endpoint: describe data needs in natural language — Firecrawl searches, navigates, and returns structured results
-- Use for: scraping competitor data, ingesting documentation, pulling pricing data
-- Output: markdown, structured JSON, or schema-validated extraction
-
-**Repomix**: pack the entire codebase into a single AI-readable file
-- Use for: cross-cutting data flow analysis, finding all usages of a schema field
-- `repomix --include "prisma/**" --include "src/models/**"` for data-layer analysis
-
-**Context7**: live library documentation — prevents hallucinated Prisma/SQL patterns
-- Use before writing any migration to verify current Prisma schema syntax
+External data gathering (scraping, repo packing, live docs) is out of scope here — see apex-research.

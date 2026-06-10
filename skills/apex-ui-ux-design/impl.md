@@ -1,12 +1,13 @@
 ---
 skill: apex-ui-ux-design
 backend: deepseek
-version: 1.2.0
-last_updated: 2026-06-02
+version: 1.4.0
+last_updated: 2026-06-10
 sources:
   - Apple HIG + Liquid Glass (WWDC25) — developer.apple.com/design/human-interface-guidelines
   - Vercel Design Guidelines — vercel.com/design
   - WCAG 2.2 — w3.org/TR/WCAG22
+  - design-taste-frontend (taste-skill) — github.com/Leonxlnx/taste-skill
 staleness_threshold: 30d
 description: >
   Coding-mode enforcement for UI/UX quality — interactive states, empty/loading/error
@@ -33,16 +34,16 @@ no `:hover`, no px breakpoints on native.
 - Hardcode widths that break with translated or longer text
 - Leave empty states as blank screens — always provide a message and CTA
 - Leave error states unhandled — always show a user-facing message
-- Use decorative-only motion with no reduced-motion fallback
 - (web) Omit `cursor-pointer` from clickable non-button elements (div, li, card)
-- (web/mobile) Set touch targets below 44×44pt (iOS) / 48dp (Android) / 24×24px (web)
+- (web) Use `h-screen` for full-height/hero sections — use `min-h-[100dvh]` (iOS Safari toolbar collapse → layout jump)
+- Ship template placeholder content — "John Doe", egg avatars, round fake numbers (`99.99%`/`50%`), "Acme"/"Nexus" names, filler verbs ("Elevate"/"Seamless"/"Unleash"); use organic names, believable data, concrete verbs
+- (redesign) Silently change URLs/slugs, nav labels, or form field `name` attributes — preserve unless the change is explicitly requested, and flag any change
 
 ## ALWAYS do
 
 - Define hover (where a pointer exists), focus, active/press, and disabled states for every interactive component
 - Define loading state (skeleton or spinner) for all async content
 - Define empty state with a helpful message and a CTA
-- Respect reduced-motion (web `prefers-reduced-motion` / native Reduce Motion)
 - (web) Add `cursor-pointer` + `transition-colors duration-150` to interactive elements
 - (web) Use `focus-visible:ring-2` (not `focus:ring`) to avoid mouse-click focus rings
 - (web) Reflect filter/search state in URL params for shareable links
@@ -50,6 +51,8 @@ no `:hover`, no px breakpoints on native.
 - (web) `tabular-nums` on any updating/aligned numbers — counters, timers, prices, table figures
 - (web) `text-wrap: balance` on headings/short titles; `text-wrap: pretty` on captions/short body (not long prose, code, or `pre`)
 - (web) Nested rounded surfaces use **concentric radius**: `outer = inner + padding`
+
+Contrast / touch targets / reduced motion: owned by apex-accessibility — defer.
 
 ## Interactive element pattern  (web — React + Tailwind)
 
@@ -143,10 +146,10 @@ p.caption, li { text-wrap: pretty; }
 - [ ] (web) Check: updating numbers use `tabular-nums`; headings use `text-wrap: balance`
 - [ ] (web) Check: nested rounded surfaces follow concentric radius
 - [ ] Check: all interactive elements have visible focus state (keyboard/switch test)
-- [ ] Check: contrast ratio ≥ 4.5:1 (devtools / Polypane / native colour check)
 - [ ] Check: empty state and error state defined for all dynamic content
 - [ ] (web) Check: clickable elements have `cursor-pointer`; test at 375px — no horizontal scroll
-- [ ] Check: reduced-motion fallback present for any animation
+- [ ] (web) Check: no `h-screen` on full-height sections — `min-h-[100dvh]` used
+- [ ] Check: no template placeholder content (names/avatars/round numbers/filler verbs)
 
 ## Flag for planning-mode review
 

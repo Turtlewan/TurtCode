@@ -1,8 +1,8 @@
 ---
 skill: apex-search
 backend: deepseek
-version: 1.2.0
-last_updated: 2026-05-31
+version: 1.3.0
+last_updated: 2026-06-10
 sources:
   - pgvector — github.com/pgvector/pgvector
   - Ollama — ollama.com/library
@@ -54,7 +54,7 @@ TypeScript** (`references/postgres-typescript.md`). On the bound store, swap:
 - Ingest the same document twice → no duplicate chunks (content-hash idempotency).
 - Hybrid search → results combine keyword + vector scores via RRF (not vector-only).
 - Embedding dimension matches the vector column definition.
-- Similarity query uses the ANN index where the store has one (verify with the store's query-plan tool).
+- Similarity query uses the ANN index where the store has one. Verify: Postgres — run `EXPLAIN ANALYZE <query>` and confirm an Index Scan on the HNSW/IVFFlat index (not Seq Scan); SQLite — run `EXPLAIN QUERY PLAN <query>` (sqlite-vec is exact brute-force, no ANN index expected).
 
 ## Worked examples (load on demand)
 

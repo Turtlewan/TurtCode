@@ -1,140 +1,67 @@
 ---
 skill: apex-aws
 backend: claude
-version: 1.0.0
-last_updated: 2026-05-28
+version: 1.1.0
+last_updated: 2026-06-10
 sources:
   - AWS Well-Architected Framework — docs.aws.amazon.com/wellarchitected
   - AWS Docs — docs.aws.amazon.com
   - AWS CDK v2 — docs.aws.amazon.com/cdk/v2/guide
 staleness_threshold: 14d
+description: >
+  Use when designing on AWS — IAM/account security posture, Lambda/ECS/RDS/DynamoDB/S3
+  decisions, VPC layout, event-driven wiring, cost traps, multi-account structure.
+  Triggers: "deploy to AWS", "Lambda", "ECS/Fargate", "RDS/Aurora/DynamoDB", "S3 bucket",
+  "IAM role", "our AWS bill", "multi-account". A gotcha sheet, not a service catalogue —
+  frontier-known basics (Well-Architected pillars, compute/database selection tables) are
+  assumed, not restated. Not IaC tool choice or state mechanics (apex-iac), CI/CD pipelines
+  (apex-devops), Kubernetes workload design (apex-k8s), or Azure/GCP.
 ---
 
 # AWS Cloud Architect — Planning Mode
 
 ## When to activate
 Any spec involving AWS infrastructure, cloud architecture decisions, service selection,
-IaC tooling, cost optimization, multi-account setup, or AWS security posture.
+cost optimization, multi-account setup, or AWS security posture. IaC tool choice and
+state mechanics → apex-iac.
 
-## Questions to ask before designing
+## Gotchas — the non-obvious rules
 
-- What is the expected scale and traffic pattern? (serverless vs containers vs EC2)
-- Is this AWS-only or multi-cloud? (determines CDK vs Terraform)
-- What are the compliance requirements? (PCI, HIPAA, SOC2 → affects encryption, logging, isolation)
-- Single account or multi-account? (determines whether Control Tower is needed)
-- What is the team's operational capability? (managed services vs self-managed)
-- What is the cost budget and expected growth? (Reserved Instances vs Savings Plans vs Spot)
+**Compute / data:**
+- **Lambda ↔ RDS: always RDS Proxy.** Each concurrent invocation opens its own DB
+  connection — at scale this exhausts the connection pool without a proxy.
+- **DynamoDB: design access patterns FIRST.** Schema serves queries, not normalization —
+  migrating a wrong key design later means a full table rewrite.
+- **Aurora Serverless v2 for unpredictable load**; plain RDS Multi-AZ for steady production.
 
-## Well-Architected Framework — 6 pillars
+**Security:**
+- **GitHub OIDC trust policy must condition on `sub`** (e.g.
+  `token.actions.githubusercontent.com:sub: "repo:myorg/myrepo:ref:refs/heads/main"`) —
+  without it, *any* GitHub repo can assume the role. (Workflow snippet: impl.md § OIDC.)
+- **S3 public-access block on every bucket** — all four flags; a bucket policy alone is
+  not enough.
+- **Root account: delete root access keys, hardware MFA.** No IAM users for humans —
+  federate via IAM Identity Center; workloads get execution roles only.
+- **IAM Access Analyzer generates least-privilege policies from CloudTrail** — use it
+  instead of hand-guessing actions.
+- Databases never in public subnets; GuardDuty + CloudTrail in **all** regions (attackers
+  use the regions you forgot).
 
-| Pillar | Core question | Key tools |
-|--------|---------------|-----------|
-| Operational Excellence | Can we deploy and recover safely? | CloudWatch, Systems Manager, CloudTrail |
-| Security | Is everything protected by least privilege? | IAM, GuardDuty, Security Hub, KMS |
-| Reliability | Will it stay up? | Multi-AZ, Auto Scaling, Route 53 health checks |
-| Performance Efficiency | Right tool for the job? | Compute Optimizer, CloudFront, ElastiCache |
-| Cost Optimization | Are we paying only for what we use? | Cost Explorer, Savings Plans, Spot |
-| Sustainability | Minimise environmental impact | Graviton, managed services, right-sizing |
+**Cost:**
+- **VPC Endpoints for S3/DynamoDB** eliminate NAT Gateway data-processing charges for that
+  traffic — NAT is a classic silent bill-inflator.
+- Layer purchase models: Savings Plans for baseline, Spot for fault-tolerant batch/CI
+  (up to 90% off), On-Demand for true spikes only. Graviton (ARM) is the cheaper default.
+- Tag everything (`Environment`, `Project`, `Team`, `ManagedBy`) or Cost Explorer can't
+  attribute spend.
 
-## Compute selection guide
+**Async / events:**
+- Every queue processing business-critical work needs a **DLQ with an alarm on depth > 0**.
+- SQS is at-least-once — consumers must be idempotent (apex-system-design).
 
-| Pattern | Service | When |
-|---------|---------|------|
-| Event-driven, short-lived | Lambda | <15 min, variable traffic, no idle cost |
-| Containerised, AWS-native | ECS Fargate | No cluster ops, tight AWS integration |
-| Containerised, Kubernetes | EKS Auto Mode | K8s ecosystem, portability needed |
-| Long-running, custom OS | EC2 Auto Scaling | Legacy apps, GPU, full OS control |
-| Simple web app | App Runner | Minimal infra knowledge required |
-| Batch / ML training | EC2 Spot + Batch | Fault-tolerant, up to 90% cost reduction |
-
-## IaC selection
-
-| Situation | Tool |
-|-----------|------|
-| AWS-only, developer team | **CDK v2** (TypeScript/Python — compiles to CloudFormation) |
-| Multi-cloud or existing HCL estate | **Terraform** (AWS provider) |
-| Serverless-first, Lambda-heavy | **AWS SAM** (built on CloudFormation) |
-| Existing CloudFormation investment | **CloudFormation** (YAML/JSON) |
-
-Never author raw ARM JSON or CloudFormation YAML for new work — use CDK or SAM.
-
-## Database selection
-
-```
-Relational, moderate throughput → RDS PostgreSQL (Multi-AZ for production)
-Relational, high throughput / global → Aurora (5× MySQL throughput; Global Tables)
-Unpredictable / serverless → Aurora Serverless v2
-Key-value, single-digit ms, any scale → DynamoDB
-Sub-ms cache layer → ElastiCache (Redis/Valkey)
-Analytics / OLAP → Redshift
-```
-
-DynamoDB: design access patterns FIRST. Schema serves queries, not normalization.
-Lambda + RDS: always use RDS Proxy (prevents connection exhaustion at scale).
-
-## Security baseline
-
-```
-IAM:
-- No long-term human credentials → federate via IAM Identity Center
-- No root access keys → delete them; hardware MFA on root account
-- Workloads → execution roles only (EC2 instance profiles, Lambda roles, ECS task roles)
-- Use IAM Access Analyzer to generate least-privilege policies from CloudTrail
-
-Network:
-- 3-tier VPC: public (ALB, NAT GW) → private app → private DB
-- Never put databases in public subnets
-- VPC Endpoints for S3 and DynamoDB (eliminates NAT Gateway charges for these)
-- VPC Flow Logs enabled on all production VPCs
-
-Detection:
-- GuardDuty enabled in all regions (auto-detects crypto mining, credential compromise)
-- Security Hub aggregates findings; set standard: AWS FSBP
-- CloudTrail in all regions with log integrity validation → Log Archive account
-```
-
-## Cost optimisation
-
-**Layer the three models:**
-1. Savings Plans / Reserved Instances → baseline (predictable) load (up to 72% off)
-2. Spot Instances → fault-tolerant batch/CI (up to 90% off)
-3. On-Demand → true spikes only
-
-**Always tag every resource:** `Environment`, `Project`, `Team`, `ManagedBy`
-**Use Compute Optimizer** for right-sizing recommendations (EC2, Fargate, Lambda, EBS).
-**S3 Intelligent-Tiering** for data with unknown/changing access patterns.
-**VPC Endpoints** to eliminate NAT Gateway data processing charges for AWS service traffic.
-
-## Multi-account (Control Tower)
-
-Use when: multiple teams, environments, or compliance boundaries exist.
-
-```
-Root
-├── Management Account (Control Tower only)
-├── Security OU
-│   ├── Log Archive Account (immutable CloudTrail + Config logs)
-│   └── Audit Account (GuardDuty + Security Hub aggregation)
-├── Infrastructure OU (shared networking, DNS, Transit Gateway)
-└── Workloads OU
-    ├── Sandbox (loose guardrails, experiment freely)
-    ├── Dev / Staging
-    └── Production
-```
-
-**Account Factory**: self-service account vending with pre-applied guardrails and IAM Identity Center.
-
-## Event-driven patterns
-
-```
-Work queues:        SQS (at-least-once) or SQS FIFO (exactly-once, ordered)
-Fan-out:            SNS → multiple SQS queues
-Service integration: EventBridge custom bus (200+ native AWS integrations)
-Real-time streams:  Kinesis Data Streams (ordered, replayable, 24h–365d retention)
-Distributed workflows: Step Functions (orchestration with state, retry, saga)
-```
-
-Every queue processing business-critical work needs a Dead Letter Queue (DLQ) with an alarm on depth > 0.
+**Structure:**
+- Multi-account (Control Tower) only when multiple teams/environments/compliance
+  boundaries exist — a solo project doesn't need an OU tree.
 
 ## Review checklist
 
@@ -146,8 +73,10 @@ Every queue processing business-critical work needs a Dead Letter Queue (DLQ) wi
 - [ ] All resources tagged: Environment, Project, Team, ManagedBy
 - [ ] Cost alerts configured (AWS Budgets with SNS notification)
 - [ ] Multi-AZ for all production databases and load-balanced compute
-- [ ] IaC tool chosen and documented (CDK / Terraform / SAM)
+- [ ] IaC tool chosen and documented (→ apex-iac)
 - [ ] Spot Instances considered for any batch/CI/fault-tolerant workloads
+- [ ] Lambda that touches RDS goes through RDS Proxy
+- [ ] OIDC trust policies condition on repo + ref (`sub` claim)
 
 ## Standards
 

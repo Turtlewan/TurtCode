@@ -1,8 +1,8 @@
 ---
 skill: apex-devops
 backend: deepseek
-version: 1.1.0
-last_updated: 2026-06-01
+version: 1.2.0
+last_updated: 2026-06-10
 sources:
   - Docker Best Practices — docs.docker.com/develop/dev-best-practices
   - GitHub Actions security hardening — docs.github.com/en/actions/security-guides
@@ -88,8 +88,12 @@ jobs:
 
 ## Verification checklist
 
-- [ ] docker build completes without errors; container runs as non-root, health check passes
+- [ ] docker build completes without errors — check: `docker build -t app-verify .` (exit 0)
+- [ ] Container runs as non-root — check: `docker run --rm --entrypoint whoami app-verify` (output must NOT be `root`)
+- [ ] Health check passes — check: `docker run -d --name app-verify app-verify`, then `docker inspect --format '{{.State.Health.Status}}' app-verify` (expect `healthy`); clean up with `docker rm -f app-verify`
 - [ ] No secrets visible in: docker inspect, docker history, git log
 - [ ] .env / secrets in .gitignore and .dockerignore
-- [ ] Actions pinned to SHA; workflow `permissions:` least-privilege
+- [ ] No mutable-tag Actions — check: `grep -rnE 'uses:.*@v[0-9]' .github/workflows/` (any match = fail; pin to commit SHA + version comment)
+- [ ] Base images digest-pinned or exact-version — check: `grep -nE 'FROM .*:(latest|[0-9]+)$' Dockerfile` (any match = fail; `:latest` and bare major tags like `:20` are mutable)
+- [ ] Workflow `permissions:` least-privilege — check: `grep -rLn 'permissions:' .github/workflows/` (any file listed = fail)
 - [ ] CI steps match the bound stack's Verification Recipe (not assumed npm)

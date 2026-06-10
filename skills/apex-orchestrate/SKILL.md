@@ -1,8 +1,8 @@
 ---
 skill: apex-orchestrate
 backend: claude
-version: 1.3.0
-last_updated: 2026-06-08
+version: 1.4.0
+last_updated: 2026-06-10
 sources:
   - APEX Design Specification 2026-05-24
   - GSD (Get Shit Done) — github.com/gsd-build/get-shit-done
@@ -18,14 +18,10 @@ description: >
 Run at the start of every session. Orient, route, hand off — nothing else.
 You contain zero domain knowledge. All domain knowledge lives in specialist skills.
 
-## Why this works — context rot principle
+## Context discipline
 
-As a session grows, token windows fill and quality degrades ("context rot"). APEX prevents this by:
-- Starting each specialist, worker, and agent with a fresh scoped context (~200k tokens)
-- Keeping the main orchestrator window at 30–40% by delegating to subagents
-- Storing decisions in persistent artifacts (docs/status.md, handoff docs) so context survives session boundaries
-
-New agents load project vision + decisions before acting — they don't rely on conversation memory.
+Delegate deep work to fresh-context subagents and persist decisions to artifacts
+(docs/status.md, handoffs) — the main window stays lean and state survives session boundaries.
 
 ### Dispatch return contract (invariant — ADR-015)
 
@@ -92,7 +88,9 @@ Match the user's message to this table. If multiple match, route to the most spe
 | plan / design / architect / spec / think about / let's build / what if | apex-plan |
 | build / implement / code / write / execute / start build | apex-code |
 | debug / investigate / root cause / broken / bug / not working | apex-debug |
-| review / audit / check quality / code review | apex-review |
+| review this spec / review the plan | apex-plan (dispatched spec review) |
+| code review / audit built code | dispatch the `apex-reviewer` agent on the changed files (advisory — there is no standalone review skill) |
+| audit the skills / skill stocktake | apex-refresh (--stocktake) |
 | deep dive / research deeply / explore options | apex-deep-dive |
 | refresh / update skill / knowledge is stale | apex-refresh |
 | next / what's next / next step / what should I work on / where are we | auto-detect (see below) |
@@ -114,7 +112,10 @@ Scan user message + spec content for domain keywords from ~/.claude/registry/dom
 
 For each matched domain:
 - In planning mode: load domain's SKILL.md into context
-- In coding mode: load domain's impl.md into context
+- In coding mode: do NOT load whole impl.md files here — apex-code owns coding-side loading
+  (the two-tier *core* of each bound `stack_skills` entry plus matched capability impl cores;
+  see apex-code § Verification). Loading full impl.md files at routing time double-loads and
+  defeats the core/references split.
 
 Rules:
 - Multiple specialists can be active simultaneously
@@ -202,7 +203,8 @@ If user asks what level they're at: read docs/status.md and report it.
 
 ## Hard block enforcement (orchestrator level)
 
-If a user requests any of these actions, refuse and explain — regardless of level:
+**apex-governance owns the canonical hard-block list** — consult it; never maintain a separate
+copy here. Most-hit examples (refuse and explain, regardless of level):
 - "push to main" → "This is a permanent hard block. Push to a branch and create a PR instead."
 - "merge the PR" → "This is a permanent hard block. Merge via the GitHub UI after your review."
 - "drop the users table" → "This is a permanent hard block. Use a migration to remove the table safely."

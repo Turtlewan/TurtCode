@@ -1,8 +1,8 @@
 ---
 skill: apex-mobile
 backend: deepseek
-version: 1.1.0
-last_updated: 2026-06-01
+version: 1.2.0
+last_updated: 2026-06-10
 sources:
   - Expo Docs — docs.expo.dev
   - React Native (New Architecture) — reactnative.dev
@@ -31,8 +31,6 @@ NEVER:
 - Use React Native's built-in `Image` component — use `expo-image` for caching
 - Hardcode API URLs — use `expo-constants` with `app.json` `extra` field
 - Skip SafeAreaView on any screen — notches and home bars vary per device
-- Push to production without testing on both iOS simulator AND Android emulator
-- Commit `.env` or any file with real API keys/secrets
 
 ALWAYS:
 - Use Expo managed workflow; only eject to bare when a native module requires it
@@ -108,202 +106,8 @@ eas build:configure
 }
 ```
 
-## Root layout — app/_layout.tsx
-
-```typescript
-import { Stack } from 'expo-router';
-import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { SafeAreaProvider } from 'react-native-safe-area-context';
-import { GestureHandlerRootView } from 'react-native-gesture-handler';
-
-const queryClient = new QueryClient({
-  defaultOptions: {
-    queries: {
-      staleTime: 1000 * 60 * 5,    // 5 minutes
-      retry: 2,
-    },
-  },
-});
-
-export default function RootLayout() {
-  return (
-    <GestureHandlerRootView style={{ flex: 1 }}>
-      <SafeAreaProvider>
-        <QueryClientProvider client={queryClient}>
-          <Stack>
-            <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
-            <Stack.Screen name="modal" options={{ presentation: 'modal' }} />
-          </Stack>
-        </QueryClientProvider>
-      </SafeAreaProvider>
-    </GestureHandlerRootView>
-  );
-}
-```
-
-## Auth store — Zustand + SecureStore
-
-```typescript
-import { create } from 'zustand';
-import * as SecureStore from 'expo-secure-store';
-
-interface AuthState {
-  token: string | null;
-  user: User | null;
-  isLoading: boolean;
-  signIn: (token: string, user: User) => Promise<void>;
-  signOut: () => Promise<void>;
-  hydrate: () => Promise<void>;
-}
-
-export const useAuthStore = create<AuthState>((set) => ({
-  token: null,
-  user: null,
-  isLoading: true,
-
-  signIn: async (token, user) => {
-    await SecureStore.setItemAsync('auth_token', token);
-    await SecureStore.setItemAsync('auth_user', JSON.stringify(user));
-    set({ token, user });
-  },
-
-  signOut: async () => {
-    await SecureStore.deleteItemAsync('auth_token');
-    await SecureStore.deleteItemAsync('auth_user');
-    set({ token: null, user: null });
-  },
-
-  hydrate: async () => {
-    try {
-      const token = await SecureStore.getItemAsync('auth_token');
-      const userStr = await SecureStore.getItemAsync('auth_user');
-      const user = userStr ? JSON.parse(userStr) : null;
-      set({ token, user, isLoading: false });
-    } catch {
-      set({ isLoading: false });
-    }
-  },
-}));
-```
-
-## API client — React Query + auth
-
-```typescript
-import Constants from 'expo-constants';
-import { useAuthStore } from '@/stores/auth';
-
-const API_URL = Constants.expoConfig?.extra?.apiUrl ?? 'http://localhost:3000';
-
-async function apiFetch<T>(path: string, options?: RequestInit): Promise<T> {
-  const token = useAuthStore.getState().token;
-  const res = await fetch(`${API_URL}${path}`, {
-    ...options,
-    headers: {
-      'Content-Type': 'application/json',
-      ...(token ? { Authorization: `Bearer ${token}` } : {}),
-      ...options?.headers,
-    },
-  });
-
-  if (!res.ok) {
-    const error = await res.json().catch(() => ({ message: 'Request failed' }));
-    throw new Error(error.message ?? `HTTP ${res.status}`);
-  }
-
-  return res.json();
-}
-
-// React Query hook
-export function useProfile() {
-  return useQuery({
-    queryKey: ['profile'],
-    queryFn: () => apiFetch<User>('/api/profile'),
-    enabled: !!useAuthStore.getState().token,
-  });
-}
-```
-
-## Screen template — SafeArea + keyboard
-
-```typescript
-import { KeyboardAvoidingView, Platform, ScrollView, StyleSheet } from 'react-native';
-import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { Image } from 'expo-image';
-
-export default function ProfileScreen() {
-  const insets = useSafeAreaInsets();
-
-  return (
-    <KeyboardAvoidingView
-      style={{ flex: 1 }}
-      behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
-    >
-      <ScrollView
-        contentContainerStyle={[
-          styles.content,
-          { paddingBottom: insets.bottom + 16 },
-        ]}
-        keyboardShouldPersistTaps="handled"
-      >
-        {/* expo-image: caching, blurhash placeholder, faster than RN Image */}
-        <Image
-          source={{ uri: user.avatarUrl }}
-          placeholder={{ blurhash: user.avatarBlurhash }}
-          style={styles.avatar}
-          contentFit="cover"
-          transition={200}
-        />
-      </ScrollView>
-    </KeyboardAvoidingView>
-  );
-}
-
-const styles = StyleSheet.create({
-  content: {
-    padding: 16,
-    gap: 16,
-  },
-  avatar: {
-    width: 80,
-    height: 80,
-    borderRadius: 40,
-  },
-});
-```
-
-## Push notifications
-
-```typescript
-import * as Notifications from 'expo-notifications';
-import * as Device from 'expo-device';
-import Constants from 'expo-constants';
-
-Notifications.setNotificationHandler({
-  handleNotification: async () => ({
-    shouldShowAlert: true,
-    shouldPlaySound: true,
-    shouldSetBadge: true,
-  }),
-});
-
-export async function registerForPushNotifications(): Promise<string | null> {
-  if (!Device.isDevice) return null;  // simulators can't receive push
-
-  const { status: existing } = await Notifications.getPermissionsAsync();
-  let finalStatus = existing;
-
-  if (existing !== 'granted') {
-    const { status } = await Notifications.requestPermissionsAsync();
-    finalStatus = status;
-  }
-
-  if (finalStatus !== 'granted') return null;
-
-  const projectId = Constants.expoConfig?.extra?.eas?.projectId;
-  const { data: token } = await Notifications.getExpoPushTokenAsync({ projectId });
-  return token;
-}
-```
+> Full wiring: read references/expo-patterns.md when the task touches the root layout/providers,
+> auth/token storage, API client/server state, screens (SafeArea + keyboard), or push notifications.
 
 ## EAS commands
 
@@ -332,14 +136,25 @@ eas submit --platform ios
 eas submit --platform android
 ```
 
+## Verification Recipe
+
+Run after every task — all three must pass with exit code 0:
+
+```bash
+npx tsc --noEmit      # typecheck
+npx expo-doctor       # Expo config + dependency health
+npx eslint .          # lint
+```
+
 ## Verification checklist
 
+- [ ] Run the Verification Recipe above — `npx tsc --noEmit`, `npx expo-doctor`, `npx eslint .` all pass
 - [ ] Tokens stored in `expo-secure-store` — not AsyncStorage
 - [ ] `expo-image` used instead of React Native `Image`
 - [ ] `SafeAreaView` / `useSafeAreaInsets` on every screen
 - [ ] `KeyboardAvoidingView` with platform-specific `behavior`
 - [ ] Push notification permissions requested with explanation before prompt
-- [ ] App tested on iOS simulator AND Android emulator
+- [ ] **Device testing (iOS simulator AND Android emulator)**: needs a human with simulators/emulators, which the DeepSeek coding backend **does not have**. **DeepSeek must SKIP this step and flag it for planning-mode (Claude) / human review before any production push** — do not guess or mark it done.
 - [ ] `app.json` `scheme` set for deep links
 - [ ] Bundle identifier (iOS) and package name (Android) set before first EAS build
 - [ ] EAS project configured: dev / preview / production profiles in `eas.json`

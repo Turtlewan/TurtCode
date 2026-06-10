@@ -1,8 +1,8 @@
 ---
 skill: apex-plan
 backend: claude
-version: 1.14.1
-last_updated: 2026-06-03
+version: 1.15.0
+last_updated: 2026-06-10
 sources:
   - APEX Design Specification 2026-05-24
   - GSD (Get Shit Done) — github.com/gsd-build/get-shit-done
@@ -30,6 +30,11 @@ question-free specs that DeepSeek can execute without asking anything.
 Before responding to the user's request:
 1. Read docs/status.md — pending specs, open questions, project state, parked items
 2. Read docs/drafts/ — any in-progress specs
+2b. Check docs/progress/*.md — capture-at-halt records for blocked/parked specs. For each:
+    decide **patch-in-place** (resolve the captured decision, edit the spec in docs/changes/,
+    clear the blocked mark) or **re-draft** (pull the spec back to docs/drafts/ and rework).
+    This is planning's judgment — a blocked spec left undrained stalls forever. Delete the
+    progress record once drained.
 3. Read the latest docs/handoff/*.md — the *thin* handoff: decisions, specialist flags,
    blocked actions, discoveries. (What changed lives in git, not the handoff — run
    `git log` / `git diff` only if you need the file-level history. Build/test status and
@@ -76,13 +81,9 @@ and not filed is lost. **Every handoff item must terminate in exactly one of:**
 Land each item's disposition **this session** — do not defer it to "later." The latest
 handoff is read once and never auto-read again, so an undrained item is gone.
 
-**The learning loop (no engine — this rail is it).** A build lesson reaches planning only through the
-handoff; the drain is where it's caught. Most fold into a `feedback` memory. When the *same* lesson
-recurs across multiple handoffs (the memory's recall is your tally — no separate ledger), it has earned
-promotion: treat it as a candidate for `apex-refresh --stocktake` (cross-skill principle) or a direct
-`apex-skill-author` edit. Promotion is always human-gated through those rails — the Iron Law's
-failing-baseline test stays in force, so an instinct-sourced edit is held to the same bar as any other.
-(Why no automatic capture/confidence engine: ADR-011 / `docs/findings/instinct-loop-deep-dive.md`.)
+**The learning loop.** Build lessons fold into `feedback` memories at the drain. A lesson recurring
+across multiple handoffs has earned promotion — route via `apex-refresh --stocktake` or an
+`apex-skill-author` edit (human-gated, Iron Law applies — ADR-011).
 
 ## Planning mode toggle
 
@@ -117,11 +118,8 @@ need *before* drafting; do not draft-then-validate.
 - **Batch and target** (AskUserQuestion-style) — a focused set of the genuine forks, not a
   drip of one-question-at-a-time, and not an exhaustive questionnaire.
 
-Why front-load: this is the primary mechanism for reliable AFK builds — every decision
-resolved here is a mid-build fork that never happens. A planning-time question is cheap
-(you're here, nothing in flight); a build-time fork stalls the build, forces a context
-switch, and may need a re-spec. Asymmetric cost → heavier planning is the cheaper path.
-(The "coding asks at a fork" rule is the safety net; this is the primary mechanism.)
+(Every decision resolved here is a mid-build fork that never happens — heavier planning is
+the cheaper path; coding's fork-routing is only the safety net.)
 
 ### Think Before Speccing
 
@@ -214,11 +212,14 @@ As you build the spec, enforce these rules inline:
 - **Cross-cutting conventions live in the skill's `impl.md`, never copied into the spec** —
   the spec is the task-specific delta; the skill is the shared baseline.
 
-**Karpathy rules while writing:**
-- Every `## Assumptions` item must say what happens if it's wrong (`Stop | Caution | Low`)
-- Every `## Acceptance Criteria` item must use step→verify format — no vague criteria
-- Every `## Tasks` item must have a "done when:" clause — observable, not "it works"
-- Every file in `## Files to Change` must be strictly necessary — no speculative additions
+**Karpathy rules while writing:** apply the readiness gate's *Karpathy Quality Gate* items
+(below) as you draft — don't write loose and rely on the gate to catch it.
+
+**Wave plan — emit it for the executor (specs with ≥3 tasks):** after the task list, add a
+`## Wave plan` section grouping tasks into waves from the stated dependencies
+(`Wave 1: [task 1, task 2] | Wave 2: [task 3]`). You are the stronger reasoner — do the
+dependency analysis here so coding mode executes the grouping verbatim with zero inference.
+Tasks whose independence you can't establish go in sequential waves.
 
 Then dispatch domain review (below), resolve its findings, and run the Readiness Gate (below).
 Only move to docs/changes/ when the gate passes.
@@ -264,16 +265,22 @@ Write an intent doc directly to docs/changes/{short-name}.md (skip drafts/). Str
 ## Gotchas / edge cases
 {things DeepSeek might miss, subtle interactions, ordering constraints}
 
+## Tasks
+1. {one action, exact files named} — done when: {observable check}
+
 ## Files to touch
 - {full path} — {what changes broadly}
 ```
 
-**What planning provides:** intent clarity, trade-off reasoning, and edge-case awareness that Claude is uniquely good at but would be lost once the session ends.
-
-**What coding mode backfills:** task breakdown, implementation order, acceptance criteria, test strategy.
+**Planning provides everything that needs judgment** — intent, trade-offs, edge cases, AND a
+minimal ordered task list with a "done when:" per task. Light mode trims *ceremony* (gate,
+ADRs, specialist review), never *decomposition* — coding mode executes tasks as written and
+does not backfill task breakdown, acceptance criteria, or test strategy (judgment DeepSeek
+cannot supply; apex-code's task granularity is fixed at spec time).
 
 No readiness gate. No ADRs. No specialist context. **Light mode quality check (no gate, but run this before confirming):**
 - Assumptions block written? Every non-obvious assumption stated.
+- Every task names its exact files and has a "done when:" clause.
 - Is there a simpler intent that achieves the same goal? If so, write that.
 - Every file listed in "Files to touch" is strictly necessary?
 - Acceptance criteria (if any) use observable outcomes, not vague descriptions.
@@ -325,6 +332,7 @@ Tasks
   [ ] Every task has a concrete acceptance criterion
   [ ] No task contains "or", "maybe", "depending on", "TBD"
   [ ] Task dependencies are explicit (if Task 3 needs Task 1, say so)
+  [ ] Wave plan present for specs with ≥3 tasks — waves derived only from stated dependencies
   [ ] Task granularity: each task is one concern layer — not one file and not multiple features; no artificially thin tasks manufactured to increase worker count
   [ ] Coverage audit: every acceptance criterion maps to ≥1 task, and every task traces to ≥1 criterion — no orphan tasks, no uncovered criteria (Spec-Kit /analyze)
 
@@ -386,8 +394,9 @@ drifted from what you discussed — and let them verify *that*. Depth is mode-ga
 - **Decisions baked in** — choices the spec now encodes, especially any reversed mid-discussion
   or folded in late (this is where transcription drift hides)
 
-Omit the *why*, the full task breakdown, and boilerplate — the user is auditing fidelity,
-not re-reading the spec. Close with:
+Omit the *why*, the full task breakdown, and boilerplate — the user is auditing fidelity
+(the drift that bites an AFK build: wrong path, loose criterion, a reversed decision), not
+re-reading the spec. Close with:
 > "Anything here not match what we discussed? Otherwise say 'start build.'"
 
 **Mode dial — how much to show:**
@@ -396,10 +405,6 @@ not re-reading the spec. Close with:
 | Deep Details | Digest **+** offer to open the full spec file |
 | Light | Digest only |
 | Bug Fix | One-line verbal confirm — no digest (single ephemeral fix) |
-
-Why a digest, not the file: it catches the drift that bites an AFK build (wrong path, loose
-criterion, a reversed decision) at a fraction of the reading, and keeps the user in chat —
-no context switch from deciding to auditing.
 
 ## Moving spec to ready — by mode
 
@@ -419,7 +424,8 @@ no context switch from deciding to auditing.
 
 ### Bug Fix
 1. One-line verbal confirm — no digest: "Bug fix doc at docs/changes/{name}.md — ready for build?"
-2. If yes: no status.md update. Coding mode will fix it immediately.
+2. If yes: no status.md update at planning time (ephemeral). If the build is later interrupted,
+   apex-code's pause workflow still writes the In-Flight row — bug-fix builds are not invisible to resume.
 3. If no: revise.
 
 ## ADR workflow — Deep Details only

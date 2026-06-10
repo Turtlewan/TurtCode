@@ -1,8 +1,8 @@
 ---
 skill: apex-frontend
 backend: claude
-version: 1.2.0
-last_updated: 2026-06-01
+version: 1.3.0
+last_updated: 2026-06-10
 sources:
   - React 19 — react.dev/blog/2024/12/05/react-19
   - React Compiler — react.dev/learn/react-compiler
@@ -48,32 +48,11 @@ layer:
 - **`ref` is a regular prop** — `forwardRef` is no longer needed for new components.
 - Native document-metadata (`<title>`/`<meta>`) and stylesheet hoisting are built in.
 
-## Questions to ask before designing
+## Rendering strategy
 
-- Is this a server component or client component? What's the data-fetching strategy?
-- Does this need client-side state, or can it be server-rendered?
-- Is this a shared component or a one-off page layout?
-- What are the loading and error states?
-- Are there responsive design requirements?
-
-## Rendering strategy trade-offs
-
-> Generic RSC/client trade-offs below. **Next.js-specific** rendering, caching, `next/*`,
-> Server Actions, and App Router file conventions live in **apex-nextjs** (Next 16: Turbopack
-> default for dev + build, React Compiler on by default) — defer there, don't duplicate.
-
-Server Component (default in React Server Components / Next.js App Router):
-- Renders on server, no JS bundle cost, good for static/data-heavy UI
-- Cannot use hooks, browser APIs, or event handlers
-
-Client Component ('use client'):
-- Needed for interactivity, hooks, browser APIs
-- Adds to JS bundle — keep them as leaf nodes, not wrappers
-
-SSG vs SSR vs ISR:
-- SSG: static export, fastest, no real-time data
-- SSR: server-rendered per request, always fresh, higher TTFB
-- ISR: revalidate on interval, balance of both
+Server components by default; `'use client'` only on interactive leaves. All rendering/caching
+strategy depth (static/ISR/dynamic, `next/*`, Server Actions, App Router conventions) lives in
+**apex-nextjs** (Next.js 15+ (16 current)) — defer there, don't duplicate.
 
 ## Review checklist
 
@@ -90,15 +69,7 @@ SSG vs SSR vs ISR:
 
 ## Component foundation
 
-**shadcn/ui**: copy-paste component library (not installed as a package) built on Radix + Tailwind.
-Use as a starting point — copy the component, then customise it. Don't fight the design system.
-
-**Radix Primitives**: accessibility-first headless components (Dialog, Select, Tooltip, etc.).
-Prefer Radix over custom implementations for any interactive element — it handles ARIA, keyboard nav, and focus management correctly by default.
-
-**Tailwind v4**: significant changes from v3 — check version before applying patterns.
-v4 uses CSS-first config (`@theme`), drops `tailwind.config.js` for most use cases.
-Utility classes stay the same; build tooling and config format changed.
+Component primitives (shadcn/ui, Radix) and Tailwind v4 setup are owned by **apex-design-system** — defer.
 
 ## Eliminating waterfalls (Vercel)
 
@@ -130,6 +101,5 @@ Use compound components and state lifting instead:
 
 ## Standards
 
-Web Vitals targets: LCP ≤ 2.5s, INP ≤ 200ms (replaces FID), CLS ≤ 0.1
 Next.js App Router docs — nextjs.org/docs
 Vercel Agent Skills — github.com/vercel-labs/agent-skills

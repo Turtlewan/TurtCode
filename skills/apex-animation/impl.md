@@ -1,12 +1,13 @@
 ---
 skill: apex-animation
 backend: deepseek
-version: 1.2.0
-last_updated: 2026-06-02
+version: 1.3.0
+last_updated: 2026-06-05
 sources:
   - Motion — motion.dev
   - GSAP (100% free since Apr 2025) — gsap.com/docs
   - SwiftUI Animations — developer.apple.com/documentation/swiftui/animations
+  - Emil Kowalski design-engineering — animations.dev
 staleness_threshold: 30d
 description: >
   Coding-mode enforcement for animation — reduced-motion fallback, animate transform/opacity
@@ -33,6 +34,10 @@ The reduced-motion + cheap-property + spring rules below are universal.
 - Use hardcoded pixel values in spring animations — use unitless stiffness/damping
 - Set a Motion `initial` that differs from server-rendered output — causes a hydration mismatch (web SSR). Match `initial` to what the server renders, or gate the animation behind a mounted flag
 - Read `window`/`navigator` at module top level — guard with `typeof window !== "undefined"` (web SSR)
+- Use `ease-in` for UI transitions — it delays the start; use `ease-out` or a strong custom curve (`cubic-bezier(0.23, 1, 0.32, 1)`)
+- Animate an element in from `scale(0)` — nothing appears from nothing; start at `scale(0.95)` + `opacity: 0`
+- Use `@keyframes` for rapidly-retriggered UI (toasts, toggles) — keyframes restart from 0 on interrupt; use CSS transitions / springs, which retarget mid-flight
+- (web) Animate via Motion's `x`/`y`/`scale` shorthand under load — they run on the main thread (rAF) and drop frames; use the full transform string: `animate={{ transform: "translateX(100px)" }}`
 
 ## ALWAYS do
 
@@ -45,6 +50,8 @@ The reduced-motion + cheap-property + spring rules below are universal.
 - Use `mode="wait"` on `AnimatePresence` for page/route transitions so exit finishes before enter starts
 - Apply `will-change-transform` (Tailwind) for GPU-composited animations (web)
 - Use `viewport={{ once: true }}` on scroll-reveals — repeating on scroll-out distracts, not informs
+- (web) Scale popovers/menus from their trigger: `transform-origin: var(--radix-popover-content-transform-origin)` (Base UI: `var(--transform-origin)`) — **modals are exempt, keep them centered**
+- Make exit faster than enter — slow where the user decides, snappy where the system responds
 
 ## Motion enter/exit pattern
 
@@ -103,6 +110,8 @@ if (!window.matchMedia("(prefers-reduced-motion: reduce)").matches) {
 - [ ] Toggle OS reduced motion — animations must stop or minimise (all surfaces)
 - [ ] Check: all animated properties are `transform` or `opacity` (no layout properties) (web)
 - [ ] Check: no looping animations without a pause control
+- [ ] (web) Check: no `ease-in` on UI transitions; no entrance from `scale(0)`
+- [ ] (web) Check: popovers/menus scale from trigger origin (modals stay centered)
 - [ ] Check: `AnimatePresence` wraps every conditionally-rendered animated element (web)
 - [ ] (web) Run Lighthouse — no CLS caused by animated layout shifts
 

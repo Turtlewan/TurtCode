@@ -2,6 +2,11 @@
 
 Maps domain names to skills, impl files, and activation keywords.
 
+**Scope: domain specialists only — deliberately.** Workflow/spine skills (apex-orchestrate,
+apex-plan, apex-code, apex-init, apex-governance, apex-handoff, apex-debug, apex-refresh,
+apex-deep-dive) are routed by apex-orchestrate's signal table, not keywords, and have no row
+here. Their index home is `~/apex/SKILLS.md`. Do not "fix" their absence by adding rows.
+
 **Agent column** = the planning-side reviewer dispatched for this domain. Every domain uses the one
 generic **`apex-spec-reviewer`** (Agent tool, pointed at this row's SKILL.md); the prior per-domain
 `apex-*-agent` stubs are retired (ADR-007). A `—` means no default reviewer is wired, but one can be
@@ -35,8 +40,6 @@ are spawned by `apex-code`, not from this table.
 | system-design | apex-system-design/SKILL.md | apex-system-design/impl.md | — | distributed systems, CAP theorem, consistency, caching, message queue, rate limiting, circuit breaker, idempotency, Kafka, SQS, Redis, pub/sub, scalability |
 | devcontainer | apex-devcontainer/SKILL.md | apex-devcontainer/impl.md | — | dev container, devcontainer, devcontainer.json, isolated environment, postCreateCommand, Features, DinD, container tooling |
 | aws | apex-aws/SKILL.md | apex-aws/impl.md | — | AWS, Lambda, ECS, Fargate, EC2, S3, DynamoDB, RDS, IAM, CDK, CloudFormation, SQS, SNS, CloudFront, EKS, ECR, Secrets Manager, Control Tower |
-| azure | apex-azure/SKILL.md | apex-azure/impl.md | — | Azure, AKS, App Service, Container Apps, Azure Functions, Bicep, Managed Identity, Key Vault, Entra ID, Cosmos DB, Service Bus |
-| gcp | apex-gcp/SKILL.md | apex-gcp/impl.md | — | GCP, Google Cloud, Cloud Run, GKE, Cloud SQL, BigQuery, Pub/Sub, Cloud Functions, Artifact Registry, Workload Identity, Secret Manager |
 | homelab | apex-homelab/SKILL.md | apex-homelab/impl.md | — | Home Assistant, ESPHome, smart home, IoT, ESP32, Zigbee, Z-Wave, Matter, Thread, MQTT, automation, smart device, presence detection, mmWave, Wyoming, Node-RED, homelab, self-hosting, Proxmox, Docker Compose, reverse proxy, Traefik, Caddy, Tailscale, backup |
 | k8s | apex-k8s/SKILL.md | apex-k8s/impl.md | — | Kubernetes, K8s, kubectl, Helm, ArgoCD, Flux, GitOps, pod, deployment, ingress, Gateway API, namespace, RBAC, HPA, VPA, Karpenter, StatefulSet |
 | iac | apex-iac/SKILL.md | apex-iac/impl.md | — | OpenTofu, Terraform, Pulumi, Ansible, infrastructure as code, remote state, state encryption, drift detection, Infracost, provisioning |
@@ -49,7 +52,7 @@ are spawned by `apex-code`, not from this table.
 | stack | apex-stack/SKILL.md | apex-stack/impl.md | — | tech stack, framework selection, database choice, ORM, which framework, which language, project start, new project, stack decision, Python vs Go, Next.js vs, FastAPI, Django, Rails, Go vs Rust, Prisma vs Drizzle, Clerk vs Auth.js, what stack, stack_skills, coverage gate |
 | auth | apex-auth/SKILL.md | apex-auth/impl.md | — | authentication, auth, login, signup, logout, password, session, JWT, OAuth2, RBAC, roles, permissions, multi-tenant, passkeys, WebAuthn, MFA, magic link, invite |
 | jobs | apex-jobs/SKILL.md | apex-jobs/impl.md | — | background job, job queue, worker, BullMQ, Bull, Redis queue, arq, Celery, APScheduler, cron job, scheduled task, async task, task queue, retry, dead letter queue, queue worker |
-| realtime | apex-realtime/SKILL.md | apex-realtime/impl.md | — | real-time, WebSocket, Socket.io, SSE, Server-Sent Events, sse-starlette, live updates, push, streaming, presence, live dashboard, finance ticker, AI streaming, LLM token streaming |
+| realtime | apex-realtime/SKILL.md | apex-realtime/impl.md | — | real-time, WebSocket, Socket.io, SSE, Server-Sent Events, sse-starlette, live updates, push, streaming, presence, live dashboard, finance ticker, AI streaming, LLM token streaming, WebRTC, voice agent, live voice, STT, TTS, barge-in, turn-taking, LiveKit, Pipecat, OpenAI Realtime API, realtime audio |
 | storage | apex-storage/SKILL.md | apex-storage/impl.md | — | file upload, file storage, S3, MinIO, R2, object storage, local filesystem storage, presigned URL, signed URL, multipart upload, file download, attachment, image upload |
 | search | apex-search/SKILL.md | apex-search/impl.md | — | search, full-text search, vector search, semantic search, RAG, retrieval, embeddings, pgvector, sqlite-vec, similarity search, chunking, hybrid search, Typesense, Algolia |
 | nextjs | apex-nextjs/SKILL.md | apex-nextjs/impl.md | — | Next.js, Next, App Router, Server Components, Server Actions, React 19, RSC, caching, revalidation, SSR, ISR, Static Generation |

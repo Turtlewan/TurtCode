@@ -1,8 +1,8 @@
 ---
 skill: apex-auth
 backend: claude
-version: 1.1.0
-last_updated: 2026-06-01
+version: 1.2.0
+last_updated: 2026-06-10
 sources:
   - Auth.js Docs — authjs.dev
   - Better Auth Docs — better-auth.com
@@ -58,8 +58,8 @@ pick the per-stack framework above.
 | **Better Auth** | v1.6.11 (May 2026). Framework-agnostic, TypeScript-first. Active development (6,800+ commits). Built-in Organization plugin for multi-tenant. Plugin ecosystem: passkeys, 2FA, magic link, SSO, SCIM, OAuth 2.1 Provider. ORM adapters for Drizzle, Prisma, MongoDB, Kysely. Has absorbed Auth.js. | [VERIFIED] |
 | **@simplewebauthn/server** | v13.3.0 (March 2026). Supports Node.js LTS 20+, Cloudflare Workers, Deno, Bun. Also `@simplewebauthn/browser` for the client side. Active development. | [VERIFIED] |
 | **Lucia v3** | Officially deprecated as a library (March 2025). Transitioned to learning resource. Oslo (crypto) and Arctic (OAuth) libraries still maintained separately. Recommended replacement: Better Auth or implement sessions from scratch using Lucia guides. | [VERIFIED] |
-| **Clerk organisations pricing** | Free tier: 50K MRU, 100 organisations included. Pro: $20/mo (50K MRU, $0.02/MRU overage). Extra orgs beyond 100: ~$1/org/mo. Cloud-only, no self-hosting, no EU data residency. 100K MAU scenario: ~$1,020/mo. | [VERIFIED] |
-| **Supabase Auth pricing** | Free: 50K MAU (hard cap). Pro: $25/mo (100K MAU, $0.00325/MAU overage). Bundled with broader Supabase platform (DB, storage, realtime). Open-source, self-hostable. No built-in organisations (roll your own). | [VERIFIED] |
+| **Clerk organisations** | Cloud-only, no self-hosting, no EU data residency. Per-MAU + per-org pricing rots fast — **verify pricing at decision time**. | [VERIFIED] |
+| **Supabase Auth** | Bundled with broader Supabase platform (DB, storage, realtime). Open-source, self-hostable. No built-in organisations (roll your own). Per-MAU pricing rots fast — **verify pricing at decision time**. | [VERIFIED] |
 | **Argon2 in Node.js — edge compatibility** | `@node-rs/argon2` (Rust via napi-rs): fast, NOT edge-compatible without WASM build step. `argon2` (C++ native): NOT edge-compatible. Edge-safe alternatives: `@noble/hashes` Scrypt (audited, zero-deps, works everywhere); WebCrypto PBKDF2-SHA256 with 600K iterations (OWASP 2024, built-in). `@noble/hashes` Argon2 works in JS but is 5-10x slower than native — Scrypt is preferred on edge runtimes. | [VERIFIED] |
 
 ---
@@ -104,7 +104,7 @@ Activate `apex-auth` when the conversation involves any of:
 | **Better Auth** | Open-source, plugin-based | ✅ Built-in Organization plugin (members, invites, roles, teams) | ✅ Yes | Active (v1.6.11, May 2026) | New TypeScript projects, especially B2B/multi-tenant SaaS needing passkeys, 2FA, RBAC |
 | **Auth.js v5** | Open-source, provider-based | ❌ No built-in multi-tenant (must build on callbacks) | ✅ Yes | Absorbed into Better Auth (Sept 2025); maintenance only | Existing NextAuth.js v4/v5 projects already in production |
 | **Lucia v3** | Open-source, minimal | ❌ No (roll your own) | ✅ Yes | Deprecated (March 2025); learning resource only | Learning how auth works; implementing from scratch |
-| **Clerk** | Managed cloud service | ✅ Via organisations feature (100 free, then ~$1/org/mo) | ❌ No | Active | Teams wanting fully managed auth with no self-hosting overhead |
+| **Clerk** | Managed cloud service | ✅ Via organisations feature (verify pricing at decision time) | ❌ No | Active | Teams wanting fully managed auth with no self-hosting overhead |
 | **Supabase Auth** | Managed + self-hostable | ❌ No built-in orgs (roll your own via RLS/invites) | ✅ Yes (self-host) | Active | Projects already using Supabase for DB/storage needing simple auth |
 
 **Recommendation for new TypeScript projects:** Better Auth. It has the most complete feature set (multi-tenant, passkeys, 2FA, RBAC, invite flows), is framework-agnostic (Next.js, Hono, Express, Nuxt, SvelteKit, Remix), actively maintained, and has absorbed Auth.js.
@@ -204,19 +204,12 @@ passkey_credentials:
   last_used_at:  datetime
 ```
 
-### Registration flow (4 steps)
+### Registration / authentication flows
 
-1. **Server generates options** -> Call `generateRegistrationOptions()` from `@simplewebauthn/server`. Include: `rpName`, `rpID` (effective domain), `userID` (buffer), `userName` (email), `attestationType: 'none'`, `excludeCredentials` (existing credential IDs for this user to prevent re-registration). Store `challenge` in session or DB.
-2. **Client receives options** -> Call `startRegistration()` from `@simplewebauthn/browser`. This calls `navigator.credentials.create({ publicKey })` natively. User interacts with platform authenticator (Touch ID, Windows Hello, security key, etc.).
-3. **Client sends response** -> Send the credential response object (containing `id`, `rawId`, `response`, `clientExtensionResults`, `type`) back to server.
-4. **Server verifies** -> Call `verifyRegistrationResponse()`. Check: challenge matches stored value, origin is in allowed origins list, RP ID matches. On success: store the credential in DB (`{ id, publicKey, counter, deviceType, backedUp, transports }`).
-
-### Authentication flow (4 steps)
-
-1. **Server generates options** -> Call `generateAuthenticationOptions()`. Set `allowCredentials` to the list of credentials registered to this user (`{ id, type: 'public-key', transports }`). Store `challenge` in session.
-2. **Client authenticates** -> Call `startAuthentication()` from `@simplewebauthn/browser`. This calls `navigator.credentials.get({ publicKey })`. User interacts with authenticator.
-3. **Client sends assertion** -> Send the assertion response (containing `id`, `rawId`, `response`, `clientExtensionResults`, `type`) back to server.
-4. **Server verifies** -> Call `verifyAuthenticationResponse()`. Check: challenge matches, credential exists in DB, origin and RP ID are allowed, **counter is strictly greater than stored value**. On success: update stored counter to new value. Create session.
+Follow the SimpleWebAuthn docs for the step-by-step register/authenticate wiring (generate
+options → browser ceremony → verify response). Project-specific invariants on top of the docs:
+store the `challenge` server-side per attempt, set `excludeCredentials` on registration to
+prevent re-registration, and apply the counter check below on every authentication.
 
 ### Counter verification (critical)
 
@@ -244,38 +237,10 @@ if (verification.authenticationInfo.newCounter <= storedCredential.counter) {
 
 Roles are stored on **memberships**, not on users. A user can be `admin` in tenant A and `member` in tenant B.
 
-### Route protection middleware pattern
+### Route protection discipline
 
-```typescript
-// Framework-agnostic pattern — adapt to your framework
-
-// 1. Require authentication (redirect/401 if no session)
-function requireAuth(handler) {
-  return async (req, res) => {
-    const session = await getSession(req)
-    if (!session) {
-      return res.status(401).json({ error: 'Unauthenticated' })
-    }
-    req.session = session
-    return handler(req, res)
-  }
-}
-
-// 2. Require specific role (403 if insufficient)
-function requireRole(...roles: string[]) {
-  return (handler) => async (req, res) => {
-    if (!roles.includes(req.session.role)) {
-      return res.status(403).json({ error: 'Forbidden' })
-    }
-    return handler(req, res)
-  }
-}
-
-// Usage
-router.get('/api/admin/users', requireAuth, requireRole('admin', 'owner'), adminHandler)
-```
-
-**Discipline:** Check auth in middleware, never inside the handler after doing DB work. Fail fast before expensive operations.
+Check auth (then role) in middleware, never inside the handler after doing DB work — fail fast
+before expensive operations. 401 for unauthenticated, 403 for insufficient role.
 
 ### Granular permissions (resource-level)
 

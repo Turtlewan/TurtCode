@@ -1,8 +1,8 @@
 ---
 skill: apex-governance
 backend: claude
-version: 1.4.0
-last_updated: 2026-06-03
+version: 1.5.0
+last_updated: 2026-06-10
 sources:
   - APEX Design Specification 2026-05-24
   - Superpowers (obra) — github.com/obra/superpowers
@@ -40,11 +40,19 @@ Confirmation gates active for critical files.
 L0 — Read Only: no writes, no commands
 L1 — Supervised Write: write with per-file confirmation, no commands
 L2 — Controlled Auto-Write (default): write non-critical files freely
-L3 — Pipeline Auto-Run: full pipeline + test/lint/build, no git commits
+L3 — Pipeline Auto-Run: full pipeline + test/lint/build, no *unprompted* git commits
 L4 — Agentic Loop: includes git commit (message approved first)
 L5 — High Autonomy: includes git push to non-main + draft PR creation
 
-See levels/ directory for full definition of each level.
+See levels/ directory for full definition of each level. **This file is the canonical home of
+the level definitions and the hard-block list — apex-orchestrate and apex-code carry summaries
+only; on conflict, this file wins.**
+
+**Commit-discipline interaction (resolves the L2/L3 vs CLAUDE.md tension):** the levels govern
+*autonomous* commits — what the agent may do without asking. The per-spec commit workflow in
+global CLAUDE.md (prompt the user → draft message → user approves → commit) is a *user-approved*
+action and is permitted at **every** level L2+. "No git commits" at L2/L3 means: never commit
+without that explicit prompt-and-approval exchange.
 
 ## Critical files — always require explicit confirmation regardless of level
 

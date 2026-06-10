@@ -1,8 +1,8 @@
 ---
 skill: apex-iac
 backend: claude
-version: 1.1.0
-last_updated: 2026-06-01
+version: 1.2.0
+last_updated: 2026-06-10
 sources:
   - OpenTofu — opentofu.org
   - Terraform Docs — developer.hashicorp.com/terraform
@@ -65,71 +65,14 @@ OSI-approved** fork under the Linux Foundation, now matured:
 
 **Never mix tools for the same resources** — split-brain state causes drift and conflicts.
 
-## Terraform: core workflow and patterns
+## Code-level patterns → impl.md
 
-```hcl
-# ── Module structure ──────────────────────────────────────
-modules/
-  vpc/          main.tf, variables.tf, outputs.tf
-  rds/          main.tf, variables.tf, outputs.tf
-  ecs-service/  main.tf, variables.tf, outputs.tf
+Module structure, remote-state backend config, variables, tagging, `for_each`,
+`prevent_destroy`, Pulumi/Ansible patterns, command reference, and the canonical
+plan-on-PR / apply-on-merge CI workflow all live in **impl.md** — don't restate them
+in specs.
 
-environments/
-  dev/          main.tf (calls modules), terraform.tfvars
-  staging/      main.tf, terraform.tfvars
-  prod/         main.tf, terraform.tfvars
-```
-
-```hcl
-# ── Remote state backend (S3 + DynamoDB lock) ─────────────
-terraform {
-  backend "s3" {
-    bucket         = "myorg-terraform-state"
-    key            = "prod/vpc/terraform.tfstate"
-    region         = "us-east-1"
-    encrypt        = true
-    dynamodb_table = "terraform-state-lock"
-  }
-}
-
-# ── Variables — never hardcode ────────────────────────────
-variable "environment" {
-  type    = string
-  description = "Deployment environment: dev, staging, prod"
-}
-
-# ── Tag everything ────────────────────────────────────────
-locals {
-  common_tags = {
-    Environment = var.environment
-    Project     = var.project_name
-    ManagedBy   = "terraform"
-    Team        = var.team
-  }
-}
-
-resource "aws_vpc" "main" {
-  cidr_block = var.vpc_cidr
-  tags       = merge(local.common_tags, { Name = "${var.project}-vpc" })
-}
-```
-
-```bash
-# Workflow
-terraform init                    # download providers, configure backend
-terraform plan -out=tfplan         # show changes, save plan
-terraform apply tfplan             # apply saved plan (no interactive prompt)
-terraform destroy                  # tear down (always review plan first)
-
-# Format and validate
-terraform fmt -recursive
-terraform validate
-
-# State operations (with care)
-terraform state list
-terraform state show aws_vpc.main
-terraform import aws_vpc.main vpc-abc123   # import existing resource
-```
+## Secrets in state
 
 **Secrets:** Never in `.tfvars` committed to git. Use Vault dynamic secrets, AWS Secrets Manager, or environment variables (`TF_VAR_secret_name`).
 
@@ -162,83 +105,11 @@ infracost breakdown --path .
 infracost diff --path . --compare-to infracost-base.json
 ```
 
-## Pulumi patterns
-
-```typescript
-// TypeScript — same expressiveness as application code
-import * as aws from "@pulumi/aws";
-
-const bucket = new aws.s3.BucketV2("my-bucket", {
-  tags: { Environment: "production", ManagedBy: "pulumi" }
-});
-
-const policy = new aws.s3.BucketPolicy("my-bucket-policy", {
-  bucket: bucket.id,
-  policy: bucket.id.apply(id => JSON.stringify({
-    Statement: [{ Effect: "Allow", Principal: "*", Action: "s3:GetObject", Resource: `arn:aws:s3:::${id}/*` }]
-  }))
-});
-
-export const bucketName = bucket.id;
-```
-
-```bash
-pulumi up      # preview + apply
-pulumi preview # plan only (no apply)
-pulumi destroy # tear down
-pulumi stack   # manage environments as stacks
-```
-
-## Ansible patterns
-
-Use Ansible for: OS-level configuration, software installation, user management, post-provisioning setup that Terraform doesn't cover.
-
-```yaml
-# site.yml
----
-- name: Configure web servers
-  hosts: webservers
-  become: yes
-  roles:
-    - common
-    - nginx
-    - app
-
-# roles/nginx/tasks/main.yml
-- name: Install nginx
-  ansible.builtin.package:
-    name: nginx
-    state: present
-
-- name: Configure nginx
-  ansible.builtin.template:
-    src: nginx.conf.j2
-    dest: /etc/nginx/nginx.conf
-  notify: Restart nginx
-```
-
-**Idempotency is mandatory:** every task must be idempotent. Test with `--check` flag first. Use `ansible-lint` in CI.
-
 ## IaC in CI/CD
 
-```yaml
-# GitHub Actions pattern
-- name: Terraform Plan
-  run: |
-    terraform init
-    terraform plan -out=tfplan
-  env:
-    AWS_ROLE_ARN: ${{ secrets.AWS_ROLE_ARN }}  # OIDC, no access keys
-
-- name: Cost estimate (Infracost)
-  uses: infracost/actions/setup@v3
-  run: infracost diff --path . --format json --out-file /tmp/infracost.json
-
-# Apply only on merge to main — never on PR
-- name: Terraform Apply
-  if: github.ref == 'refs/heads/main'
-  run: terraform apply tfplan
-```
+Plan on PR, apply only on merge to main, OIDC auth (no access keys), plan passed
+between jobs as an artifact — the canonical SHA-pinned workflow is in
+**impl.md § GitHub Actions**. Pipeline wiring beyond IaC → apex-devops.
 
 ## Review checklist
 

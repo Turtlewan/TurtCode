@@ -1,8 +1,8 @@
 ---
 skill: apex-github
 backend: deepseek
-version: 1.1.0
-last_updated: 2026-06-01
+version: 1.2.0
+last_updated: 2026-06-10
 sources:
   - GitHub CLI Docs — cli.github.com/manual
   - GitHub Actions Docs — docs.github.com/en/actions
@@ -10,7 +10,7 @@ sources:
 staleness_threshold: 30d
 description: >
   Coding-mode rules for GitHub itself — branch+PR flow (never push to main), Actions security (pin
-  third-party actions to a commit SHA, least-privilege `permissions:`, no secrets in YAML, no
+  ALL actions — including first-party — to a commit SHA, least-privilege `permissions:`, no secrets in YAML, no
   pull_request_target with untrusted code), gh CLI, Conventional Commits, branch naming, release on
   tag. Loaded on repo/CI/PR/release work. The CI workflow steps are stack-specific (setup-* +
   install/test/build) — see § Stack assumptions; the security rules are stack-neutral.
@@ -37,12 +37,12 @@ skill's **Verification Recipe**:
 - Use `pull_request_target` trigger with untrusted code (RCE risk via `${{ github.event }}` injection)
 - Give workflows `write-all` permissions — declare only what each job needs
 - Merge a PR with failing status checks unless explicitly overriding with documented reason
-- Use `actions/checkout@v2` or older — always use `@v4`
+- Reference ANY action by mutable tag (`@v4`, `@main`) — pin every action, including first-party `actions/*`, to a full commit SHA
 
 ## ALWAYS do
 
-- Pin third-party GitHub Actions to a full commit SHA, not a tag (`uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683`)
-- Use `actions/cache@v5` or `setup-*` built-in cache for dependency caching
+- Pin ALL GitHub Actions (first-party AND third-party) to a full commit SHA with a version comment (`uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2`)
+- Use SHA-pinned `actions/cache` or `setup-*` built-in cache for dependency caching
 - Set `permissions:` explicitly at workflow level (`contents: read`) and elevate per-job
 - Reference issues in every PR body: `Closes #NNN`
 - Update `CHANGELOG.md` in the same PR as the feature/fix
@@ -64,8 +64,8 @@ jobs:
   test:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: '22'
           cache: 'npm'
@@ -90,7 +90,7 @@ jobs:
   release:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
           fetch-depth: 0
       - run: npm ci && npm run build
@@ -166,10 +166,11 @@ BREAKING CHANGE: /api/v1/* routes removed. Use /api/v2/*.
 
 ## Verification checklist
 
-- [ ] Branch protection rules enabled on main (required: CI pass, 1 approval, no direct push)
+- [ ] Branch protection rules enabled on main (required: CI pass, 1 approval, no direct push) — check: `gh api repos/{owner}/{repo}/branches/main/protection` (HTTP 404 = not configured → fail)
+- [ ] No tag-pinned actions in workflows — check: `grep -rnE 'uses:.*@v[0-9]' .github/workflows/` (any match = fail; pin to commit SHA + version comment)
 - [ ] Dependabot alerts enabled
 - [ ] Secret scanning + push protection enabled
-- [ ] `GITHUB_TOKEN` permissions declared explicitly in all workflows
+- [ ] `GITHUB_TOKEN` permissions declared explicitly in all workflows — check: `grep -rLn 'permissions:' .github/workflows/` (any file listed = fail)
 - [ ] No secrets in env vars or workflow YAML — all in GitHub Secrets
 - [ ] CODEOWNERS file present for auto-review assignment
 - [ ] PR template includes issue reference (`Closes #NNN`)

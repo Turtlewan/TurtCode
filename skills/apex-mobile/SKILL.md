@@ -1,8 +1,8 @@
 ---
 skill: apex-mobile
 backend: claude
-version: 1.1.0
-last_updated: 2026-06-01
+version: 1.2.0
+last_updated: 2026-06-10
 sources:
   - Expo Docs (now official RN start) — docs.expo.dev
   - React Native (New Architecture) — reactnative.dev/docs
@@ -102,90 +102,19 @@ For apps that need native stack navigation: React Navigation v7 with `@react-nav
 
 ## Native device APIs (Expo SDK)
 
-```typescript
-// Push notifications
-import * as Notifications from 'expo-notifications';
-const token = await Notifications.getExpoPushTokenAsync();
-
-// Camera
-import { CameraView, useCameraPermissions } from 'expo-camera';
-
-// Biometrics
-import * as LocalAuthentication from 'expo-local-authentication';
-const result = await LocalAuthentication.authenticateAsync({ promptMessage: 'Confirm identity' });
-
-// Secure storage (tokens, credentials)
-import * as SecureStore from 'expo-secure-store';
-await SecureStore.setItemAsync('token', accessToken);
-
-// File system
-import * as FileSystem from 'expo-file-system';
-```
+Plan with the Expo modules: `expo-notifications` (push), `expo-camera`, `expo-local-authentication`
+(biometrics), `expo-secure-store` (tokens/credentials), `expo-file-system`. Wiring code lives in
+impl.md + its references/expo-patterns.md.
 
 ## State management
 
-**Zustand** — minimal, no boilerplate, works in React Native:
-```typescript
-const useAuthStore = create<AuthState>((set) => ({
-  user: null,
-  setUser: (user) => set({ user }),
-  logout: () => set({ user: null }),
-}));
-```
-
-**React Query (TanStack Query)** — server state, offline caching:
-```typescript
-// Persist queries to MMKV for offline support
-import { createSyncStoragePersister } from '@tanstack/query-sync-storage-persister';
-import { MMKV } from 'react-native-mmkv';
-```
-
-**MMKV** — fast key-value storage (replaces AsyncStorage for performance):
-```typescript
-import { MMKV } from 'react-native-mmkv';
-const storage = new MMKV();
-storage.set('key', 'value');
-```
+Zustand (client state) + TanStack Query (server state, persisted to MMKV for offline);
+MMKV replaces AsyncStorage for performance. Patterns live in impl.md.
 
 ## EAS Build + Submit
 
-```json
-// eas.json
-{
-  "cli": { "version": ">= 12.0.0" },
-  "build": {
-    "development": {
-      "developmentClient": true,
-      "distribution": "internal"
-    },
-    "preview": {
-      "distribution": "internal",
-      "channel": "preview"
-    },
-    "production": {
-      "autoIncrement": true,
-      "channel": "production"
-    }
-  },
-  "submit": {
-    "production": {
-      "ios": { "appleId": "dev@example.com", "ascAppId": "1234567890" },
-      "android": { "serviceAccountKeyPath": "./service-account.json" }
-    }
-  }
-}
-```
-
-```bash
-# Build for iOS TestFlight
-eas build --platform ios --profile preview
-
-# Build for production + submit to stores
-eas build --platform all --profile production --auto-submit
-
-# OTA update (JS only — no store review needed)
-eas update --channel production --message "Fix login bug"
-```
+EAS Build profiles (development / preview / production) in `eas.json`; EAS Update for OTA
+(JS-only changes, no store review). Config and commands live in impl.md.
 
 ## App store preparation checklist
 
@@ -219,7 +148,7 @@ eas update --channel production --message "Fix login bug"
 - [ ] Sensitive data in `expo-secure-store` — not AsyncStorage
 - [ ] Push notification permissions requested with proper UX (explain before asking)
 - [ ] SafeAreaView used on all screens
-- [ ] Tested on both iOS simulator AND Android emulator
+- [ ] Device testing (iOS simulator AND Android emulator) flagged for a human — agents cannot run emulators
 - [ ] Deep links configured (`app.json scheme`)
 - [ ] App store metadata ready before first submission (screenshots, descriptions)
 

@@ -1,8 +1,8 @@
 ---
 skill: apex-observability
 backend: claude
-version: 1.2.0
-last_updated: 2026-06-01
+version: 1.3.0
+last_updated: 2026-06-10
 sources:
   - OpenTelemetry Docs — opentelemetry.io/docs
   - Sentry Docs — docs.sentry.io
@@ -86,7 +86,7 @@ When investigating production issues, these MCP servers unlock live data:
 
 **OpenTelemetry MCP** (Jaeger/Tempo backend):
 - Search traces by service, operation, duration, error status
-- Filter by LLM-specific attributes: model type, token counts (via OpenLLMetry conventions)
+- Filter by LLM-specific attributes: model type, token counts (via OTel GenAI semconv attributes)
 - Identify bottlenecks and expensive spans in distributed requests
 
 ## AI/LLM observability
@@ -97,4 +97,4 @@ When the application uses LLM APIs (Anthropic, OpenAI), instrument:
 - Error rates by model and endpoint
 - Cost per operation (token count × price)
 
-Use OpenLLMetry semantic conventions for consistent attribute names across providers.
+Use the OTel GenAI semantic conventions for consistent attribute names across providers (OpenLLMetry emits these conventions, so it remains compatible).

@@ -1,8 +1,8 @@
 ---
 skill: apex-refresh
 backend: claude
-version: 1.2.0
-last_updated: 2026-06-02
+version: 1.3.0
+last_updated: 2026-06-10
 sources:
   - APEX Design Specification 2026-05-24
   - Context7 (Upstash) — github.com/upstash/context7
@@ -109,14 +109,11 @@ Do NOT write anything until approved.
    - version: bump minor (1.0.0 → 1.1.0) for partial, major (1.0.0 → 2.0.0) for full rewrite
    - last_updated: today's date
    - sources: updated list with new citations
-3. Append to skill changelog (create if not exists):
-   `~/.claude/skills/{skill-name}/CHANGELOG.md`
-   ```
-   ## {version} — {YYYY-MM-DD}
-   - Updated: {what changed}
-   - Added: {new content}
-   - Sources: {new sources added}
-   ```
+3. Record the change in `~/apex/SKILL-HISTORY.md` — prepend one row (newest first):
+   `Date | Skill | Files | Version | Event | What Changed | Sources`.
+   SKILL-HISTORY.md is the single source of truth for "what changed when" — do NOT create
+   per-skill CHANGELOG.md files. Sync `~/apex/SKILLS.md` / `registry/domains.md` if the
+   description or routing changed (the triple-write — see apex-skill-author).
 
 ## Audit mode (/apex-refresh --audit)
 

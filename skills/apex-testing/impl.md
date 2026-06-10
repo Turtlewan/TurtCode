@@ -1,8 +1,8 @@
 ---
 skill: apex-testing
 backend: deepseek
-version: 1.2.0
-last_updated: 2026-06-01
+version: 1.3.0
+last_updated: 2026-06-10
 sources:
   - Vitest Docs — vitest.dev
   - Playwright Docs — playwright.dev
@@ -35,7 +35,7 @@ assertions, descriptive names) are identical across all of them.
 - Write a test that always passes (no assertion, or assert true === true)
 - Name tests "it works" or "test 1" — describe exact behaviour
 - Test private functions directly — test through the public interface
-- Copy-paste test code — extract shared setup to beforeEach or helpers
+- DRY-up test cases at the cost of readability — prefer duplicated, readable setup (DAMP); extract only mechanical boilerplate (server boot, db reset) into beforeEach
 
 ## ALWAYS do
 

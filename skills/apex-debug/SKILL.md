@@ -1,8 +1,8 @@
 ---
 skill: apex-debug
 backend: claude
-version: 1.2.0
-last_updated: 2026-05-30
+version: 1.3.0
+last_updated: 2026-06-02
 sources:
   - APEX Design Specification 2026-05-24
   - Superpowers (obra) — github.com/obra/superpowers
@@ -51,6 +51,18 @@ Narrow the blast radius without fixing anything:
 4. Rule out each candidate systematically (logs, debugger, test, diff)
 
 Do NOT write a fix during Stage 2.
+
+#### Widen the options — research gate (Stage 2 candidate causes & Stage 4 candidate fixes)
+
+When ≥2 candidate **causes** here (or candidate **fixes** in Stage 4) compete and the choice is
+non-trivial — real trade-offs, or knowledge that may be stale — pause before committing and ask:
+
+> "I have {N} candidates: {one-liner each}. Search online for more before we pick?"
+
+On **yes**, run research (depth by magnitude — `apex-research` for a light gather, `apex-deep-dive`
+for a heavy fork; state which), fold the findings into the candidate list, then continue. On **no**,
+proceed. Researching *causes* here does not break reproduce-first — you are isolating, not fixing.
+Full form of the gate: `apex-plan` § Widen the options.
 
 ### Stage 3 — Root Cause
 

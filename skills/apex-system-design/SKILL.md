@@ -1,8 +1,8 @@
 ---
 skill: apex-system-design
 backend: claude
-version: 1.1.0
-last_updated: 2026-06-01
+version: 1.2.0
+last_updated: 2026-06-10
 sources:
   - Designing Data-Intensive Applications — Kleppmann
   - System Design Interview — Alex Xu (Vol 1 & 2)
@@ -47,28 +47,6 @@ failure here. Start simple (one Postgres/SQLite, in-process work); add distribut
 - Is idempotency required? Can this operation be safely retried?
 - What is the read/write ratio? Where is the hotspot?
 
-## CAP theorem — applied
-
-Every distributed system must choose (under partition):
-
-| Choice | Means | Example databases |
-|--------|-------|-------------------|
-| CP (Consistent + Partition-tolerant) | Refuse requests rather than return stale data | HBase, Zookeeper, etcd |
-| AP (Available + Partition-tolerant) | Return potentially stale data during partition | Cassandra, CouchDB, DynamoDB (default) |
-
-**In practice:** Most systems are not purely one or the other.
-- Strong consistency: reads always see latest write. Requires synchronous replication. Higher latency.
-- Eventual consistency: reads may see stale data temporarily. Async replication. Lower latency.
-- **Default recommendation:** Start with strong consistency (simpler to reason about). Switch to eventual only when performance data demands it and you fully understand the conflict resolution strategy.
-
-## PACELC — the fuller model
-
-Even without partitions, there is a latency/consistency trade-off:
-- Lower latency → replicate asynchronously → eventual consistency
-- Higher consistency → synchronous replication → higher latency
-
-**Decision:** What is the business impact of a stale read? For financial transactions: never acceptable. For a social media feed: totally fine.
-
 ## Consistency patterns
 
 **Strong consistency:** Write completes only after all replicas acknowledge.
@@ -86,36 +64,6 @@ Even without partitions, there is a latency/consistency trade-off:
 **Causal consistency:** Causally related operations appear in order.
 - Implementation: vector clocks, CRDTs
 - Use for: collaborative editing, distributed document stores
-
-## Caching strategies
-
-**Cache-aside (lazy loading):**
-```
-read → cache miss → read DB → write to cache → return
-write → write DB → invalidate cache
-```
-Good for: read-heavy, tolerable staleness, arbitrary access patterns.
-
-**Write-through:**
-```
-write → write cache AND DB synchronously → return
-read → always hits cache
-```
-Good for: high read/write ratio, requires cache hit on first read.
-
-**Write-behind (write-back):**
-```
-write → write cache → return (async flush to DB)
-```
-Good for: absorbing write bursts. Risk: data loss if cache dies before flush.
-
-**Cache invalidation strategies:**
-- TTL (time-to-live): simple, stale by at most N seconds
-- Event-driven: publish cache-bust event on write → subscribers invalidate
-- Versioned keys: cache key includes version; new writes generate new key (old key expires naturally)
-
-**Thundering herd:** When cache expires and many requests simultaneously try to repopulate it.
-- Solution: probabilistic early expiry, locking with a single repopulation, staggered TTLs
 
 ## Idempotency
 
@@ -162,30 +110,6 @@ When a transaction spans multiple services and one step fails:
 
 Default recommendation: orchestration for complex multi-step workflows (easier to reason about, centralized error handling).
 
-## Rate limiting
-
-**Algorithms:**
-- **Token bucket**: allows burst up to bucket size; refills at fixed rate. Good for: most API rate limiting.
-- **Fixed window**: count requests per window (per minute). Simple but allows burst at window boundary.
-- **Sliding window**: smoother than fixed window; tracks request timestamps in a sorted set.
-- **Leaky bucket**: constant output rate regardless of input. Good for: smoothing bursty traffic.
-
-**Implementation (Redis token bucket):**
-```
-MULTI
-  INCR rate_limit:{user_id}:{window}
-  EXPIRE rate_limit:{user_id}:{window} {window_seconds}
-EXEC
-```
-
-**Response headers (standard):**
-```
-X-RateLimit-Limit: 1000
-X-RateLimit-Remaining: 997
-X-RateLimit-Reset: 1716825600
-Retry-After: 60  (only when 429 is returned)
-```
-
 ## Read replicas and read/write splitting
 
 **When to add a read replica:**
@@ -196,30 +120,6 @@ Retry-After: 60  (only when 429 is returned)
 - Writes → primary connection string
 - Reads → replica connection string (or round-robin pool of replicas)
 - After a write, route the same user's reads to primary for 2–5 seconds (read-your-writes)
-
-## Load balancing and service discovery
-
-**Layer 4 (TCP) vs Layer 7 (HTTP):**
-- L4: faster, less overhead, no content inspection. Use for: raw TCP, database proxies.
-- L7: content-based routing (path, header, cookie), SSL termination, health checks. Use for: most web services.
-
-**Routing algorithms:**
-- Round-robin: even distribution, ignores server load
-- Least connections: routes to least-loaded server. Better for long-lived requests.
-- Consistent hashing: same key always routes to same server. Essential for caching layers.
-
-## Circuit breaker
-
-Prevents cascading failures when a downstream service is degraded.
-
-**States:** Closed (normal) → Open (blocking calls, returning error) → Half-open (testing if service recovered)
-
-**Configuration:**
-- Failure threshold: 5 failures in 10 seconds → open
-- Recovery timeout: 30 seconds in open → try half-open
-- Success threshold: 2 successes in half-open → close
-
-Libraries: Resilience4j (Java), Polly (.NET), opossum (Node.js)
 
 ## Distributed locking
 

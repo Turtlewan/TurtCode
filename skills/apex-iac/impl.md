@@ -1,8 +1,8 @@
 ---
 skill: apex-iac
 backend: deepseek
-version: 1.1.0
-last_updated: 2026-06-01
+version: 1.2.0
+last_updated: 2026-06-10
 sources:
   - OpenTofu — opentofu.org
   - Terraform — developer.hashicorp.com/terraform
@@ -21,9 +21,9 @@ description: >
 
 All HCL below runs on **both** — `tofu` is a drop-in for `terraform` (same providers/modules).
 **Prefer OpenTofu for new projects** (OSI licence + native state encryption); in CI use
-`opentofu/setup-opentofu` instead of `hashicorp/setup-terraform`. **Pin CI actions to a commit
-SHA** (the `@v4`/`@v3` tags below are illustrative — see apex-devops). Pulumi/Ansible patterns
-are tool-specific and shown separately.
+`opentofu/setup-opentofu` instead of `hashicorp/setup-terraform`. **Pin ALL CI actions
+(including first-party `actions/*`) to a full commit SHA with a version comment** — see
+§ GitHub Actions below. Pulumi/Ansible patterns are tool-specific and shown separately.
 
 ## NEVER / ALWAYS
 
@@ -302,10 +302,14 @@ ansible-playbook site.yml --tags "nginx,ssl"         # run specific tags
 ansible all -i inventory/prod -m ping                # check connectivity
 ```
 
-## GitHub Actions — plan on PR, apply on merge
+## GitHub Actions — plan on PR, apply on merge (canonical, OpenTofu)
+
+The plan is saved as `tfplan` in the plan job and passed to the apply job as an artifact —
+apply runs exactly what was planned. All actions SHA-pinned with a version comment.
+Note: a saved plan can contain secret values — keep artifact retention short (1 day).
 
 ```yaml
-name: Terraform
+name: IaC
 on:
   pull_request:
     paths: ["infrastructure/**"]
@@ -313,55 +317,65 @@ on:
     branches: [main]
     paths: ["infrastructure/**"]
 
+permissions:
+  contents: read              # least privilege at workflow level
+
 jobs:
   plan:
     runs-on: ubuntu-latest
     permissions:
-      id-token: write
+      id-token: write         # OIDC — no access keys
       contents: read
-      pull-requests: write
     defaults:
       run:
         working-directory: infrastructure/environments/prod
     steps:
-      - uses: actions/checkout@v4
-      - uses: hashicorp/setup-terraform@v3
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: opentofu/setup-opentofu@592200bd4b9bbf4772ace78f887668b1aee8f716 # v1.0.5
         with:
-          terraform_version: "~1.8"
-
+          tofu_version: "~1.9"
       - name: Configure AWS credentials (OIDC)
-        uses: aws-actions/configure-aws-credentials@v4
+        uses: aws-actions/configure-aws-credentials@ececac1a45f3b08a01d2dd070d28d111c5fe6722 # v4.1.0
         with:
           role-to-assume: ${{ vars.AWS_DEPLOY_ROLE }}
           aws-region: us-east-1
-
-      - run: terraform init
-      - run: terraform fmt -check -recursive
-      - run: terraform validate
-      - run: terraform plan -out=tfplan -no-color
-        id: plan
-
-      - name: Comment plan on PR
-        if: github.event_name == 'pull_request'
-        uses: actions/github-script@v7
+      - run: tofu init
+      - run: tofu fmt -check -recursive
+      - run: tofu validate
+      - run: tofu plan -out=tfplan
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
-          script: |
-            github.rest.issues.createComment({
-              issue_number: context.issue.number,
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              body: `### Terraform Plan\n\`\`\`\n${{ steps.plan.outputs.stdout }}\n\`\`\``
-            })
+          name: tfplan
+          path: infrastructure/environments/prod/tfplan
+          retention-days: 1
 
   apply:
     needs: plan
     if: github.ref == 'refs/heads/main' && github.event_name == 'push'
     runs-on: ubuntu-latest
     environment: production   # requires approval in GitHub Environments
+    permissions:
+      id-token: write         # OIDC — no access keys
+      contents: read
+    defaults:
+      run:
+        working-directory: infrastructure/environments/prod
     steps:
-      - uses: actions/checkout@v4
-      - run: terraform init
-      - run: terraform apply -auto-approve tfplan
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: opentofu/setup-opentofu@592200bd4b9bbf4772ace78f887668b1aee8f716 # v1.0.5
+        with:
+          tofu_version: "~1.9"
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@ececac1a45f3b08a01d2dd070d28d111c5fe6722 # v4.1.0
+        with:
+          role-to-assume: ${{ vars.AWS_DEPLOY_ROLE }}
+          aws-region: us-east-1
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: tfplan
+          path: infrastructure/environments/prod
+      - run: tofu init
+      - run: tofu apply tfplan
 ```
 
 ## Verification checklist

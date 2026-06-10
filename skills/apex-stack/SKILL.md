@@ -1,8 +1,8 @@
 ---
 skill: apex-stack
 backend: claude
-version: 1.1.0
-last_updated: 2026-05-31
+version: 1.2.0
+last_updated: 2026-06-10
 sources:
   - State of JS 2024 — stateofjs.com
   - Next.js Docs — nextjs.org/docs
@@ -42,7 +42,7 @@ writes the `stack_skills` binding.
 | Next.js 15 | GA since Oct 2024. Latest patch 15.5.x. Next.js 16 LTS also available (Oct 2025). Both are viable. | [VERIFIED] |
 | Prisma | Latest stable v7.7.0 (Apr 2026). Prisma 8 Next in preview targeting mid-2026. Recommend Prisma 7 for production. | [VERIFIED] |
 | Drizzle ORM | Latest stable 0.45.2. v1.0.0 in RC phase. Both streams production-ready. | [VERIFIED] |
-| Auth.js v5 | Never had a stable GA release. Perpetual beta since Oct 2023. Original maintainer departed Jan 2025; now maintained by Better Auth team under same org. Still usable but note the beta status. | [VERIFIED] |
+| Auth.js v5 | See § Note on Auth.js v5 below. | [VERIFIED] |
 | Hono | Latest stable v4.12.x (May 2026). Actively maintained with frequent releases. | [VERIFIED] |
 
 ## When to activate
@@ -166,7 +166,7 @@ Informational, never blocks — it surfaces stack-skill coverage and binds it to
 
 ## Gotchas / edge cases
 
-- **Package name drift**: Package names change (e.g. `next-auth` → `@auth/core` + `next-auth` v5 beta). The impl.md warns DeepSeek to verify current npm names.
+- **Package name drift**: Package names change (e.g. `next-auth` → `@auth/core` + `next-auth` v5 — status: see § Note on Auth.js v5). The impl.md warns DeepSeek to verify current npm names.
 - **Supabase dual role**: Supabase appears in both the real-time preset (as a realtime provider) and as a hosted auth option. These are separate choices — you can use Supabase realtime without Supabase Auth.
 - **tRPC scope restriction**: tRPC only works if both client and server are TypeScript in the same repo. If the mobile preset (Expo) is in a separate repo from the API, tRPC doesn't apply.
 - **Deployment ≠ hosting**: Vercel provides features beyond hosting (edge middleware, image optimization). Factor this into lock-in analysis when self-hosting is a future option.

@@ -1,8 +1,8 @@
 ---
 skill: apex-init
 backend: claude
-version: 1.4.0
-last_updated: 2026-06-03
+version: 1.5.0
+last_updated: 2026-06-10
 sources:
   - APEX Design Specification 2026-05-24
   - GSD (Get Shit Done) — github.com/gsd-build/get-shit-done
@@ -21,7 +21,7 @@ description: >
 # APEX Init — New Project Bootstrap
 
 Triggered automatically by apex-orchestrate when no docs/status.md is found.
-Sets up the project structure for APEX. Ask three questions, then scaffold.
+Sets up the project structure for APEX. Ask the questions, run stack selection, then scaffold.
 
 ## Persistent artifacts — why they matter
 
@@ -34,23 +34,24 @@ and are loaded by every new agent before it acts:
 - **ROADMAP.md** — phase breakdown (filled once planning begins)
 - **docs/status.md** — live state (decisions, in-flight work, pending specs)
 
-## Step 1: Ask three questions (one at a time)
+## Step 1: Ask the bootstrap questions (one batch)
 
-Question 1:
-"This looks like a new project. What are you building? (1-2 sentences)"
+Ask all three together — do not drip them one at a time:
 
-Wait for answer. Then:
+1. "What are you building? (1-2 sentences)"
+2. "Who is it for? (users, internal team, just you, etc.)"
+3. "Do you already have a stack in mind, or should we select one?"
 
-Question 2:
-"Who is it for? (users, internal team, just you, etc.)"
+**Never recommend a stack yourself, and never default to a JS/TS stack by reflex —
+stack selection belongs to apex-stack.**
 
-Wait for answer. Then:
-
-Question 3:
-"I recommend: Next.js 15 + TypeScript + Tailwind + PostgreSQL + Prisma.
-Does that work, or do you have a different stack in mind?"
-
-Wait for answer.
+After the answers:
+- User already has a firm stack → record it; still run apex-stack's **coverage gate** so
+  `stack_skills` gets bound (it records "no skill — proceeding on base knowledge" for gaps).
+- User wants a recommendation (or is unsure) → **invoke `apex-stack`** before scaffolding;
+  it selects merit-based across ecosystems and writes the `stack_skills` binding.
+- User explicitly defers the decision → scaffold with stack "TBD", `stack_skills: []`, and add
+  "Stack selection (apex-stack)" to ROADMAP.md phase 1 — it must run before the first build spec.
 
 ## Step 2: Create directory structure
 
@@ -88,15 +89,15 @@ if it doesn't already exist (template below). Leave it as the stub — it carrie
 takes shape; do not write the real overview during bootstrap.
 
 **Data-model stub — only for data-bearing projects (ADR-008).** If the confirmed stack
-(Question 3) includes a persistence layer (a database / ORM / local store), also seed the
+(Step 1 / apex-stack) includes a persistence layer (a database / ORM / local store), also seed the
 **conceptual data-model stub** at `docs/technical/architecture/data-model.md` (template below). It
 carries the `<!-- apex:data-model:stub -->` marker for the coverage check. If the project is
 **stateless** (static site, pure CLI with no stored data), skip this file and add a line "No
 persistent data model" under REQUIREMENTS.md → Out of scope. Leave it as a stub — planning fills the
 entities/relationships in early; do not model data during bootstrap.
 
-**App-flow stub — only for UI-bearing projects (ADR-013).** If the confirmed stack (Question 3)
-includes a frontend / screen surface (web UI, mobile, desktop app), also seed the **app-flow stub**
+**App-flow stub — only for UI-bearing projects (ADR-013).** If the confirmed stack (Step 1 /
+apex-stack) includes a frontend / screen surface (web UI, mobile, desktop app), also seed the **app-flow stub**
 at `docs/technical/architecture/app-flow.md` (template below). It carries the
 `<!-- apex:app-flow:stub -->` marker for the coverage check. If the project is **headless** (API-only,
 pure CLI, library), skip this file and add a line "No UI flow" under REQUIREMENTS.md → Out of scope.
@@ -109,9 +110,9 @@ Use the template from ~/.claude/skills/apex-orchestrate/templates/status-templat
 Fill in:
 - Project name: from answer to Question 1 (first 3-4 words)
 - Description: full answer to Question 1
-- Stack: confirmed stack from Question 3
+- Stack: the confirmed stack (from Step 1 / apex-stack), or "TBD" if deferred
 - specialists_default: [] (empty to start — user adds as needed)
-- stack_skills: [] (empty to start — apex-stack's coverage gate records bound stack skills later)
+- stack_skills: as bound by apex-stack's coverage gate ([] only if stack selection was deferred)
 
 ## Step 4: Confirm to user
 

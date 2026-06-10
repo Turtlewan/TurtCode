@@ -1,13 +1,20 @@
 ---
 skill: apex-ai-systems
 backend: deepseek
-version: 1.1.0
-last_updated: 2026-06-01
+version: 1.2.0
+last_updated: 2026-06-10
 sources:
   - Anthropic API Docs — docs.anthropic.com
   - Vercel AI SDK (5/6) — ai-sdk.dev
   - Pydantic AI — ai.pydantic.dev
 staleness_threshold: 7d
+description: >
+  Coding-mode enforcement for LLM-calling code — prompt caching on stable prefixes, max_tokens
+  caps, structured output (Zod/pydantic), bounded agent loops, 429/transient retry with backoff,
+  model id from a config constant, no-PII logging. Loaded when a task calls an LLM API
+  (Anthropic/OpenAI SDK, Vercel AI SDK, Pydantic AI) — "call the model", "add an AI feature",
+  "agent loop", "stream the response". Retrieval/embeddings code is apex-search; design-time
+  model choice and eval strategy are SKILL.md.
 ---
 
 # AI Systems Implementation Rules

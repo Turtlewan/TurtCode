@@ -1,8 +1,8 @@
 ---
 skill: apex-github
 backend: claude
-version: 1.1.0
-last_updated: 2026-05-30
+version: 1.2.0
+last_updated: 2026-06-10
 sources:
   - GitHub Docs — docs.github.com
   - GitHub CLI — cli.github.com
@@ -56,29 +56,10 @@ Every new repository should have these before the first feature:
 
 ## Issue taxonomy — label system
 
-A consistent label system across all repos:
-
-**Type (what kind of work):**
-- `bug` 🔴 — something broken
-- `feature` 🟢 — new capability
-- `chore` ⚪ — maintenance, dependency updates, refactor
-- `docs` 🔵 — documentation only
-- `security` 🟠 — security-related
-
-**Priority (when to address it):**
-- `P0-critical` — production broken, fix now
-- `P1-high` — significant impact, fix this sprint
-- `P2-medium` — important but can wait
-- `P3-low` — nice to have
-
-**Status (what's blocking):**
-- `needs-triage` — not yet assessed
-- `needs-repro` — cannot reproduce
-- `blocked` — waiting on external dependency
-- `good-first-issue` — suitable for contributors
-
-**Area (which part of the system):**
-- `area/frontend`, `area/backend`, `area/infra`, `area/data` etc.
+Four label axes, consistent across all repos: **type** (`bug`/`feature`/`chore`/`docs`/`security`),
+**priority** (`P0-critical`…`P3-low`), **status** (`needs-triage`/`needs-repro`/`blocked`/
+`good-first-issue`), **area** (`area/frontend`, `area/backend`, …). Every issue gets a type +
+priority at triage.
 
 ## Bug tracking workflow
 
@@ -133,11 +114,8 @@ Where a bug record lands depends on whether it was fixed:
 **Branch naming:** `{type}/{issue-number}-short-description`
 Examples: `fix/123-login-redirect`, `feat/456-export-csv`, `chore/update-deps`
 
-**PR title convention (Conventional Commits):**
-`{type}({scope}): {description}`
-- `feat(auth): add OAuth2 Google login`
-- `fix(api): correct pagination offset calculation`
-- `chore(deps): upgrade Prisma to 5.14`
+**PR title convention:** Conventional Commits — `{type}({scope}): {description}`
+(syntax reference: conventionalcommits.org; examples in impl.md).
 
 **PR template:**
 ```markdown
@@ -178,10 +156,7 @@ Use **Workflows** to auto-move:
 
 ## Release management
 
-**Semantic versioning:** `MAJOR.MINOR.PATCH`
-- MAJOR: breaking change
-- MINOR: new feature, backwards compatible
-- PATCH: bug fix, backwards compatible
+**Versioning:** semver (`MAJOR.MINOR.PATCH` — semver.org).
 
 **Release process:**
 1. Merge all changes for the release to main

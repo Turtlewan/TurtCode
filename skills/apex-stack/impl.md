@@ -1,8 +1,8 @@
 ---
 skill: apex-stack
 backend: deepseek
-version: 1.1.0
-last_updated: 2026-05-31
+version: 1.2.0
+last_updated: 2026-06-10
 sources:
   - State of JS 2024 — stateofjs.com
   - Next.js Docs — nextjs.org/docs
@@ -12,6 +12,12 @@ sources:
   - Auth.js Docs — authjs.dev
   - docs/technical/adr/ADR-005-stack-best-practice-skills.md
 staleness_threshold: 30d
+description: >
+  Coding-mode rules for executing a stack decision — write ADR-001-stack.md before any
+  application code, verify exact package names/versions on the ecosystem registry
+  (npm/PyPI/crates.io/pkg.go.dev/Maven), create .env.example with empty values, add a Stack
+  section to PROJECT.md. Loaded when scaffolding a new project from a chosen stack ("set up the
+  project", "scaffold", "first commit"). Not the stack selection itself (that's SKILL.md).
 ---
 
 ## NEVER do

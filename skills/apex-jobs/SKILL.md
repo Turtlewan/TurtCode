@@ -1,8 +1,8 @@
 ---
 skill: apex-jobs
 backend: claude
-version: 1.1.0
-last_updated: 2026-05-31
+version: 1.2.0
+last_updated: 2026-06-10
 sources:
   - BullMQ Docs — docs.bullmq.io
   - Bull Board — github.com/felixmosh/bull-board
@@ -80,33 +80,11 @@ never-silently-swallow-job-errors, idempotent handlers, durable backing, gracefu
 library: workers run as a separate process; durable backing (not in-memory); attempts + exponential
 backoff; idempotent handlers; graceful shutdown.
 
-## Core BullMQ concepts
+## BullMQ specifics
 
-- **Queue** — named channel for jobs; producers add jobs here
-- **Worker** — consumes jobs from a queue; runs in a separate process
-- **Job** — unit of work with a name, data payload, and options
-- **Repeatable job** — cron-scheduled job managed by BullMQ
-- **FlowProducer** — chains jobs with parent/child dependencies
-- **Dead letter queue** — failed jobs moved here after max retries exhausted
-
-## Job options decision table
-
-| Option | When to use | Example value |
-|--------|------------|---------------|
-| `attempts` | Any job that can fail transiently | 3–5 |
-| `backoff` | Always pair with attempts | `{ type: 'exponential', delay: 2000 }` |
-| `delay` | Schedule job for future execution | `5000` (ms) |
-| `priority` | Time-sensitive jobs mixed with bulk | `1` (higher = more urgent) |
-| `removeOnComplete` | High-volume queues (keep last N) | `{ count: 1000 }` |
-| `removeOnFail` | Debugging mode (keep failed jobs) | `false` (default — keep them) |
-| `timeout` | Long-running jobs with a time limit | `60000` (ms) |
-
-## Cron / repeatable jobs
-
-- Use BullMQ `repeat: { pattern: '0 * * * *' }` for cron expressions
-- Use `repeat: { every: 60000 }` for interval-based (every 60 seconds)
-- Always name repeatable jobs — use `jobId` to prevent duplicates on restart
-- Remove stale repeatable jobs on deploy: call `queue.removeRepeatable()` for old patterns
+> Full BullMQ detail (core concepts, job-options table, cron/repeatable patterns, worked
+> examples): read `references/bullmq-typescript.md` when the bound stack is BullMQ + Redis +
+> TypeScript.
 
 ## Dead letter queue pattern
 
@@ -139,10 +117,10 @@ Worker must call `worker.close()` on SIGTERM/SIGINT. Never kill the process mid-
 
 ## Gotchas / edge cases
 
-- **maxRetriesPerRequest: null is mandatory**: BullMQ throws without it. Must be in every code example and the NEVER section.
+- **maxRetriesPerRequest: null is mandatory**: BullMQ throws without it — set it on every Worker connection (see Hard blocks).
 - **QueueScheduler deprecated**: BullMQ v2+ removed the need for a separate QueueScheduler. Do not include it.
 - **Duplicate repeatable jobs on restart**: Without a stable `jobId`, every app restart registers a new repeatable job. The `jobId` pattern is critical.
 - **Empty catch blocks mark jobs as completed**: BullMQ only marks a job as failed if the processor throws. A silent `catch` makes failed jobs disappear silently.
-- **Bull Board must be auth-gated**: The code example must show auth middleware. An unprotected Bull Board exposes all job data and allows manual retries.
+- **Bull Board must be auth-gated**: mount it behind auth middleware. An unprotected Bull Board exposes all job data and allows manual retries.
 - **AWS ElastiCache cluster mode**: Works with ElastiCache in single-node mode. Cluster mode requires additional config (enableOfflineQueue, slot routing).
 - **Concurrency vs CPU**: Setting `concurrency: 5` means 5 jobs run concurrently in the same Node.js event loop. For CPU-heavy tasks, use sandboxed processors (separate child process per job).

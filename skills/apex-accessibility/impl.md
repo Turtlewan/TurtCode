@@ -1,8 +1,8 @@
 ---
 skill: apex-accessibility
 backend: deepseek
-version: 1.2.0
-last_updated: 2026-06-01
+version: 1.3.0
+last_updated: 2026-06-10
 sources:
   - WCAG 2.2 — w3.org/TR/WCAG22
   - ARIA APG — w3.org/WAI/ARIA/apg
@@ -42,7 +42,8 @@ only the API changes. Never hand-roll ARIA roles when a native a11y API exists.
 - Add aria-describedby for error messages linked to form fields
 - Add aria-live="polite" to dynamic content regions
 - Add role="dialog" + aria-labelledby + focus trap to modals; return focus on close
-- Make interactive targets ≥ 24×24 CSS px (native: 44pt iOS / 48dp Android) (WCAG 2.2 §2.5.8)
+- Make interactive targets ≥ 24×24 CSS px (native: 44pt iOS / 48dp Android) (WCAG 2.2 §2.5.8) — this skill owns touch-target minimums
+- Give every icon-only button an accessible name: `aria-label` (web) / `.accessibilityLabel` (SwiftUI) / `contentDescription` (Android) — this skill owns the icon-button label rule
 - Keep the focused element visible — not hidden behind sticky headers/footers (WCAG 2.2 §2.4.11)
 - Test with Tab key — every interactive element must be reachable
 
@@ -87,5 +88,19 @@ only the API changes. Never hand-roll ARIA roles when a native a11y API exists.
 - [ ] Check: no div or span with onClick without role="button"
 - [ ] Check: all images have alt attribute; all inputs have associated labels
 - [ ] Check: interactive targets ≥ 24×24px; drag actions have a non-drag alternative
-- [ ] Run: `npx @axe-core/playwright` (or browser axe extension) — 0 critical violations
-- [ ] **Manual screen-reader pass** (VoiceOver / NVDA / TalkBack) — automation only catches ~30–40%
+- [ ] Check: every icon-only button has an accessible name (`aria-label` / `.accessibilityLabel` / `contentDescription`)
+- [ ] Run axe via a Playwright spec (`@axe-core/playwright` is a library, not a CLI). Create `a11y.spec.ts`:
+
+  ```ts
+  import { test, expect } from '@playwright/test';
+  import AxeBuilder from '@axe-core/playwright';
+
+  test('no critical a11y violations', async ({ page }) => {
+    await page.goto('/');
+    const results = await new AxeBuilder({ page }).analyze();
+    expect(results.violations.filter(v => v.impact === 'critical')).toEqual([]);
+  });
+  ```
+
+  Then run: `npx playwright test a11y.spec.ts` — must pass (0 critical violations)
+- [ ] **Manual screen-reader pass** (VoiceOver / NVDA / TalkBack): needs a human at a real device/screen reader, which the DeepSeek coding backend **does not have**. **DeepSeek must SKIP this step and flag it for planning-mode (Claude) / human review** — do not guess or mark it done. Automation only catches ~30–40%.

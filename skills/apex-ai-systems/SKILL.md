@@ -1,8 +1,8 @@
 ---
 skill: apex-ai-systems
 backend: claude
-version: 1.1.0
-last_updated: 2026-06-01
+version: 1.2.0
+last_updated: 2026-06-10
 sources:
   - Anthropic API Docs — docs.anthropic.com
   - Model Context Protocol (MCP) — modelcontextprotocol.io
@@ -45,12 +45,13 @@ Pick by task, not by reflex-reaching for the biggest model:
 
 | Tier | Current (Claude family) | Use for |
 |------|-------------------------|---------|
-| Frontier | **Claude Opus 4.8** | hardest reasoning, agentic coding, critical judgement |
-| **Balanced default** | **Claude Sonnet 4.6** (≈1M context, strong caching) | most production traffic — near-frontier at a fraction of cost |
-| Cheap/fast | **Claude Haiku 4.5** | classification, extraction, routing, high-volume simple tasks |
+| Flagship reasoning | **Claude Fable 5** (`claude-fable-5`) | hardest reasoning, critical judgement |
+| Frontier | **Claude Opus 4.8** (`claude-opus-4-8`) | agentic coding, long-horizon autonomous work |
+| **Balanced default** | **Claude Sonnet 4.6** (`claude-sonnet-4-6`, ≈1M context, strong caching) | most production traffic — near-frontier at a fraction of cost |
+| Cheap/fast | **Claude Haiku 4.5** (`claude-haiku-4-5-20251001`) | classification, extraction, routing, high-volume simple tasks |
 
 Cross-provider peers: GPT-5.x, Gemini 3.x (often cheaper input). **Default to Sonnet-tier**
-for production; reserve Opus-tier for tasks that measurably need it; route trivial work to Haiku-tier.
+for production; reserve Opus/Fable-tier for tasks that measurably need it; route trivial work to Haiku-tier.
 
 ## Patterns — pick the simplest that fits
 

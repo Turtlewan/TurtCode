@@ -1,8 +1,8 @@
 ---
 skill: apex-docs-product
 backend: deepseek
-version: 1.1.0
-last_updated: 2026-06-01
+version: 1.2.0
+last_updated: 2026-06-10
 sources:
   - Keep a Changelog — keepachangelog.com
 staleness_threshold: 30d
@@ -92,7 +92,12 @@ export async function createUser(data: CreateUserInput): Promise<User> {
 
 ## Verification checklist
 
-- [ ] Check: all exported functions in changed files have JSDoc
+- [ ] Doc comments on exported functions — pre-resolved, no judgment:
+  - If `grep -q '"eslint"' package.json` succeeds → run
+    `npx eslint --no-config-lookup --plugin jsdoc --rule '{"jsdoc/require-jsdoc": ["error", {"publicOnly": true}]}' <changed .ts/.js files>`
+    (if `eslint-plugin-jsdoc` is missing, first run `npm install -D eslint-plugin-jsdoc`). Exit 0 = pass.
+  - Otherwise → do NOT assess coverage yourself; add this exact line to the handoff doc:
+    `FLAG FOR PLANNING REVIEW: exported-function doc-comment coverage not machine-checked (no eslint in project)`
 - [ ] Check: changelog entry written under [Unreleased]
 - [ ] Check: no placeholder text ([TODO], TBD) in any doc file
 - [ ] Check: README updated if user-facing behaviour changed

@@ -1,13 +1,14 @@
 ---
 skill: apex-realtime
 backend: deepseek
-version: 1.1.0
-last_updated: 2026-06-01
+version: 1.2.0
+last_updated: 2026-06-08
 sources:
   - Socket.io Docs — socket.io/docs
   - sse-starlette — github.com/sysid/sse-starlette
   - FastAPI WebSockets — fastapi.tiangolo.com/advanced/websockets
   - MDN SSE — developer.mozilla.org/en-US/docs/Web/API/Server-sent_events
+  - LiveKit Agents — docs.livekit.io/agents
   - SP5 de-coupling + 2026 refresh (stack-neutral core; Socket.io/TS illustration)
 staleness_threshold: 30d
 description: >
@@ -32,6 +33,7 @@ Rules below are stack-neutral; the worked examples assume **Socket.io + Express 
 
 - **Server→client streaming (LLM tokens, feeds, notifications):** **SSE** is the 2026 default — HTTP-based, auto-reconnect, proxy/CDN-friendly, no sticky sessions. **Node:** Express `text/event-stream`. **Python/FastAPI:** `sse-starlette` `EventSourceResponse`. **Swift:** `EventSource`/`URLSession` byte stream.
 - **Bidirectional / interactive:** **WebSocket**. **Node:** Socket.io. **Python/FastAPI:** native `WebSocket` or `python-socketio` (ASGI). **Swift:** `URLSessionWebSocketTask`.
+- **Live voice agent (speech in/out, barge-in):** **WebRTC**, not SSE/WS — via **LiveKit Agents** / **Pipecat** (overlapped STT→LLM→TTS; the framework owns turn-taking/barge-in via a neural endpointing model). Never connect a browser straight to a model API. PSTN exception → WebSocket bridge.
 - **Multi-instance fan-out:** a pub/sub backplane (Socket.io Redis adapter / Redis pub/sub / Postgres LISTEN-NOTIFY). **Single-user local hub (Artemis): usually unnecessary** — one process, emit directly; add a backplane only when you actually run multiple instances.
 - **Auth:** Socket.io handshake middleware → FastAPI WebSocket `Depends`/token check, or an auth header / query token validated before the SSE stream starts.
 

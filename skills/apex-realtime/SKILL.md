@@ -1,19 +1,23 @@
 ---
 skill: apex-realtime
 backend: claude
-version: 1.1.0
-last_updated: 2026-06-01
+version: 1.2.0
+last_updated: 2026-06-08
 sources:
   - Socket.io Docs — socket.io/docs
   - Socket.io Redis Adapter — github.com/socketio/socket.io-redis-adapter
   - sse-starlette — github.com/sysid/sse-starlette
   - FastAPI WebSockets — fastapi.tiangolo.com/advanced/websockets
   - MDN SSE — developer.mozilla.org/en-US/docs/Web/API/Server-sent_events
+  - LiveKit Agents — docs.livekit.io/agents
+  - ElevenLabs Speech Engine — elevenlabs.io
+  - Deepgram streaming STT — developers.deepgram.com
 staleness_threshold: 30d
 description: >
   Use when designing real-time / live push — live updates, WebSocket, SSE, AI/LLM token streaming,
   presence, live dashboards/feeds. Pick the transport by direction (SSE = 2026 default for
-  server→client streams incl. LLM tokens; WebSocket for bidirectional); the invariants are
+  server→client streams incl. LLM tokens; WebSocket for bidirectional; WebRTC for live voice agents
+  — STT→LLM→TTS, barge-in); the invariants are
   stack-neutral (auth-before-connect, identity-from-token, room-scoped emits, clean close,
   reconnect+catch-up). Library is per-stack — Socket.io (TS) / sse-starlette + native WebSocket
   (Python) / URLSessionWebSocketTask (Swift), see § Stack assumptions. Not the coding rules (impl.md).
@@ -30,6 +34,7 @@ direction, then the library by stack:**
 - **Server→client streaming** (LLM tokens, feeds, notifications) → **SSE** (the 2026 default — HTTP,
   auto-reconnect, proxy-friendly, no sticky sessions). Node: Express SSE. **Python:** `sse-starlette`. **Swift:** `EventSource`/`URLSession`.
 - **Bidirectional / interactive** → **WebSocket**. Node: Socket.io. **Python:** native `WebSocket` / `python-socketio`. **Swift:** `URLSessionWebSocketTask`.
+- **Live voice agent** (speech in/out, barge-in) → **WebRTC**, not SSE/WS — via **LiveKit Agents** / **Pipecat**; never point a browser straight at a model API (front it with your own agent/SFU). PSTN/telephony exception → WebSocket bridge. See § Voice pipeline.
 - **Multi-instance fan-out** → a pub/sub backplane (Socket.io Redis adapter / Redis / Postgres LISTEN-NOTIFY). **Single-user local hub (Artemis): not needed** — one process, emit directly.
 
 The research findings + Socket.io/Redis examples below are the **JS-ecosystem illustration** (still
@@ -73,12 +78,34 @@ are per the matrix above — start with SSE for streaming, add a WebSocket only 
 | AI token streaming (one-way) | SSE | Simpler, HTTP-native, no persistent connection overhead |
 | Raw bidirectional, full control | `ws` library | Lighter than Socket.io, manual room management |
 | Managed, no infra | Ably / Pusher | Hosted, pay-per-message, no Redis needed |
+| Live voice agent (speech↔speech) | WebRTC + LiveKit/Pipecat | Sub-second RTT, built-in AEC/Opus/NAT; SSE/WS can't carry live audio |
+| Telephony / PSTN voice | WebSocket bridge | Carrier media arrives over WS; WebRTC not available at the PSTN edge |
 
 **Recommendation — pick by direction, not one-size-fits-all:** for **server→client streaming** (AI
 tokens, feeds) use **SSE**; for **bidirectional/interactive** use a **WebSocket** (Socket.io on JS,
 native WebSocket / python-socketio on Python). The Redis adapter / pub-sub backplane is only for
 **multi-instance** deployments — a **single-user local hub (Artemis) does not need it** (one process,
 emit directly). The earlier "Socket.io + Redis everywhere" default was a JS-cloud-scale assumption.
+
+## Voice pipeline (live voice agents)
+
+Live **voice** is a third transport tier — not SSE/WebSocket. Route a real-time voice assistant over
+**WebRTC** (≈20–40ms RTT; built-in echo-cancel / noise-suppress / Opus / NAT traversal) via a
+framework — **LiveKit Agents** or **Pipecat** — never a raw browser→model-API connection; front it
+with your own agent/SFU. PSTN/telephony is the exception → a WebSocket bridge.
+
+- **It's an overlapped STT→LLM→TTS pipeline**, not one stream: streaming STT (~100ms partials) → LLM
+  time-to-first-token (~200–400ms) → streaming TTS (~200–400ms). Budget ≈600–900ms user-stops→first-
+  audio; the cost lives in turn-taking + LLM TTFT, not the transport.
+- **Turn-taking / barge-in needs a neural endpointing model**, not a silence timeout — take it from
+  the framework (LiveKit/Pipecat); don't hand-roll.
+- **Two architectures, choose explicitly:** speech-to-speech (e.g. OpenAI Realtime API — simplest) vs
+  a composed STT→LLM→TTS pipeline (max control).
+- **Cheapest on-ramp:** wrap an existing chat/RAG brain with a single callback (e.g. ElevenLabs Speech
+  Engine) — LLM/RAG untouched.
+
+> Per-stack wiring (LiveKit/Pipecat code) is a deferred `references/voice-pipeline.md` follow-up (not
+> yet written); for now use the chosen framework's own quickstart.
 
 ## Room / channel architecture
 

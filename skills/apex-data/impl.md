@@ -1,8 +1,8 @@
 ---
 skill: apex-data
 backend: deepseek
-version: 1.1.0
-last_updated: 2026-06-01
+version: 1.2.0
+last_updated: 2026-06-10
 sources:
   - Prisma Migrations — prisma.io/docs/guides/database/developing-with-prisma-migrate
   - Alembic — alembic.sqlalchemy.org
@@ -42,7 +42,7 @@ stack, swap the schema-definition + migration tool:
 
 ## ALWAYS do
 
-- Test migrations against a copy of production data before deploying.
+- Test migrations before deploying: on greenfield projects, against a seeded fixture of representative size; against a masked production copy where one exists.
 - Add composite indexes for queries that filter on multiple columns together.
 - Set cascade behaviour explicitly on foreign keys (`onDelete` / `onUpdate` or the stack equivalent).
 - Keep committed migration files immutable — never edit a past migration; add a new one.
