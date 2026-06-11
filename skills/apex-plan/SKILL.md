@@ -1,8 +1,8 @@
 ---
 skill: apex-plan
 backend: claude
-version: 1.16.0
-last_updated: 2026-06-10
+version: 1.17.0
+last_updated: 2026-06-12
 sources:
   - APEX Design Specification 2026-05-24
   - GSD (Get Shit Done) — github.com/gsd-build/get-shit-done
@@ -247,7 +247,10 @@ classified BLOCK / FLAG / note, each cited to a skill rule.
 
 **Which domains — the trigger:**
 - **Auto-fire** for any of the heavy set the spec touches: **security, auth, data, testing,
-  accessibility**. A missed non-salient gap in these is expensive.
+  accessibility**. A missed non-salient gap in these is expensive. Also auto-fire
+  **ui-ux-design** when the spec ships or restyles user-facing UI (new or changed components,
+  layout, design tokens, visual styling) — not trivial copy/attribute edits; visual and UX
+  judgment is otherwise silently skipped (accessibility ≠ visual/layout review).
 - **Judgment-fire** any other domain the spec touches when you think it's warranted.
 - **Skip** a trivial single-domain spec — inline drafting already handles the salient single-domain
   case; don't pay the spawn.
