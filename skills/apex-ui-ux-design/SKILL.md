@@ -1,13 +1,14 @@
 ---
 skill: apex-ui-ux-design
 backend: claude
-version: 1.6.0
+version: 1.8.0
 last_updated: 2026-06-12
 sources:
   - Apple HIG + Liquid Glass (WWDC25) — developer.apple.com/design/human-interface-guidelines
   - docs/technical/adr/ADR-013-app-flow-artifact.md
   - docs/technical/adr/ADR-017-design-brief-artifact.md
   - docs/research/design-capability/ (WS-1…4, 2026-06-12)
+  - docs/research/swiftui-design-tooling/ (Bitrig + native lanes, 2026-06-12)
   - Vercel Web Design Guidelines — github.com/vercel-labs/agent-skills
   - UI UX Pro Max (nextlevelbuilder) — github.com/nextlevelbuilder/ui-ux-pro-max-skill
   - Web Quality Skills (addyosmani) — github.com/addyosmani/web-quality-skills
@@ -225,8 +226,10 @@ The coding backend can't see what it built, so visual defects are caught plannin
 *separate* reviewer (evaluator-independence — a generator rates its own UI as fine when it isn't).
 After a UI build completes, in planning mode:
 
-1. Run the app; take Playwright screenshots at the target breakpoints (web 375/768/1024/1440;
-   native compact/regular).
+1. Capture the rendered UI at the target sizes:
+   - **Web** → Playwright screenshots (375/768/1024/1440).
+   - **Native SwiftUI** → **Xcode Preview captures** (compact/regular) — the native analogue of the
+     web screenshot; Mac-gated. (Xcode 26.3+ can capture Previews for an agent to iterate on.)
 2. Score them with the § Scored visual audit against the design brief — tokens honoured? forbidden
    patterns absent? art-direction met?
 3. Turn findings into a focused fix-spec for the coder. Typically 2–3 cycles; stop when the audit
@@ -237,14 +240,47 @@ Environment: the app must be reachable from planning mode (local web; Mac-hosted
 Tailscale). Image-less coding mode runs the deterministic text-proxy checks instead
 (→ apex-ui-testing); this gate is the vision half.
 
-## Stitch ideation lane (optional)
+## Prompt-to-design lanes (opt-in — user-invoked)
 
-Google Stitch (free prompt-to-UI) is an optional *first-draft* ideation layer when starting from a
-blank canvas. It exports an agent-readable `DESIGN.md` (tokens + structure as text). Use it to
-explore a look fast, then **fold its tokens/direction into the design brief** — Stitch is the
-ideation, the brief is the source of truth the coder reads. Don't wire Stitch output straight to the
-coder; it goes through the brief. Pair with the `stitch-design-taste` library style to match Stitch's
-house aesthetic. (Account is user-provisioned.)
+A fuller alternative to the text-first brief flow, for when the user wants to **design the UI
+visually before building**. **Opt-in only** — never auto-run, never auto-offered
+([[no-reflexive-ui-render-prompt]]). Invoke explicitly: "design this in Stitch/Bitrig", "use the
+design lane", "/stitch", "/bitrig".
+
+**Pick the lane by target stack:**
+- **Web → Google Stitch** (free; prompt → React + agent-readable `DESIGN.md`). Browser tool on the
+  user's Google account (free tier ~350 + 200 gens/mo).
+- **Native SwiftUI → Bitrig** (free tier / ~$20·mo; prompt → **real SwiftUI source** + Xcode project;
+  `iSwift.dev` is the browser alternative). Output is already native, so **no web→SwiftUI translation
+  tax** — its advantage over using a web tool for a native app. Mac-only to run; new (Mar 2026), no
+  API/MCP — validate output quality. Detail: `docs/research/swiftui-design-tooling/`.
+
+**Division of labour (fixed, both lanes):** these are browser/Mac tools planning mode **cannot
+drive**. *Planning authors + refines the prompt and translates the result into the brief/spec; the
+user runs the tool and iterates visually.*
+
+The loop:
+1. **Screen brief** — 3–5 lines: what the screen does, its states, the feel + the don'ts (from
+   `design-brief.md`).
+2. **Author the prompt** — encode the brief into one generation prompt: token values, the project
+   forbidden-pattern list as explicit "do NOT" lines, layout intent, every state. Hand it to the user;
+   do not attempt to run the tool.
+3. **User generates + iterates** — refines conversationally in the tool, or pastes the result back so
+   planning revises the prompt. Ping-pong until it's right.
+4. **Lock + fold into the brief** — the **design facts** (tokens + structure — Stitch's `DESIGN.md`,
+   Bitrig's source) fold into `design-brief.md`, which stays the single source of truth the coder
+   reads. Tool output never wires straight to the coder.
+5. **Feed the build:**
+   - The token/`DESIGN.md` layer is the **universal, stack-agnostic spine** — always folds into the brief.
+   - **Code reuse is stack-matched:** Stitch's React feeds a React project directly (other web stacks
+     adapt); Bitrig's SwiftUI feeds a SwiftUI build directly. Cross-stack (e.g. a web design for a
+     native app), the rendered output is a **reference to interpret, not trace** — the image-less coder
+     gets the brief + spec text, never the image.
+6. **Gate** — the post-build visual review (below) scores the build against the **locked design**, not
+   just prose — a far sharper target.
+
+The brief's art-direction + APEX anti-slop rules outrank any tool's house aesthetic
+([[design-style-on-demand]]); pair `stitch-design-taste` only if Stitch's look is wanted.
 
 ## Escalation rules
 

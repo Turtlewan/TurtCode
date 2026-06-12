@@ -1,12 +1,13 @@
 ---
 skill: apex-swift
 backend: deepseek
-version: 0.1.0
-last_updated: 2026-05-31
+version: 0.2.0
+last_updated: 2026-06-12
 sources:
   - Apple — Adopting strict concurrency in Swift 6; SwiftUI docs (Context7 /websites/developer_apple_swiftui)
   - docs/research/swift-stack-best-practices.md
   - Context7 /avdlee/swiftui-agent-skill, /twostraws/swiftui-agent-skill
+  - Apple — Xcode 27 agent skills (WWDC 2026); docs/research/swiftui-design-tooling/ (2026-06-12)
 staleness_threshold: 30d
 description: >
   Coding-mode patterns for Swift 6 + SwiftUI (macOS/iOS/iPadOS) — strict concurrency, @Observable,
@@ -41,6 +42,18 @@ Pre-resolved defaults — apply directly.
 - Mark cross-actor types `Sendable`; use `actor` for shared mutable state.
 - Shared business logic in a Swift 6 SPM module; app targets depend on it; UI adapts per platform.
 - Use `NavigationStack` (type-safe paths) and `SwiftData` (`@Model`) for new code.
+
+## Apple agent skills — load as context when present (Xcode 27)
+
+Xcode 27 (WWDC 2026) ships Apple-authored SwiftUI agent skills as plain Markdown. When building
+SwiftUI, **load these as context if present** — they raise the idiomatic-SwiftUI floor and cover
+post-training-cutoff APIs the patterns below can't:
+- `swiftui-specialist` — idiomatic patterns, data flow, deprecated-API guidance.
+- `swiftui-whats-new-27` — Liquid Glass 2 + new APIs with no model training data.
+
+Expected path: `~/.claude/skills/apple-swiftui/` (export from Xcode 27 → drop the `.md` files there).
+⚠️ **Gated on Xcode 27** (beta as of 2026-06): if the files are absent, proceed on the patterns below
+and **flag** "Apple SwiftUI agent skills not yet installed (Xcode 27)" — never block on them.
 
 ## Pattern — observable view-model (main-actor isolated)
 
