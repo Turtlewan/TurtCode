@@ -1,8 +1,8 @@
 ---
 skill: apex-governance
 backend: claude
-version: 1.6.0
-last_updated: 2026-06-10
+version: 1.7.0
+last_updated: 2026-06-12
 sources:
   - APEX Design Specification 2026-05-24
   - Superpowers (obra) — github.com/obra/superpowers
@@ -30,6 +30,8 @@ Referenced by apex-orchestrate and apex-code.
 Full discussion and spec creation in planning. Readiness gate passed.
 Coding runs silently — no questions, no gates, no approvals during execution.
 Unlisted actions blocked and logged. Review decisions in next planning session.
+The one class to capture-and-surface (never block on, never silently decide): a choice that
+**opens the project to the internet or an external service** — log it and raise it at session end.
 
 ### Edit Mode (interactive)
 User present in coding mode. Small changes. Can ask questions.

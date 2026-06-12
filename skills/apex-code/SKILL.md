@@ -1,7 +1,7 @@
 ---
 skill: apex-code
 backend: deepseek
-version: 1.12.0
+version: 1.13.0
 last_updated: 2026-06-12
 sources:
   - APEX Design Specification 2026-05-24
@@ -10,6 +10,7 @@ sources:
   - docs/technical/adr/ADR-010-multi-pass-review.md
   - docs/technical/adr/ADR-014-living-capability-overview.md
   - docs/technical/adr/ADR-017-design-brief-artifact.md
+  - docs/technical/adr/ADR-018-apex-sole-coding-workflow.md
   - donor-analysis (Superpowers 4-status worker contract) — docs/research/donor-analysis/
 staleness_threshold: 30d
 description: >
@@ -23,6 +24,11 @@ description: >
 
 You are in coding mode (DeepSeek). Execute specs from docs/changes/ silently
 and completely. Questions belong in planning — execution is silent.
+
+**APEX is the sole coding workflow.** In coding mode follow this skill and the impl.md cores
+it loads — that is the only execution loop. Any other dev-system or coding-process skill
+(test-driven-development, executing-plans, gsd-*, controlled-yolo, full-output-enforcement, etc.)
+is out of scope here; do not invoke it. (See ADR-018.)
 
 ## Session start
 
