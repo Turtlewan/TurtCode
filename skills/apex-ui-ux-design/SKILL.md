@@ -1,7 +1,7 @@
 ---
 skill: apex-ui-ux-design
 backend: claude
-version: 1.8.0
+version: 1.9.0
 last_updated: 2026-06-12
 sources:
   - Apple HIG + Liquid Glass (WWDC25) — developer.apple.com/design/human-interface-guidelines
@@ -60,7 +60,7 @@ visually has to be explicit text in its context, not planning-side judgment it c
 - **Tokens** — exact values: colour, type family + scale, spacing scale, radii, shadow. The coder
   references these by name, never inventing per-component values.
 - **Art direction** — 2–4 sentences: mood, references, and *what it must NOT feel like*. This also
-  records the **chosen feel → which style-library style to install** (§ Style selection).
+  records the **chosen feel → aesthetic direction** (§ Aesthetic direction).
 - **Forbidden patterns** — the project-specific don'ts ("no purple-on-white gradients, no nested
   cards, no Inter"). Highest-evidence lever for steering a literal coder — don'ts pull more weight
   than do's.
@@ -73,18 +73,35 @@ Screens/journeys are app-flow.md's job; do not duplicate them here.
 - apex-plan's readiness gate checks a UI spec references brief tokens; apex-code loads the brief as
   build context. Template: `~/.claude/skills/apex-ui-ux-design/references/design-brief-template.md`.
 
-## Style selection (style library)
+## Aesthetic direction (research-first, then optional style)
 
+Set the project's aesthetic **once**, when the design brief is first filled (early in planning) — not
+per screen; per-screen work reads the existing brief. Two paths; default to research-first for any
+product where the look matters.
+
+**Path A — research-first (default for bespoke products / when no shelf style obviously fits).**
+Dispatch a focused design-direction scan via **apex-research**, scoped to *this* product:
+- reference / competitor apps in the same category — what do the best ones actually do?
+- established interaction patterns for this surface type;
+- what domain users expect ("what good looks like") — **not** generic 20xx trend surveys.
+
+Bounded return (ADR-015): references (with links) + a recommended direction. **Distil it into the
+brief as concrete entries** — specific token values, the 2–4-sentence art-direction, forbidden
+patterns, and a short `References` list. **Guardrail:** if the output is vibes/trends rather than
+concrete tokens + don'ts + references, it is **not done** — push to specifics. Research *informs* the
+brief; it never replaces it (constraints beat taste prose).
+
+**Path B — pull one library style (fast path when a shelf aesthetic clearly fits the feel).**
 Fixed-aesthetic "style/taste" skills are **not** auto-loaded (they collide and tax compliance —
-[[design-style-on-demand]]). They live shelved in `~/.claude/style-library/` (see its `INDEX.md`).
-Establish the *feel* first via the design brief's art-direction, then:
-
+[[design-style-on-demand]]); they live shelved in `~/.claude/style-library/`.
 1. Read `~/.claude/style-library/INDEX.md`; match the brief's feel to **at most one** style.
 2. Propose it; on user confirmation install that one into `~/.claude/skills/` (INDEX gives the
    command). **Never install more than one** — that re-creates the collision the shelf prevents.
-3. If none fits, the brief's tokens + art-direction + forbidden-patterns stand alone. Shelve the
-   style again when the project is done.
+   Shelve it again when the project is done.
 
+Combine if useful (research to confirm a style fits, or research → bespoke brief with no style).
+Reserve Path A's dispatch for surfaces where the aesthetic matters — skip it for trivial/internal
+screens. If none of this fits, the brief's tokens + art-direction + forbidden-patterns stand alone.
 When a library style's rule conflicts with this skill's slop detection, **the APEX rule wins.**
 
 ## Stack assumptions

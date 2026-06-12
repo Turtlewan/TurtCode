@@ -19,8 +19,9 @@ arXiv:2605.06445). Decoupled per ADR-017 / [[design-style-on-demand]].
    to prevent. If none fits, the design brief's tokens + art-direction + forbidden-patterns stand
    on their own; no style skill is required.
 
-`apex-ui-ux-design` (§ Style selection) drives this — it reads this index, proposes the matching
-style for the brief's feel, and asks before installing.
+`apex-ui-ux-design` (§ Aesthetic direction, Path B) drives this — it reads this index, proposes the
+matching style for the brief's feel, and asks before installing. Path A (research-first) is the
+default when no shelf style obviously fits.
 
 ## Available styles (feel → pull this)
 
