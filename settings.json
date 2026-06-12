@@ -12,10 +12,12 @@
       "Bash(grep *)",
       "Bash(rg *)"
     ],
+    "disableBypassPermissionsMode": "disable",
     "additionalDirectories": [
       "C:/Users/User"
     ]
   },
+  "model": "opus",
   "hooks": {
     "SessionStart": [
       {
@@ -39,6 +41,14 @@
           {
             "type": "command",
             "command": "bash \"C:/Users/User/.claude/hooks/gsd-session-state.sh\""
+          }
+        ]
+      },
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"C:/Program Files/nodejs/node.exe\" \"C:/Users/User/Projects/claude-cockpit/hooks/mode-stamp.js\""
           }
         ]
       }
@@ -144,9 +154,10 @@
   },
   "enabledPlugins": {
     "playwright@claude-plugins-official": true,
-    "superpowers@claude-plugins-official": true,
+    "superpowers@claude-plugins-official": false,
     "context7@claude-plugins-official": true
   },
   "autoUpdatesChannel": "latest",
+  "skipWorkflowUsageWarning": true,
   "theme": "dark"
 }
