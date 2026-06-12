@@ -1,8 +1,8 @@
 ---
 skill: apex-design-system
 backend: claude
-version: 1.1.0
-last_updated: 2026-06-01
+version: 1.2.0
+last_updated: 2026-06-12
 sources:
   - shadcn/ui (CLI v4, MCP, registries) — ui.shadcn.com/docs
   - Radix UI (unified package) — radix-ui.com
@@ -76,6 +76,24 @@ the shadcn MCP server / registries).
 - Container queries are built-in (no plugin); `@theme inline` for referencing existing vars
 - New `oklch()` colour space for design tokens
 - Check version before applying v3 patterns
+
+## Token naming convention
+
+Name tokens by **semantic role, not raw value** — one source of truth the image-less coder
+references by name (this is what `design-brief.md` tokens map onto). Three tiers:
+
+1. **Primitive** (raw scale, no meaning): `--color-green-600`, `--space-4`, `--radius-10`. Not used
+   directly in components.
+2. **Semantic** (role-mapped — components use these): `--color-bg`, `--color-surface`, `--color-fg`,
+   `--color-muted`, `--color-accent`, `--color-danger`, `--text-body`, `--radius-card`. Map to primitives.
+3. **Component** (only for a genuine local override): `--button-bg: var(--color-accent)`.
+
+Rules:
+- Components reference **semantic** tokens only — never a primitive or a raw hex/px. A theme change is
+  then one edit, and dark mode is a semantic remap, not a component rewrite.
+- One name per role across surfaces — the brief's `accent` is `--color-accent` everywhere.
+- Match the bound stack's mechanism: Tailwind v4 `@theme` vars (web), `Color` + asset catalog
+  (SwiftUI — see apex-swift). The naming discipline is identical; only the syntax swaps.
 
 ## Storybook integration
 

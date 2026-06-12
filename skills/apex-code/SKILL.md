@@ -1,14 +1,15 @@
 ---
 skill: apex-code
 backend: deepseek
-version: 1.11.0
-last_updated: 2026-06-10
+version: 1.12.0
+last_updated: 2026-06-12
 sources:
   - APEX Design Specification 2026-05-24
   - GSD (Get Shit Done) — github.com/gsd-build/get-shit-done
   - docs/technical/adr/ADR-006-buildability-layer-verification-inversion.md
   - docs/technical/adr/ADR-010-multi-pass-review.md
   - docs/technical/adr/ADR-014-living-capability-overview.md
+  - docs/technical/adr/ADR-017-design-brief-artifact.md
   - donor-analysis (Superpowers 4-status worker contract) — docs/research/donor-analysis/
 staleness_threshold: 30d
 description: >
@@ -161,6 +162,13 @@ These rules apply to all files in this build, regardless of stack.
 4. **No stack skill bound (`stack_skills: []`):** fall back to the spec's `## Commands to run`;
    if the spec has none, run the obvious per-ecosystem typecheck/test/build best-effort and
    **log the gap** (no recipe available) in the decisions table.
+
+**UI specs — load the design brief (build input, not ambient docs):**
+If the spec touches user-facing UI, also read `docs/technical/architecture/design-brief.md` (tokens +
+art-direction + forbidden patterns, ADR-017). Honour its tokens **by name** and obey its
+forbidden-pattern list while writing — never substitute training-default colours / fonts / layouts
+for the brief's values. If the spec is UI-bearing but the brief is still a stub, flag it (don't invent
+a visual direction).
 
 **Run it (per task — task-level granularity):**
 - After completing a task, run the recipe commands in order (typecheck → lint → test → build,

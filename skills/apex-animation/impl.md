@@ -1,8 +1,8 @@
 ---
 skill: apex-animation
 backend: deepseek
-version: 1.3.0
-last_updated: 2026-06-05
+version: 1.4.0
+last_updated: 2026-06-12
 sources:
   - Motion — motion.dev
   - GSAP (100% free since Apr 2025) — gsap.com/docs
@@ -52,6 +52,7 @@ The reduced-motion + cheap-property + spring rules below are universal.
 - Use `viewport={{ once: true }}` on scroll-reveals — repeating on scroll-out distracts, not informs
 - (web) Scale popovers/menus from their trigger: `transform-origin: var(--radix-popover-content-transform-origin)` (Base UI: `var(--transform-origin)`) — **modals are exempt, keep them centered**
 - Make exit faster than enter — slow where the user decides, snappy where the system responds
+- (web) Prefer `@starting-style` for enter animations over a JS mounted-flag; fall back to the `data-mounted` pattern only where browser support is missing
 
 ## Motion enter/exit pattern
 
@@ -104,6 +105,39 @@ if (!window.matchMedia("(prefers-reduced-motion: reduce)").matches) {
   })
 }
 ```
+
+## Modern CSS motion primitives
+
+Prefer these over JS where supported — they run off the main thread and need no library.
+
+### Enter animation with @starting-style (no mounted-flag JS)
+
+```css
+.toast {
+  opacity: 1;
+  transform: translateY(0);
+  transition: opacity 400ms ease, transform 400ms ease;
+  @starting-style { opacity: 0; transform: translateY(100%); }
+}
+```
+
+Replaces the `useEffect(() => setMounted(true), [])` + `data-mounted` pattern. Fall back to the
+mounted-flag only where browser support is missing.
+
+### WAAPI for programmatic animation (JS control, CSS performance)
+
+```js
+element.animate(
+  [{ clipPath: "inset(0 0 100% 0)" }, { clipPath: "inset(0 0 0 0)" }],
+  { duration: 1000, fill: "forwards", easing: "cubic-bezier(0.77,0,0.175,1)" }
+)
+```
+
+Hardware-accelerated and interruptible without a motion library. Use for dynamic, one-off
+programmatic animation; keep declarative CSS transitions for predetermined UI.
+
+> `clip-path` reveal / animated-tabs / hold-to-delete / comparison-slider recipes: read
+> `references/clip-path-cookbook.md` when the task needs a masked reveal or progress-fill effect.
 
 ## Verification checklist
 

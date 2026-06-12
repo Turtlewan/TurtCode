@@ -1,14 +1,15 @@
 ---
 skill: apex-init
 backend: claude
-version: 1.5.0
-last_updated: 2026-06-10
+version: 1.6.0
+last_updated: 2026-06-12
 sources:
   - APEX Design Specification 2026-05-24
   - GSD (Get Shit Done) — github.com/gsd-build/get-shit-done
   - docs/technical/adr/ADR-005-stack-best-practice-skills.md
   - docs/technical/adr/ADR-013-app-flow-artifact.md
   - docs/technical/adr/ADR-014-living-capability-overview.md
+  - docs/technical/adr/ADR-017-design-brief-artifact.md
 staleness_threshold: 30d
 description: >
   Use when bootstrapping a brand-new APEX project — triggered automatically by
@@ -103,6 +104,14 @@ at `docs/technical/architecture/app-flow.md` (template below). It carries the
 pure CLI, library), skip this file and add a line "No UI flow" under REQUIREMENTS.md → Out of scope.
 Leave it as a stub — planning maps screens/journeys early; do not design flows during bootstrap.
 
+**Design-brief stub — only for UI-bearing projects (ADR-017).** Alongside app-flow.md, seed the
+**design-brief stub** at `docs/technical/architecture/design-brief.md` (template below) for any
+project with a screen surface. It carries the `<!-- apex:design-brief:stub -->` marker for the
+coverage check. Same scope-gate as app-flow (skip for headless / CLI). Leave it a stub — planning
+fills tokens + art-direction + forbidden-patterns once a visual direction is chosen, using the full
+template at `~/.claude/skills/apex-ui-ux-design/references/design-brief-template.md`; do not design
+during bootstrap.
+
 ## Step 3: Write docs/status.md
 
 Use the template from ~/.claude/skills/apex-orchestrate/templates/status-template.md.
@@ -126,6 +135,7 @@ Fill in:
       architecture/overview.md  ← System Overview + living capability index (stub — planning fills it in)
       architecture/data-model.md ← conceptual data model (stub — data-bearing projects only)
       architecture/app-flow.md   ← app-flow: screens + journeys (stub — UI-bearing projects only)
+      architecture/design-brief.md ← tokens + art-direction + don'ts the coder reads (stub — UI-bearing only)
     product/        ← user guides, API docs, changelog
   PROJECT.md        ← vision — loaded by every new agent
   REQUIREMENTS.md   ← scope boundaries — loaded by every new agent
@@ -295,5 +305,32 @@ _The key end-to-end paths a user takes through the screens._
 
 ## Screen states & transitions
 _Per screen: the states (empty / loading / error / loaded) and what transitions between them._
+-
+```
+
+## docs/technical/architecture/design-brief.md initial content
+
+Seed this **only for UI-bearing projects** (substitute `{project-name}`). The
+`<!-- apex:design-brief:stub -->` marker stays until planning fills the brief — it is what the
+doc-coverage check greps for. Tokens + art-direction + forbidden-patterns ONLY — per-screen visuals
+stay judgment (app-flow.md owns screens). Full authoring template:
+`~/.claude/skills/apex-ui-ux-design/references/design-brief-template.md`.
+
+```markdown
+# {project-name} — Design Brief
+
+<!-- apex:design-brief:stub -->
+> **STATUS: STUB.** The visual source of truth the image-less coder reads (ADR-017): design tokens,
+> art direction, and forbidden patterns. Planning fills this once a visual direction is chosen.
+> Tokens + direction + don'ts ONLY — per-screen visuals stay judgment (app-flow.md owns screens).
+
+## Tokens
+_colour · type family + scale · spacing scale · radii · shadow — exact values, referenced by name._
+
+## Art direction
+_2–4 sentences: mood, references, what it must NOT feel like. + chosen feel → style-library style._
+
+## Forbidden patterns
+_project-specific don'ts (no gradient bg, no nested cards, no Inter, …)._
 -
 ```

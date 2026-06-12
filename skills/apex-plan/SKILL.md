@@ -1,7 +1,7 @@
 ---
 skill: apex-plan
 backend: claude
-version: 1.17.0
+version: 1.18.0
 last_updated: 2026-06-12
 sources:
   - APEX Design Specification 2026-05-24
@@ -10,6 +10,7 @@ sources:
   - docs/technical/adr/ADR-011-instinct-loop-no-engine.md
   - docs/technical/adr/ADR-013-app-flow-artifact.md
   - docs/technical/adr/ADR-014-living-capability-overview.md
+  - docs/technical/adr/ADR-017-design-brief-artifact.md
   - donor-analysis (Spec-Kit clarify/analyze, Superpowers self-review, BMAD scale-adaptive) — docs/research/donor-analysis/
 staleness_threshold: 30d
 description: >
@@ -65,6 +66,11 @@ Compute three signals and report them in one line (say "clean" if none fire):
    `docs/technical/architecture/app-flow.md` exist and still carry the `<!-- apex:app-flow:stub -->`
    marker while a UI/screen spec is in play? → flag "app-flow is still a stub." Skip for headless
    projects (no such file by design — ADR-013).
+6. **Design-brief still a stub** (UI-bearing projects only) — does
+   `docs/technical/architecture/design-brief.md` exist and still carry the
+   `<!-- apex:design-brief:stub -->` marker while a UI spec is in play? → flag "design-brief is still
+   a stub" (the image-less coder has no tokens/forbidden-patterns to honour). Skip for headless
+   projects (no such file by design — ADR-017).
 
 Example: "Doc coverage: overview is still a stub; 1 decision not yet ADR'd."
 
@@ -142,6 +148,10 @@ schema stays coherent against one anchor (ADR-008) — **Deep Details only**.
 For **UI-bearing projects**, likewise capture the app-flow (screens + journeys) in
 `docs/technical/architecture/app-flow.md` **early — before per-screen specs** — so screens stay coherent
 against one navigation anchor (ADR-013; technique owned by apex-ui-ux-design) — **Deep Details only**.
+Also fill the **design-brief** (tokens + art-direction + forbidden-patterns) in
+`docs/technical/architecture/design-brief.md` **once a visual direction is chosen** — it is what the
+image-less coder reads for visual decisions; a UI spec should reference its tokens (ADR-017; owned by
+apex-ui-ux-design) — **Deep Details only**.
 
 ### Widen the options — research gate
 

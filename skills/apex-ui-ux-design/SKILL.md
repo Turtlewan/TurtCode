@@ -1,11 +1,13 @@
 ---
 skill: apex-ui-ux-design
 backend: claude
-version: 1.5.0
-last_updated: 2026-06-10
+version: 1.6.0
+last_updated: 2026-06-12
 sources:
   - Apple HIG + Liquid Glass (WWDC25) — developer.apple.com/design/human-interface-guidelines
   - docs/technical/adr/ADR-013-app-flow-artifact.md
+  - docs/technical/adr/ADR-017-design-brief-artifact.md
+  - docs/research/design-capability/ (WS-1…4, 2026-06-12)
   - Vercel Web Design Guidelines — github.com/vercel-labs/agent-skills
   - UI UX Pro Max (nextlevelbuilder) — github.com/nextlevelbuilder/ui-ux-pro-max-skill
   - Web Quality Skills (addyosmani) — github.com/addyosmani/web-quality-skills
@@ -44,6 +46,45 @@ This skill owns the *technique*; apex-docs-technical owns the doc's place in the
 - **Keep it current** — a new screen or journey updates app-flow.md; a UI feature spec should name
   which app-flow screen(s)/journey it implements (apex-plan's readiness gate checks this for UI specs).
 - **Scope-gate** — headless / API-only / pure-CLI projects have no app-flow doc.
+
+## Design-brief artifact (persisted — ADR-017)
+
+For any UI-bearing project, a small per-project **design brief** is a persisted artifact the
+*coding* model reads: `docs/technical/architecture/design-brief.md` (seeded by apex-init, owned
+here). It exists because the coding backend is image-less and literal — anything it must honour
+visually has to be explicit text in its context, not planning-side judgment it cannot see.
+
+**Scope (ADR-017 — partially amends ADR-013's "visual stays un-persisted").** Persist only the
+*stable, single-homed* visual decisions:
+- **Tokens** — exact values: colour, type family + scale, spacing scale, radii, shadow. The coder
+  references these by name, never inventing per-component values.
+- **Art direction** — 2–4 sentences: mood, references, and *what it must NOT feel like*. This also
+  records the **chosen feel → which style-library style to install** (§ Style selection).
+- **Forbidden patterns** — the project-specific don'ts ("no purple-on-white gradients, no nested
+  cards, no Inter"). Highest-evidence lever for steering a literal coder — don'ts pull more weight
+  than do's.
+
+**Stays OUT** (un-persisted judgment, per ADR-013): per-screen layouts and component visuals — they
+live as planning judgment, verified by the § Visual review gate, never frozen in a doc that rots.
+Screens/journeys are app-flow.md's job; do not duplicate them here.
+
+- **Scope-gate** — headless / API-only / CLI projects have no design brief.
+- apex-plan's readiness gate checks a UI spec references brief tokens; apex-code loads the brief as
+  build context. Template: `~/.claude/skills/apex-ui-ux-design/references/design-brief-template.md`.
+
+## Style selection (style library)
+
+Fixed-aesthetic "style/taste" skills are **not** auto-loaded (they collide and tax compliance —
+[[design-style-on-demand]]). They live shelved in `~/.claude/style-library/` (see its `INDEX.md`).
+Establish the *feel* first via the design brief's art-direction, then:
+
+1. Read `~/.claude/style-library/INDEX.md`; match the brief's feel to **at most one** style.
+2. Propose it; on user confirmation install that one into `~/.claude/skills/` (INDEX gives the
+   command). **Never install more than one** — that re-creates the collision the shelf prevents.
+3. If none fits, the brief's tokens + art-direction + forbidden-patterns stand alone. Shelve the
+   style again when the project is done.
+
+When a library style's rule conflicts with this skill's slop detection, **the APEX rule wins.**
 
 ## Stack assumptions
 
@@ -137,6 +178,15 @@ redesign with product-specific intent (see § Industry-specific design reasoning
 The fix is always the same: pick an explicit direction (purpose / audience / tone / one
 memorable detail / constraints) and design to the product domain, not the template.
 
+## Microcopy — write these, not slop
+
+The slop list says what *not* to write; the positive form the coder should produce:
+- **Buttons name the action**, never "Submit"/"Get Started": "Create project", "Send invite", "Save changes".
+- **Empty states = one next action**: what's missing + the CTA ("No invoices yet — create your first").
+- **Errors = cause + recovery**, inline and specific: "Card declined — try another card", not "Something went wrong".
+- **Believable content**: organic names, real-looking data (`47.2%`, not `99.99%`), concrete nouns — never "Acme" / "John Doe" / Lorem.
+- **Voice matches the product category** (§ Industry-specific): fintech terse + precise; consumer warm; dev-tool plain.
+
 ## Scored visual audit (review mode — "is this UI good?")
 
 When asked to review/audit an existing UI, score each dimension **0–10** and give a specific
@@ -157,6 +207,10 @@ fix at `file:line` (not vague praise). Lead with the lowest scores.
 
 Report shape: per-dimension score + one concrete fix each; then the 3 highest-impact fixes.
 
+**Score bands:** 0–3 broken (blocks ship) · 4–6 generic / inconsistent — the "slop" zone, redesign ·
+7–8 solid and product-appropriate · 9–10 distinctive + polished. A UI **averaging < 7, or any single
+dimension < 4, is a FLAG** to fix before ship. This is the threshold the § Visual review gate clears to.
+
 ## Interaction design rules
 
 - **Animation**: 150–300ms micro-interactions, 300–500ms transitions; motion communicates state change
@@ -164,6 +218,33 @@ Report shape: per-dimension score + one concrete fix each; then the 3 highest-im
 - **State persistence**: web → reflect filter/search in URL (shareable); native → app navigation state
 - **Dark mode**: required if the product offers it — test both
 - **Internationalisation**: avoid hardcoded widths that break with longer/translated text
+
+## Visual review gate (screenshot critique — post-build)
+
+The coding backend can't see what it built, so visual defects are caught planning-side by a
+*separate* reviewer (evaluator-independence — a generator rates its own UI as fine when it isn't).
+After a UI build completes, in planning mode:
+
+1. Run the app; take Playwright screenshots at the target breakpoints (web 375/768/1024/1440;
+   native compact/regular).
+2. Score them with the § Scored visual audit against the design brief — tokens honoured? forbidden
+   patterns absent? art-direction met?
+3. Turn findings into a focused fix-spec for the coder. Typically 2–3 cycles; stop when the audit
+   clears its band threshold (avg ≥ 7, no dimension < 4).
+
+Dispatch the review as a **fresh reviewer** — don't self-review the build you just reasoned about.
+Environment: the app must be reachable from planning mode (local web; Mac-hosted app over LAN /
+Tailscale). Image-less coding mode runs the deterministic text-proxy checks instead
+(→ apex-ui-testing); this gate is the vision half.
+
+## Stitch ideation lane (optional)
+
+Google Stitch (free prompt-to-UI) is an optional *first-draft* ideation layer when starting from a
+blank canvas. It exports an agent-readable `DESIGN.md` (tokens + structure as text). Use it to
+explore a look fast, then **fold its tokens/direction into the design brief** — Stitch is the
+ideation, the brief is the source of truth the coder reads. Don't wire Stitch output straight to the
+coder; it goes through the brief. Pair with the `stitch-design-taste` library style to match Stitch's
+house aesthetic. (Account is user-provisioned.)
 
 ## Escalation rules
 
