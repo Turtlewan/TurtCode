@@ -154,7 +154,6 @@
   },
   "enabledPlugins": {
     "playwright@claude-plugins-official": true,
-    "superpowers@claude-plugins-official": false,
     "context7@claude-plugins-official": true
   },
   "autoUpdatesChannel": "latest",

@@ -4,29 +4,21 @@
     "playwright@claude-plugins-official": [
       {
         "scope": "user",
-        "installPath": "C:\\Users\\User\\.claude\\plugins\\cache\\claude-plugins-official\\playwright\\unknown",
-        "version": "unknown",
+        "installPath": "C:\\Users\\User\\.claude\\plugins\\cache\\claude-plugins-official\\playwright\\2b67519cae2a",
+        "version": "2b67519cae2a",
         "installedAt": "2026-05-13T01:55:55.314Z",
-        "lastUpdated": "2026-05-13T01:55:55.314Z"
-      }
-    ],
-    "superpowers@claude-plugins-official": [
-      {
-        "scope": "user",
-        "installPath": "C:\\Users\\User\\.claude\\plugins\\cache\\claude-plugins-official\\superpowers\\5.1.0",
-        "version": "5.1.0",
-        "installedAt": "2026-05-13T01:56:26.755Z",
-        "lastUpdated": "2026-05-13T01:56:26.755Z",
-        "gitCommitSha": "f2cbfbefebbfef77321e4c9abc9e949826bea9d7"
+        "lastUpdated": "2026-06-12T04:55:51.480Z",
+        "gitCommitSha": "2b67519cae2aecaea3b4a7fd114ddd242629b906"
       }
     ],
     "context7@claude-plugins-official": [
       {
         "scope": "user",
-        "installPath": "C:\\Users\\User\\.claude\\plugins\\cache\\claude-plugins-official\\context7\\unknown",
-        "version": "unknown",
+        "installPath": "C:\\Users\\User\\.claude\\plugins\\cache\\claude-plugins-official\\context7\\2b67519cae2a",
+        "version": "2b67519cae2a",
         "installedAt": "2026-05-13T01:57:15.191Z",
-        "lastUpdated": "2026-05-13T01:57:15.191Z"
+        "lastUpdated": "2026-06-12T04:55:51.472Z",
+        "gitCommitSha": "2b67519cae2aecaea3b4a7fd114ddd242629b906"
       }
     ]
   }
