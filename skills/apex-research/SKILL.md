@@ -1,8 +1,8 @@
 ---
 skill: apex-research
 backend: claude
-version: 1.2.1
-last_updated: 2026-06-10
+version: 1.3.0
+last_updated: 2026-06-13
 sources:
   - Context7 MCP — context7.com
 staleness_threshold: 30d
@@ -46,6 +46,31 @@ Resolve scope before spawning anything:
 
 If any of these are unclear, stop and ask. A full research-agent run on the wrong
 scope is the most expensive mistake here.
+
+## The three-phase model contract — hard rule
+
+Research runs in three phases with a **fixed model per phase**. The expensive reasoning model
+never performs mechanical retrieval — that is the token-optimisation that makes this *hard*, not
+a default.
+
+| Phase | Model | Does | Never does |
+|-------|-------|------|------------|
+| **1 · Plan** | Opus/Fable — the planning context itself (no dispatch) | Decompose the question into retrieval tasks: what to fetch, which source tier, how to split across agents, what each must return | — |
+| **2 · Retrieve** | **Sonnet** dispatched agents (drop to **Haiku** for wide, shallow, low-stakes fan-out) | Fetch + extract + cite from the source tiers below; tag each finding's tier | Form the cross-source comparison or final recommendation |
+| **3 · Synthesise** | Opus/Fable — back in the planning context | All reasoning: dedup across agents, confidence-weight, compare, recommend | — |
+
+**Why hard, not a default:** if the planning model fetches inline, the bulky raw content (full
+pages/docs) lands in the *expensive* context. Dispatched retrieval keeps the bulk in the *cheap*
+context and returns only a distilled, cited pointer (the ADR-015 return contract). This holds even
+for a **single lookup** — there is no "just fetch it myself" escape hatch.
+
+**Phase 2 return contract (every retrieval agent):** write any bulky raw capture to disk; return a
+compact, **cite-or-drop** result — each finding tagged with its source tier (below) + URL. Agents
+return cited findings (and at most a *per-source* preliminary tag); the cross-source dedup, weighing,
+and final recommendation are **Phase 3 only**.
+
+Set the model explicitly on dispatch: `Agent(model: "sonnet", …)` / `Agent(model: "haiku", …)`.
+Phases 1 and 3 need no override — they *are* the planning context.
 
 ## Research strategy — tiered by source quality
 
@@ -162,6 +187,9 @@ Use **[X]** because [rationale].
 
 ## Spawning parallel research agents
 
+These are **Phase-2 retrieval agents** — dispatch with `model: "sonnet"` (or `"haiku"` for wide,
+low-stakes fan-out). They return cited findings, not recommendations; you synthesise in Phase 3.
+
 For multiple independent topics (e.g. comparing 3 tools), spawn one agent per topic:
 ```
 Agent 1: Research Tool A — setup, performance, community, known issues
@@ -186,9 +214,10 @@ hand-written agents. Follow this recipe; use the per-agent prompt template in
    one prompt is the off-ramp a cheap model takes.
 3. **Source-grounding is mandatory** (baked into the template): resolve URL first → `git clone`
    (required, not optional) → cite-or-drop → identity = URL + SHA + license-from-file.
-4. **Model tier:** Sonnet gather + Opus synthesis by default (gather is mechanical; the judgment
-   is in synthesis). Opus gather only when there is **no** synthesis layer (single-agent study)
-   or the dedup is high-stakes/subtle. Escalate any thin/uncited result to Opus.
+4. **Model tier — per the three-phase contract:** gather agents are **Sonnet** (**Haiku** for wide
+   low-stakes fan-out); synthesis is always the planning context (Opus/Fable). There is **no
+   Opus-gather path** — a single-agent study still gathers on Sonnet and synthesises in main
+   context. Re-dispatch (don't self-fix) any thin/uncited result, escalating Haiku → Sonnet.
 5. **`run_in_background` per agent**; agents write full analysis to disk and return a compact
    summary (keeps the orchestrator window lean).
 6. **Verify before trusting** — check every result has `CLONED: yes` + cited candidates +
@@ -233,6 +262,8 @@ Good-enough-to-act is the goal.
 
 ## Hard blocks
 
+- Never let the planning/synthesis model (Opus/Fable) perform mechanical retrieval — Phase 2
+  fetch+extract is always dispatched to the cheap tier (Sonnet/Haiku), even for a single lookup.
 - Never present `[ASSUMED]` training knowledge as verified fact.
 - Never ship research without a clear recommendation — a list of options is not a result.
 - Never skip the primary source when one exists (Tier 1 before Tier 2/3).
@@ -243,6 +274,7 @@ Good-enough-to-act is the goal.
 ## Review checklist
 
 - [ ] Scope resolved before researching (the 4 pre-flight questions)
+- [ ] Three-phase contract held — retrieval dispatched to Sonnet/Haiku, synthesis in the planning context
 - [ ] At least one Tier 1 (official docs / primary) source used
 - [ ] Every claim tagged `[VERIFIED]` / `[COMMUNITY]` / `[ASSUMED]`
 - [ ] Confidence derived from source tier, not asserted
