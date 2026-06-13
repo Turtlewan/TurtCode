@@ -1,8 +1,8 @@
 ---
 skill: apex-code
 backend: deepseek
-version: 1.13.0
-last_updated: 2026-06-12
+version: 1.14.0
+last_updated: 2026-06-13
 sources:
   - APEX Design Specification 2026-05-24
   - GSD (Get Shit Done) — github.com/gsd-build/get-shit-done
@@ -12,6 +12,7 @@ sources:
   - docs/technical/adr/ADR-017-design-brief-artifact.md
   - docs/technical/adr/ADR-018-apex-sole-coding-workflow.md
   - donor-analysis (Superpowers 4-status worker contract) — docs/research/donor-analysis/
+  - Agent Skills (addyosmani) — github.com/addyosmani/agent-skills
 staleness_threshold: 30d
 description: >
   APEX coding-mode workflow (DeepSeek) — executes docs/changes/ specs: session start,
@@ -271,6 +272,9 @@ Classify it mechanically (check the tests in order), then route:
 differently).
 → At autonomy **L2**: capture-at-halt, then **pause and ask the user which way to route.**
   Never guess at a gray fork. (The ask-line is set by autonomy_level; L2 = ask on gray.)
+  Surface it in this format — state the conflict, don't bury it in prose:
+  > `CONFUSION: spec says {X}; the codebase has {Y}.`
+  > `Options: A) {…}  B) {…}  C) {…} — which?`
 
 **AFK behaviour at a BIG or GRAY fork — park, don't halt the whole build:**
 - Forked task is **isolable** (no other task in the build depends on it) → **park only that

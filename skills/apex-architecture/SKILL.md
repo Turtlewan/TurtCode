@@ -1,11 +1,12 @@
 ---
 skill: apex-architecture
 backend: claude
-version: 1.2.0
-last_updated: 2026-06-01
+version: 1.3.0
+last_updated: 2026-06-13
 sources:
   - Clean Architecture — Robert Martin
   - Twelve-Factor App — 12factor.net
+  - Agent Skills (addyosmani) — github.com/addyosmani/agent-skills
 staleness_threshold: 60d
 description: >
   Use when making codebase-structure and system-shape decisions — monolith vs microservices,
@@ -50,6 +51,25 @@ Write an ADR for any decision that:
 
 ADR format: Context (why decision needed) → Decision (what) → Consequences (what it means).
 
+## Deprecation and removal
+
+Removing code or an API is not just deleting it — every observable behaviour has consumers, so
+removal needs an active migration, not a silent delete.
+
+- **Decide the mode first.** *Advisory* deprecation (mark deprecated, warn, leave working) when
+  consumers migrate on their own schedule; *compulsory* (hard cutoff with a stated date) when the
+  old path is a security / cost / correctness liability. State which — and the removal date — when
+  you deprecate.
+- **Migrate behind a seam, don't fork.** Strangler pattern: route through an interface, stand up
+  the replacement behind it, move call-sites incrementally, delete the old path once its traffic is
+  zero. For stateful/data cutovers, parallel-run (write both, read old, then flip) before deleting.
+- **Own the migration if you own the thing being removed** — provide the replacement and move the
+  consumers; don't strand them.
+- **No zombie code.** Code that is neither owned nor scheduled for removal is the worst state —
+  every path gets an owner or a removal date, never limbo.
+- **Plan removal at design time.** A new public interface should already have an answer for how it
+  gets deprecated later.
+
 ## Review checklist
 
 - [ ] Domain boundaries are clear — no circular dependencies between domains
@@ -57,6 +77,7 @@ ADR format: Context (why decision needed) → Decision (what) → Consequences (
 - [ ] External dependencies are behind interfaces (not imported directly throughout)
 - [ ] ADR written for any non-obvious architectural choice
 - [ ] Data model normalised appropriately for the access patterns
+- [ ] Anything being removed/replaced has a deprecation mode (advisory/compulsory) + a migration path — no silent deletes, no zombie code
 
 ## Standards
 

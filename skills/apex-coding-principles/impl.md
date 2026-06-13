@@ -1,8 +1,8 @@
 ---
 skill: apex-coding-principles
 backend: deepseek
-version: 1.3.0
-last_updated: 2026-06-10
+version: 1.4.0
+last_updated: 2026-06-13
 sources:
   - User-prescribed coding standards specification (2026-06-01, extended 2026-06-10)
   - Cursor rules best practices 2026
@@ -139,6 +139,24 @@ Write a comment only when the reason is not obvious from the code itself.
 
 Bad: `# Add 1 to count`
 Good: `# Retry once — the payment provider returns a temporary timeout on the first attempt`
+
+## Source-grounding protocol (framework / library code)
+
+Training data goes stale. APIs get deprecated. When writing code that calls a specific framework or library API, ALWAYS verify against the installed version before using it.
+
+**ALWAYS:**
+1. **Detect the version** — read `package.json` / `package-lock.json` (Node), `pyproject.toml` / `requirements.txt` (Python), `Package.swift` (Swift), `go.mod` (Go), `Cargo.toml` (Rust). State what you found: `"React 19.1.0 from package.json"`.
+2. **Consult version-matched official docs** — use the `context7` MCP (resolve-library-id → query-docs) for the specific API you are about to call. Not the homepage — the specific feature page.
+3. **Implement from the docs** — use the API signatures shown for that version. If the docs show a new pattern, use the new pattern; if they mark something deprecated, don't use it.
+4. **Cite the source** — add a brief inline comment on non-obvious framework-specific choices: `// React 19: useActionState replaces manual isPending — react.dev/reference/react/useActionState`.
+
+**NEVER:**
+- Write framework-specific code from memory alone without checking the installed version's docs.
+- Cite Stack Overflow, blog posts, or AI summaries as authoritative sources — official docs only.
+- Use deprecated APIs because they appeared in training data.
+- If context7 is unavailable, flag the pattern as `// UNVERIFIED: based on training data — check official docs before shipping`.
+
+This protocol is canonical here. Do not duplicate it into domain impl.md files.
 
 ## Priority order
 

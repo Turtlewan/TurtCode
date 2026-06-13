@@ -1,8 +1,8 @@
 ---
 skill: apex-plan
 backend: claude
-version: 1.18.0
-last_updated: 2026-06-12
+version: 1.19.0
+last_updated: 2026-06-13
 sources:
   - APEX Design Specification 2026-05-24
   - GSD (Get Shit Done) — github.com/gsd-build/get-shit-done
@@ -123,6 +123,18 @@ need *before* drafting; do not draft-then-validate.
   (b) change what gets built. Fails either test → don't ask it.
 - **Batch and target** (AskUserQuestion-style) — a focused set of the genuine forks, not a
   drip of one-question-at-a-time, and not an exhaustive questionnaire.
+
+**Hypothesis-confidence technique (for underspecified asks).** When an ask is missing its *who*, *why*, or *what success looks like*, lead with a hypothesis before asking anything:
+
+> `HYPOTHESIS: [one sentence — your best read of what they actually want]`
+> `CONFIDENCE: ~N% — missing: [what's still unresolved]`
+
+Then surface only the top unresolved question with your best guess attached:
+
+> `Q: [one focused question]`
+> `GUESS: [your hypothesis for the answer, with the reasoning behind it]`
+
+Wait for a response before asking the next question. Confidence below ~70% means the spec is not ready to draft; keep asking one-at-a-time until the underlying intent is clear. A GUESS attached to each question surfaces your assumptions, which is what intent-elicitation is for — and wrong guesses are corrected faster than open-ended prompts are answered.
 
 (Every decision resolved here is a mid-build fork that never happens — heavier planning is
 the cheaper path; coding's fork-routing is only the safety net.)

@@ -1,8 +1,8 @@
 ---
 skill: apex-ui-ux-design
 backend: claude
-version: 1.9.0
-last_updated: 2026-06-12
+version: 1.10.0
+last_updated: 2026-06-13
 sources:
   - Apple HIG + Liquid Glass (WWDC25) — developer.apple.com/design/human-interface-guidelines
   - docs/technical/adr/ADR-013-app-flow-artifact.md
@@ -186,7 +186,9 @@ redesign with product-specific intent (see § Industry-specific design reasoning
 - Uniform `grid-cols-3` / `grid-cols-4` card walls where the content isn't actually uniform
 - Filler CTA copy ("Get Started", "Learn more") instead of action-specific labels
 - Default font stack with no personality (plain `font-sans` / Inter everywhere)
-- Cards nested inside cards; rounded corners on things that shouldn't be rounded
+- Cards nested inside cards; `rounded-2xl` (or maximum rounding) applied uniformly — corner radii should follow the design system's scale, not be maximised everywhere
+- Oversized equal padding everywhere — destroys visual hierarchy and wastes screen space; use the spacing scale with intent
+- Shadow-heavy design — layered `box-shadow` stacks compete with content and slow rendering on low-end devices; shadows are depth signals, not decoration
 - The UI describing its own features in prose when the controls already speak for themselves
 - Template placeholder content: "John Doe" names, generic egg/Lucide-user avatars, round fake
   numbers (`99.99%`, `50%`), "Acme"/"Nexus" brand names, filler verbs ("Elevate", "Seamless",
