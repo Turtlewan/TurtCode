@@ -29,9 +29,7 @@ You SHOULD: produce technical change specs as Markdown files under docs/changes/
 Resolve all risks/open questions before the spec is ready -- do not include a Risks section.
 A later DeepSeek session will execute these specs.
 
-At the START of this session:
-  - Summarise the latest handoff doc (injected below) back to the user.
-  - List any pending specs in docs/changes/ and ask which to focus on.
+(apex-orchestrate -> apex-plan will summarise the latest handoff doc, injected below, and list any pending specs in docs/changes/. Let the skill drive this -- do not pre-empt it.)
 "@
 
     # Look for the latest handoff doc in the current project
@@ -47,7 +45,16 @@ At the START of this session:
     }
 }
 
-$ctx = "## Active LLM backend: $backend`n## ANTHROPIC_BASE_URL: $url`n`n$policy$handoffContent"
+$route = @"
+=== APEX SESSION ROUTING (do this FIRST) ===
+Your FIRST action this session MUST be to invoke the apex-orchestrate skill via the Skill tool -- BEFORE answering the user, asking clarifying questions, or starting any task. This applies even if the user opens with a concrete task: route first, then act.
+apex-orchestrate will read docs/status.md (bootstrapping a new project via apex-init if it is missing), surface any in-flight work, confirm the backend/mode below, and route you to apex-plan or apex-code. Do not skip it and do not do its job for it.
+Once apex-orchestrate has run, BEGIN your first user-visible reply with this exact line so it is visible that APEX is active:
+[APEX] Using APEX system -- $mode mode
+This banner is the proof the orchestrator ran. If you are about to reply WITHOUT it, you skipped apex-orchestrate -- stop and invoke it first.
+"@
+
+$ctx = "$route`n## Active LLM backend: $backend`n## ANTHROPIC_BASE_URL: $url`n`n$policy$handoffContent"
 
 $payload = @{
     hookSpecificOutput = @{
