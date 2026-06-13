@@ -1,7 +1,7 @@
 ---
 skill: apex-performance
 backend: claude
-version: 1.3.0
+version: 1.4.0
 last_updated: 2026-06-13
 sources:
   - Web Vitals — web.dev/vitals
@@ -65,15 +65,6 @@ An LLM reading static source code cannot measure real-world LCP, INP, or CLS. **
 - With tool data: label each value with its source — `Field (CrUX)` for real-user p75 data, `Lab (Lighthouse)` for synthetic runs. These are not interchangeable.
 
 Require field (CrUX) or lab (Lighthouse/DevTools) data before treating a metric as a known fact.
-
-**AI-generated code recurring performance anti-patterns** (flag these in any review):
-- `React.memo` / `useMemo` / `useCallback` wrapping everything "just in case" — cost without measured benefit.
-- Over-eager `useEffect` dependencies causing redundant re-renders or update loops.
-- Sequential `await`s where `Promise.all` would be correct.
-- Over-fetching data — loading more than the page needs "just in case."
-- Redundant API calls where one deduped call would suffice.
-- State duplication instead of lifting state.
-- `scroll`/`resize` listeners without `passive: true` or debounce (vanilla JS).
 
 ## Review checklist
 
