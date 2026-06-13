@@ -1,7 +1,7 @@
 ---
 skill: apex-plan
 backend: claude
-version: 1.20.0
+version: 1.21.0
 last_updated: 2026-06-13
 sources:
   - APEX Design Specification 2026-05-24
@@ -399,6 +399,17 @@ Documentation
 ```
 
 If any item fails: surface what is unresolved, revise in-place, re-run gate from top. Repeat until clean.
+
+## Coder-tier build planning — when the project sets a tier dial
+
+Read `coder_tier_policy` from status.md (default `flash`):
+- **`flash` / `pro`** — pure single-tier: tag every spec `coder_tier: <that>`; no split, no toggle.
+- **`split`** — tier-aware; you assign per spec, the user just executes. Tag `coder_tier: pro|flash`
+  (`pro` = hard kernel — novel logic, security/concurrency, ambiguity, high blast radius; `flash` =
+  routine remainder). Split a feature across tiers **only when the hard kernel sits behind a contract
+  you can freeze + conformance-test** (Pro commits the contract, Flash builds against it); diffuse or
+  un-freezable → don't split, one tier. Emit a dependency-ordered, tier-grouped `## Build plan` (Pro
+  first) so apex-orchestrate routes the toggle: `🔵 Pro (apex-code pro): kernel → 🟢 Flash: surface [dep: kernel]`.
 
 ## Confirmation digest — how the user signs off
 

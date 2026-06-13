@@ -1,8 +1,8 @@
 ---
 skill: apex-governance
 backend: claude
-version: 1.7.0
-last_updated: 2026-06-12
+version: 1.8.0
+last_updated: 2026-06-13
 sources:
   - APEX Design Specification 2026-05-24
   - Superpowers (obra) — github.com/obra/superpowers
@@ -55,6 +55,10 @@ only; on conflict, this file wins.**
 global CLAUDE.md (prompt the user → draft message → user approves → commit) is a *user-approved*
 action and is permitted at **every** level L2+. "No git commits" at L2/L3 means: never commit
 without that explicit prompt-and-approval exchange.
+
+**Coder tier is capability, not authority.** The Flash/Pro coder tier (`coder_tier`) is orthogonal to
+the autonomy level — "let Pro do more" means raise the L-level, never relax a gate, critical-file
+confirmation, or hard block because the stronger coder is in use.
 
 ## Critical files — always require explicit confirmation regardless of level
 

@@ -7,6 +7,8 @@ autonomy_level: L2
 #                              independent 2nd review on the OTHER model family post-build
 #                              (apex-governance § Cross-model review). Needs a 2nd backend (Mac);
 #                              spends Claude-side capped-pool tokens — set deliberately, not default.
+# coder_tier: pro | flash     # optional — which DeepSeek tier builds this spec. Only meaningful when
+#                              status.md coder_tier_policy: split. pro = hard kernel; flash = routine.
 ---
 
 # Spec: {title}
