@@ -1,7 +1,7 @@
 ---
 skill: apex-ui-ux-design
 backend: claude
-version: 1.17.0
+version: 1.21.0
 last_updated: 2026-06-16
 sources:
   - Apple HIG + Liquid Glass (WWDC25) — developer.apple.com/design/human-interface-guidelines
@@ -77,13 +77,26 @@ Screens/journeys are app-flow.md's job; do not duplicate them here.
 - apex-plan's readiness gate checks a UI spec references brief tokens; apex-code loads the brief as
   build context. Template: `~/.claude/skills/apex-ui-ux-design/references/design-brief-template.md`.
 
-## Aesthetic direction (research-first, then optional style)
+## Aesthetic direction (ask first: research the look, or design from keywords)
 
 Set the project's aesthetic **once**, when the design brief is first filled (early in planning) — not
-per screen; per-screen work reads the existing brief. Two paths; default to research-first for any
-product where the look matters.
+per screen; per-screen work reads the existing brief.
 
-**Path A — research-first (default for bespoke products / when no shelf style obviously fits).**
+**Open every UI workflow by asking — don't assume a path.** Before choosing a direction, ask outright:
+
+> "Want me to **research UI suggestions** for this (reference apps + current patterns for this surface),
+> or would you rather give me **a few keywords / references** to design from directly?"
+
+- **Yes, research** → run **Path A**, then **report the findings back** (references + recommended
+  direction) and confirm before locking them into the brief — never silently proceed to design.
+- **Keywords / a reference instead** → skip the research dispatch; seed the brief's feel + art-direction
+  straight from those keywords (+ **Path B** if one shelf aesthetic clearly fits). Treat the keywords as
+  the art-direction seed, not throwaway.
+
+Either way the output is identical: concrete brief entries (tokens + art-direction + forbidden patterns),
+never vibes. The two paths below are *how* you fill the brief once the user has picked.
+
+**Path A — research-first (when the user opts into research, or no shelf style obviously fits).**
 Dispatch a focused design-direction scan via **apex-research**, scoped to *this* product:
 - reference / competitor apps in the same category — what do the best ones actually do?
 - established interaction patterns for this surface type;
@@ -384,6 +397,31 @@ enough that **Claude can be the primary UI hand at the design/prototype stage**,
 escalation scalpel (the ≈29× is per-token; a tiny mockup is cheap in absolute terms). Once it's wired
 into the real app, logic + bigger files return → DeepSeek carries the bulk again.
 
+**Design archetypes, not pages — the design→build handoff.** The unit of design is the *pattern*, not
+the page: design each archetype **once**, then coding mode (DeepSeek) builds every page that recombines
+locked archetypes. "How much to design" is pattern-count, not page-count — a 30-screen app often needs
+only ~5–7 designed things.
+- **Claude designs (cheap mode):** the brief (tokens + art-direction + forbidden, once) · one **anchor
+  screen** at high finish · each distinct **archetype** (index/list · detail · form · dashboard · modal
+  + empty/loading/error states) · recurring **component patterns**. That's the lock point.
+- **DeepSeek builds (coding mode):** every remaining page that's a *variation on a locked archetype* —
+  apply brief tokens, reuse locked components, follow the established layout. Image-blind-safe **because
+  it traces a locked design, not judges pixels**.
+- **Boundary test, per page:** a *new* visual pattern or a hard taste call → design in cheap mode first
+  (the seeing model is needed); a recombination of locked patterns → coding mode builds it directly.
+  Don't re-design instances.
+- **Handoff = three artifacts:** `design-brief.md` + `app-flow.md` + the locked mockups/components.
+  Build-time safety net = § Escalation rules above (ADR-020 bounded view-layer fix on visual divergence).
+  Claude designs patterns + is the escalation scalpel — it does **not** hand-design the long tail.
+
+**Step 0 — establish the feel before mockup #1 (soft-default; skippable).** A cold mockup defaults to
+generic AI-slop, so before rendering the *first* one, do the lightweight half of § Aesthetic direction:
+seed the brief's feel + art-direction, and if a shelf aesthetic clearly fits, pull **one** style-library
+pack (Path B — `~/.claude/style-library/INDEX.md`; never more than one). Mockup #1 is then on-brand, not
+generic. Runs **by default but is skippable** — if the user wants pixels fast ("skip taste"), render a
+generic baseline now and fold the feel in on a later pass. Set the brief **once** (§ Aesthetic direction);
+don't re-run step 0 per mockup — every later iteration reads the existing brief.
+
 **Two cheap-mode loops — pick by whether the user wants to be in it:**
 - **Solo self-drive (Claude's eyes, no user):** Claude runs both halves — write logic-free HTML/CSS →
   render + screenshot via **Playwright MCP** (`browser_navigate` → `browser_take_screenshot`) → **Read**
@@ -393,15 +431,17 @@ into the real app, logic + bigger files return → DeepSeek carries the bulk aga
 - **Interactive co-review (the user's eyes — default when the user is present for the mockup):** Claude
   writes a self-contained mockup to **`docs/research/mockups/<name>.html`** (inline styles; CDN
   Tailwind/fonts if needed — that dir auto-passes the planning write-guard, so mockup writes never
-  prompt); the **user opens
-  it once in their own Chrome tab** (`file://…` or a served URL) and it **stays open the whole loop**.
-  Then: user types comments → Claude edits the mockup (view-layer only) → user **refreshes (Ctrl+R)** and
-  checks → repeat until the user approves. The persistent tab is the **user's own browser, never a
-  Playwright-controlled one** — Playwright is Claude's *separate* headless instance for its own
-  screenshots and is **never `browser_close`d on the user's view**. Optional: `live-server` / `vite` for
-  auto-reload instead of manual refresh.
+  prompt). **Default preview surface = Cursor's in-editor render:** the user keeps the `.html` open, so
+  Claude's edit lands as a live diff *and* the rendered pane updates in the same window — one surface for
+  code + pixels ([[cursor-coedit-flow]]), no external browser needed for a single mockup. Loop: user types
+  comments → Claude edits the mockup (view-layer only) → user re-views the Cursor render → repeat until
+  approved. (If the user prefers a browser instead, the same `.html` opens in their **own** Chrome tab —
+  `file://…` or served — that **stays open the whole loop**; never a Playwright-controlled tab, which is
+  Claude's *separate* headless screenshot instance and is **never `browser_close`d on the user's view**.
+  Optional `live-server`/`vite` for auto-reload.)
 
-**Multiple options → all tabs in ONE persistent window.** When the user asks for *options/variants*,
+**Multiple options → all tabs in ONE persistent Chrome window** (the one case external Chrome beats
+Cursor's single-pane render — true side-by-side comparison). When the user asks for *options/variants*,
 write each to its own `docs/research/mockups/<name>.html`, then open them **all at once as tabs in the
 user's own Chrome window** in a single launch — Windows: `Start-Process chrome -ArgumentList
 'file:///…A.html','file:///…B.html',…` (Chrome opens multiple URL args as tabs in one window; appends to

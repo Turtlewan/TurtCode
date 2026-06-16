@@ -4,6 +4,27 @@ Behavioral guidelines to reduce common LLM coding mistakes. Merge with project-s
 
 **Tradeoff:** These guidelines bias toward caution over speed. For trivial tasks, use judgment.
 
+## 0. Editor: Cursor co-editing
+
+APEX is the user's build system for **every** project (they build everything with it), so this
+applies everywhere. You run in Cursor's integrated terminal and cannot drive its tabs/windows.
+
+**Opening files** — when the user asks to open a file, reply with the exact open-target as a single
+copy-pasteable token; don't try to open it yourself:
+- File in the **open workspace** → the **filename** for `Ctrl+P` (add a distinguishing path
+  fragment when the basename is ambiguous, e.g. `changes/foo.md` vs `done/foo.md`).
+- File **outside the open workspace** → the **full path** (`Ctrl+P` only searches the open folder).
+
+**Co-editing** — default permission mode is auto-accept, so edits apply without a per-edit prompt:
+- Works best when the user keeps working files open — edits land in-place as live diffs. This is
+  interactive edit-mode; AFK / parallel-subagent builds don't stream edits to the editor.
+- The user may hand-edit in parallel: they save, you re-read from disk — don't assume your last read
+  is current.
+- For UI: a static cheap-mockup renders in Cursor's in-editor pane beside the live code diff (one
+  window — the user's confirmed default); the running app's live preview and multi-variant side-by-side
+  use an external browser. Either way you write structure, the user does visual corrections
+  (spacing/colour) by hand.
+
 ## 1. Think Before Coding
 
 **Don't assume. Don't hide confusion. Surface tradeoffs.**
