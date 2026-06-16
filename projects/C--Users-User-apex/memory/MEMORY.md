@@ -1,5 +1,6 @@
 # APEX Project Memory
 
+- [Cheap-mockup interactive loop](cheap-mockup-interactive-loop.md) — UI design-prototype default: persistent user-owned Chrome tab (never closes), user comments → Claude view-layer edit → user refreshes → repeat to approval; tab is user's browser NOT Playwright's
 - [Agentic-OS video ingestion mode](agentic-os-video-ingestion.md) — for each suggested video: ingest→research→deep-dive→log verdict; DON'T implement; consolidated report only on request; ledger = docs/research/agentic-os-video-audit.md
 
 - [Parked discussion — handover & context efficiency](parked-discussion-handover.md) — planning→coding handover, token-efficient specs, context minimisation for DeepSeek

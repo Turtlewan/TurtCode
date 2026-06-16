@@ -1,7 +1,7 @@
 ---
 skill: apex-ui-ux-design
 backend: claude
-version: 1.13.0
+version: 1.17.0
 last_updated: 2026-06-16
 sources:
   - Apple HIG + Liquid Glass (WWDC25) — developer.apple.com/design/human-interface-guidelines
@@ -383,6 +383,31 @@ image model can read** — a small, fast, token-light loop. On a logic-free surf
 enough that **Claude can be the primary UI hand at the design/prototype stage**, not just the
 escalation scalpel (the ≈29× is per-token; a tiny mockup is cheap in absolute terms). Once it's wired
 into the real app, logic + bigger files return → DeepSeek carries the bulk again.
+
+**Two cheap-mode loops — pick by whether the user wants to be in it:**
+- **Solo self-drive (Claude's eyes, no user):** Claude runs both halves — write logic-free HTML/CSS →
+  render + screenshot via **Playwright MCP** (`browser_navigate` → `browser_take_screenshot`) → **Read**
+  the PNG → critique vs brief → iterate. For fast iteration when the user isn't watching. **Never say "I
+  can't render / you view it"** — the terminal not showing images *inline* ≠ no vision; Claude sees by
+  **Read**-ing the screenshot (conflating them is the known miss, two live sessions).
+- **Interactive co-review (the user's eyes — default when the user is present for the mockup):** Claude
+  writes a self-contained mockup to **`docs/research/mockups/<name>.html`** (inline styles; CDN
+  Tailwind/fonts if needed — that dir auto-passes the planning write-guard, so mockup writes never
+  prompt); the **user opens
+  it once in their own Chrome tab** (`file://…` or a served URL) and it **stays open the whole loop**.
+  Then: user types comments → Claude edits the mockup (view-layer only) → user **refreshes (Ctrl+R)** and
+  checks → repeat until the user approves. The persistent tab is the **user's own browser, never a
+  Playwright-controlled one** — Playwright is Claude's *separate* headless instance for its own
+  screenshots and is **never `browser_close`d on the user's view**. Optional: `live-server` / `vite` for
+  auto-reload instead of manual refresh.
+
+**Multiple options → all tabs in ONE persistent window.** When the user asks for *options/variants*,
+write each to its own `docs/research/mockups/<name>.html`, then open them **all at once as tabs in the
+user's own Chrome window** in a single launch — Windows: `Start-Process chrome -ArgumentList
+'file:///…A.html','file:///…B.html',…` (Chrome opens multiple URL args as tabs in one window; appends to
+the existing window if Chrome is already running). They **persist** for side-by-side comparison. **Never
+present option tabs via Playwright** — its browser closes on context end (the reported tab-closing
+failure). Iterate per option: user comments on one → edit that file → user refreshes that tab.
 
 The cheapness depends on getting a PNG **without booting a heavy emulator/window** — three tiers:
 - **Tier A — headless host-render → PNG** (no emulator; cheapest, scriptable): **Flutter** goldens

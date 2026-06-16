@@ -31,6 +31,11 @@ $claudeRoot = 'C:\Users\User\.claude'
 if ($fp -like "$apexRoot\*")   { exit 0 }
 if ($fp -like "$claudeRoot\*") { exit 0 }
 
+# --- Cheap-mockup design artifacts (ADR-020 / apex-ui-ux-design cheap-mode loop):
+#     logic-free view-layer mockups are an allowed planning-mode write class.
+#     Any project's docs/research/mockups/ is a throwaway design scratch area. ---
+if ($fp -like '*docs\research\mockups\*') { exit 0 }
+
 # --- Otherwise: planning mode editing a code file outside APEX -> ask ---
 $reason = "Planning mode (Anthropic backend). DEFAULT: throw this to a DeepSeek coding session -- '$filePath' is a non-doc file outside the APEX project, and code edits belong in coding mode. Approve this prompt ONLY to explicitly request the special planning-mode edit for this one action."
 $out = @{
