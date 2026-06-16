@@ -1,7 +1,7 @@
 ---
 skill: apex-ui-ux-design
 backend: claude
-version: 1.21.0
+version: 1.22.0
 last_updated: 2026-06-16
 sources:
   - Apple HIG + Liquid Glass (WWDC25) — developer.apple.com/design/human-interface-guidelines
@@ -99,6 +99,9 @@ never vibes. The two paths below are *how* you fill the brief once the user has 
 **Path A — research-first (when the user opts into research, or no shelf style obviously fits).**
 Dispatch a focused design-direction scan via **apex-research**, scoped to *this* product:
 - reference / competitor apps in the same category — what do the best ones actually do?
+- **curated reference galleries** to seed the scan: [Awwwards](https://www.awwwards.com) (award-winning
+  high-craft web), [layers.to](https://layers.to) (product / UI design shots), [21st.dev](https://21st.dev)
+  (buildable React + Tailwind components) — mine for direction, never trace;
 - established interaction patterns for this surface type;
 - what domain users expect ("what good looks like") — **not** generic 20xx trend surveys.
 
