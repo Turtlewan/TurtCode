@@ -15,22 +15,21 @@ if (-not $raw) { exit 0 }
 try { $payload = $raw | ConvertFrom-Json } catch { exit 0 }
 
 $filePath = [string]$payload.tool_input.file_path
-$cwd      = [string]$payload.cwd
-if (-not $cwd) { $cwd = (Get-Location).Path }
 if (-not $filePath) { exit 0 }
 
 # Normalise separators for matching (-like is case-insensitive)
 $fp = ($filePath -replace '/','\')
-$wd = ($cwd -replace '/','\')
 
 # --- Doc files: always allowed in planning mode ---
 if ($fp -match '\.(md|markdown|txt)$') { exit 0 }
 
-# --- APEX is exempt: the apex project, or its ~/.claude system files ---
+# --- APEX is exempt by FILE PATH (not cwd): the apex project's own files, or
+#     its ~/.claude system files. A code file anywhere else falls through to
+#     "ask" even when the session's cwd happens to be the APEX project. ---
 $apexRoot   = 'C:\Users\User\apex'
 $claudeRoot = 'C:\Users\User\.claude'
-if ($wd -eq $apexRoot -or $wd -like "$apexRoot\*") { exit 0 }
-if ($fp -like "$claudeRoot\*")                     { exit 0 }
+if ($fp -like "$apexRoot\*")   { exit 0 }
+if ($fp -like "$claudeRoot\*") { exit 0 }
 
 # --- Otherwise: planning mode editing a code file outside APEX -> ask ---
 $reason = "Planning mode (Anthropic backend). DEFAULT: throw this to a DeepSeek coding session -- '$filePath' is a non-doc file outside the APEX project, and code edits belong in coding mode. Approve this prompt ONLY to explicitly request the special planning-mode edit for this one action."

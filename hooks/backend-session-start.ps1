@@ -1,4 +1,4 @@
-$ErrorActionPreference = 'Stop'
+﻿$ErrorActionPreference = 'Stop'
 
 $url = $env:ANTHROPIC_BASE_URL
 if (-not $url) { $url = '(unset - default Anthropic)' }
@@ -9,19 +9,23 @@ $handoffContent = ''
 if ($isDeepSeek) {
     $mode = 'CODING'
     $backend = 'DeepSeek'
+    $model = $env:ANTHROPIC_MODEL
+    if ($model -and $model -like '*pro*') { $coderTier = 'pro' } else { $coderTier = 'flash' }
     $policy = @"
 Mode: CODING (DeepSeek backend)
+Coder tier: $coderTier (ANTHROPIC_MODEL: $(if ($model) { $model } else { '(unset - default flash)' }))
 You MAY: edit source code, run build/test/lint commands, complete implementation tasks.
 You SHOULD: look for technical change specs in docs/changes/*.md (or wherever the user keeps them) and execute them. After completing each spec, update its status (e.g., mark Done at top, or move the file to docs/changes/done/).
 "@
 } else {
+    $coderTier = ''
     $mode = 'PLANNING'
     $backend = 'Anthropic (Opus or other Claude model)'
     $policy = @"
 Mode: PLANNING (Anthropic backend)
-You MUST NOT: edit source code files. The PreToolUse hook will hard-block Write/Edit on non-.md files.
-You SHOULD: produce technical change specs as Markdown files under docs/changes/<short-name>.md. A spec is an execution script, not a design doc — rich on the *what*, stripped of the *why*. Each spec must include:
-  1. Identity: one line — what this builds (+ optional ADR/discussion link). No rationale paragraph; no *why* inline.
+You SHOULD NOT routinely edit source code files. The PreToolUse hook gates Write/Edit on non-.md files behind an APPROVAL PROMPT (permissionDecision 'ask' -- not a hard block); the APEX project + ~/.claude pass silently. Default: defer code edits to a DeepSeek coding session. One sanctioned exception -- capability-routed UI escalation (ADR-020): you MAY approve the prompt for a bounded, view-layer-only UI fix when an inherently-visual divergence can't be resolved by prose to the image-blind coder. See apex-governance.
+You SHOULD: produce technical change specs as Markdown files under docs/changes/<short-name>.md. A spec is an execution script, not a design doc â€” rich on the *what*, stripped of the *why*. Each spec must include:
+  1. Identity: one line â€” what this builds (+ optional ADR/discussion link). No rationale paragraph; no *why* inline.
   2. Files to change: full paths; every task names its exact files.
   3. Exact changes: code-level detail (signatures, new functions, modifications). Pseudocode or full snippets.
   4. Acceptance criteria: step -> verify, one runnable check per task.
@@ -54,7 +58,8 @@ Once apex-orchestrate has run, BEGIN your first user-visible reply with this exa
 This banner is the proof the orchestrator ran. If you are about to reply WITHOUT it, you skipped apex-orchestrate -- stop and invoke it first.
 "@
 
-$ctx = "$route`n## Active LLM backend: $backend`n## ANTHROPIC_BASE_URL: $url`n`n$policy$handoffContent"
+$tierLine = if ($coderTier) { "`n## coder_tier: $coderTier" } else { '' }
+$ctx = "$route`n## Active LLM backend: $backend`n## ANTHROPIC_BASE_URL: $url$tierLine`n`n$policy$handoffContent"
 
 $payload = @{
     hookSpecificOutput = @{

@@ -1,7 +1,7 @@
 ---
 skill: apex-ui-ux-design
 backend: claude
-version: 1.11.0
+version: 1.13.0
 last_updated: 2026-06-16
 sources:
   - Apple HIG + Liquid Glass (WWDC25) — developer.apple.com/design/human-interface-guidelines
@@ -11,6 +11,8 @@ sources:
   - docs/research/swiftui-design-tooling/ (Bitrig + native lanes, 2026-06-12)
   - docs/research/ai-slop-watch/ (design-slop tells, 2026-06-16)
   - docs/research/cross-platform-design-tooling.md (non-web/native lanes, 2026-06-16)
+  - docs/technical/adr/ADR-020-capability-routed-ui-escalation.md
+  - docs/research/cheap-mode-native/ (cheap-mode preview per target surface, 2026-06-16)
   - Vercel Web Design Guidelines — github.com/vercel-labs/agent-skills
   - UI UX Pro Max (nextlevelbuilder) — github.com/nextlevelbuilder/ui-ux-pro-max-skill
   - Web Quality Skills (addyosmani) — github.com/addyosmani/web-quality-skills
@@ -344,6 +346,58 @@ The loop:
 
 The brief's art-direction + APEX anti-slop rules outrank any tool's house aesthetic
 ([[design-style-on-demand]]); pair `stitch-design-taste` only if Stitch's look is wanted.
+
+## Live preview + Claude visual escalation (during build) — ADR-020
+
+The middle of the UI loop, between the design lane (before) and the visual gate (after). The
+coding model (DeepSeek) is **image-blind** — it writes UI code against the brief text and never sees
+the render. So the live window is the **human's** eyes, and Claude is the **escalation** scalpel when
+prose to a blind coder won't converge.
+
+The full loop:
+1. **Design** → `design-brief.md` (optionally via the Bitrig/Stitch lane above).
+2. **Build** — DeepSeek codes the UI blind against the brief.
+3. **Live preview (human watches, during build)** — keep a render window open:
+   - **Web (Windows / Cursor):** run the dev server, then open Cursor's **Simple Browser** pane
+     (Command Palette → "Simple Browser: Show" → the localhost URL) docked beside the terminal — hot
+     reload shows each change live. Any browser works too; the in-editor pane just keeps it one window.
+   - **SwiftUI:** Xcode Previews on a **Mac** — there is **no Windows live-preview path**. On Windows
+     the only SwiftUI visual route is the Bitrig design lane (generate-and-iterate, not live-as-you-code).
+   Divergences feed back to the coder as prose, or trigger escalation (next).
+4. **Visual gate** — score the build against the locked design (rubric below).
+5. **Claude visual escalation (bounded)** — Claude (planning) makes a **direct UI code edit** only
+   when *all* hold: a **visual divergence** exists; the fix is **inherently visual** (pixel / spacing /
+   optical) **or** prose feedback has failed to converge (≥2 rounds); and Claude can **see the render**
+   (web: a Playwright-MCP screenshot or a pasted image; SwiftUI: Mac-gated). Bounds: **view-layer only**
+   (markup / styles / view files — never logic, data, auth, or any critical-file path); **smallest
+   surgical change**, then hand back to DeepSeek for volume (Claude output ≈29× the cost); **approval-
+   gated + logged** (the edit hits the planning write-guard `ask`, the user approves, and the touched
+   files are recorded in the handoff / status In-Flight). Authority rule + when it is *not* allowed:
+   **apex-governance § Capability-routed UI escalation**. This is capability, not authority — it
+   changes no gate, critical-file confirmation, or hard block.
+
+### Cheap-mode preview by target surface
+
+"Cheap mode" = render the component **logic-free** (mock data, no backend/navigation) to a **PNG the
+image model can read** — a small, fast, token-light loop. On a logic-free surface the cost is low
+enough that **Claude can be the primary UI hand at the design/prototype stage**, not just the
+escalation scalpel (the ≈29× is per-token; a tiny mockup is cheap in absolute terms). Once it's wired
+into the real app, logic + bigger files return → DeepSeek carries the bulk again.
+
+The cheapness depends on getting a PNG **without booting a heavy emulator/window** — three tiers:
+- **Tier A — headless host-render → PNG** (no emulator; cheapest, scriptable): **Flutter** goldens
+  (`flutter test --update-goldens`), **Android Compose** (Paparazzi / Compose Preview Screenshot
+  Testing / Roborazzi), **Avalonia** desktop (headless Skia `CaptureRenderedFrame()`). All Windows-runnable.
+- **Tier B — browser preview + Playwright screenshot** (= the web loop): Web, **Electron/Tauri**
+  (Chromium under the hood — mock in Chrome like a website), Expo/RN via Storybook-RN-Web.
+- **Tier C — run on emulator/device/window + capture**: Android `adb exec-out screencap -p > x.png`;
+  WinUI/WPF window via FlaUI / PowerShell; iOS simulator (Mac).
+
+**Apple SwiftUI is the lone hard gate** — no Windows render path at all; fall back to a CI macOS
+runner (render + upload PNG artifacts) or a web-mockup proxy for layout/feel. **Strategy:** prototype
+the look as a web mockup (cheapest, framework-agnostic) → lock the brief → use the target's Tier-A
+render for native fidelity where it exists. Full per-target table + commands + caveats:
+`docs/research/cheap-mode-native/`.
 
 ## Escalation rules
 
