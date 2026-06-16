@@ -1,14 +1,16 @@
 ---
 skill: apex-ui-ux-design
 backend: claude
-version: 1.10.0
-last_updated: 2026-06-13
+version: 1.11.0
+last_updated: 2026-06-16
 sources:
   - Apple HIG + Liquid Glass (WWDC25) — developer.apple.com/design/human-interface-guidelines
   - docs/technical/adr/ADR-013-app-flow-artifact.md
   - docs/technical/adr/ADR-017-design-brief-artifact.md
   - docs/research/design-capability/ (WS-1…4, 2026-06-12)
   - docs/research/swiftui-design-tooling/ (Bitrig + native lanes, 2026-06-12)
+  - docs/research/ai-slop-watch/ (design-slop tells, 2026-06-16)
+  - docs/research/cross-platform-design-tooling.md (non-web/native lanes, 2026-06-16)
   - Vercel Web Design Guidelines — github.com/vercel-labs/agent-skills
   - UI UX Pro Max (nextlevelbuilder) — github.com/nextlevelbuilder/ui-ux-pro-max-skill
   - Web Quality Skills (addyosmani) — github.com/addyosmani/web-quality-skills
@@ -90,6 +92,15 @@ brief as concrete entries** — specific token values, the 2–4-sentence art-di
 patterns, and a short `References` list. **Guardrail:** if the output is vibes/trends rather than
 concrete tokens + don'ts + references, it is **not done** — push to specifics. Research *informs* the
 brief; it never replaces it (constraints beat taste prose).
+
+**Optional — concept mockups to align on direction.** Before locking the brief you may generate a few
+concept mockups to discuss the *feel* (`imagegen-frontend-web` / `-mobile`, or `brandkit` for identity
+boards). Opt-in, never reflexive ([[no-reflexive-ui-render-prompt]]) — reach for it only when seeing a
+direction beats describing it. Mockups are saved as PNGs the user **opens** (Cursor / VS Code / desktop /
+web preview them natively — they do **not** render inline inside a terminal Claude Code session, whose
+TUI overwrites inline-image sequences). Treat them as discussion artifacts: ping-pong to converge on a
+direction together, then seed the agreed feel + art-direction into the brief. The mockup is a reference,
+never a spec the coder traces.
 
 **Path B — pull one library style (fast path when a shelf aesthetic clearly fits the feel).**
 Fixed-aesthetic "style/taste" skills are **not** auto-loaded (they collide and tax compliance —
@@ -177,8 +188,15 @@ Contrast / touch targets / reduced motion: owned by apex-accessibility — defer
 
 ## Generic-AI ("slop") detection — reject these before shipping a UI spec
 
-LLM-generated UI converges on a recognisable generic look. Treat any of these as a FLAG to
-redesign with product-specific intent (see § Industry-specific design reasoning):
+_Last AI-slop refresh: 2026-06-16 · cadence: 7d._ When elapsed, a planning session runs a design-only
+(no colour) slop-pattern research pass → dated file in `docs/research/ai-slop-watch/` → proposes deduped
+additions → on approval lands via apex-skill-author; log each run in `docs/research/ai-slop-watch/log.md`.
+
+LLM-generated UI converges on a recognisable generic look. Treat any of these as a FLAG to redesign with
+product-specific intent (see § Industry-specific design reasoning). These are **FLAGs, not BLOCKs** — an
+explicit, intentional choice in a prompt or in `design-brief.md` overrides them (the list catches
+*unconsidered defaults*, not deliberate decisions). Genuine accessibility/correctness BLOCKs
+(§ Escalation) are never overridable by aesthetic preference:
 
 - Gratuitous gradients on everything; the purple→blue default palette
 - Glassmorphism / blur cards used decoratively with no depth purpose
@@ -190,6 +208,15 @@ redesign with product-specific intent (see § Industry-specific design reasoning
 - Oversized equal padding everywhere — destroys visual hierarchy and wastes screen space; use the spacing scale with intent
 - Shadow-heavy design — layered `box-shadow` stacks compete with content and slow rendering on low-end devices; shadows are depth signals, not decoration
 - The UI describing its own features in prose when the controls already speak for themselves
+- Coloured left-border accent stripe on cards (as reliable an AI tell as em-dashes are in text)
+- All-caps eyebrow/kicker label stacked above every section heading
+- Bento grid reached for reflexively as a "look modern" default rather than to serve the content
+- Hand-coded SVG mascot/scene illustrations that read as amateur doodles, not deliberate whimsy
+- Emoji used as interface or feature icons (use a real icon system instead)
+- Default stroke icon set (Lucide/Heroicons) used verbatim as the *entire* icon language, no personality
+- Fake dashboard mockups + floating icon "pills" as hero decoration `[trending-2026]`
+- Over-smooth glossy 3D-blob / stock-like "AI hero" imagery `[trending-2026]`
+- Reflexively uniform, evenly-spaced symmetric sections as the default — vary rhythm, weight, and hierarchy with intent rather than stacking identical centred blocks `[trending-2026]`
 - Template placeholder content: "John Doe" names, generic egg/Lucide-user avatars, round fake
   numbers (`99.99%`, `50%`), "Acme"/"Nexus" brand names, filler verbs ("Elevate", "Seamless",
   "Unleash", "Next-Gen"). Use organic names, believable data (`47.2%`), concrete verbs.
@@ -267,6 +294,23 @@ visually before building**. **Opt-in only** — never auto-run, never auto-offer
 design lane", "/stitch", "/bitrig".
 
 **Pick the lane by target stack:**
+
+| Target stack | Lane |
+|---|---|
+| Web (+ Tauri / Electron shells) | Google Stitch |
+| Apple-native SwiftUI (Mac/iPad/iPhone) | Bitrig |
+| Flutter (Dart) | FlutterFlow AI (+ DreamFlow for first drafts) |
+| .NET/C# all-platform native (Win/Mac/iOS/Android/Linux) | Uno Platform Studio — Hot Design Agent (Figma-MCP incoming) |
+| Windows-first native (WinUI 3) | WinCLI / Windows Dev Skills — agent codegen (from Claude Code) |
+| KMP · Compose Multiplatform · .NET MAUI | no dedicated tool → text-first brief + generic agent codegen |
+
+Two principles: design the **spine once** (tokens + flow + states — it spans every surface), and the
+**framework choice is apex-stack / apex-mobile's call — the lane follows it**, never the reverse.
+Capture per-platform divergences in the brief (nav · window chrome · input mode · density). Caveat:
+"native everywhere" in 2026 means Uno/Flutter render their *own* cross-platform controls from one
+codebase, not separate per-OS toolkits. Detail: `docs/research/cross-platform-design-tooling.md`.
+
+The two mature lanes in detail:
 - **Web → Google Stitch** (free; prompt → React + agent-readable `DESIGN.md`). Browser tool on the
   user's Google account (free tier ~350 + 200 gens/mo).
 - **Native SwiftUI → Bitrig** (free tier / ~$20·mo; prompt → **real SwiftUI source** + Xcode project;
