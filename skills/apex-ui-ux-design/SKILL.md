@@ -1,8 +1,8 @@
 ---
 skill: apex-ui-ux-design
 backend: claude
-version: 1.22.0
-last_updated: 2026-06-16
+version: 1.22.1
+last_updated: 2026-06-17
 sources:
   - Apple HIG + Liquid Glass (WWDC25) — developer.apple.com/design/human-interface-guidelines
   - docs/technical/adr/ADR-013-app-flow-artifact.md
@@ -302,7 +302,8 @@ After a UI build completes, in planning mode:
 Dispatch the review as a **fresh reviewer** — don't self-review the build you just reasoned about.
 Environment: the app must be reachable from planning mode (local web; Mac-hosted app over LAN /
 Tailscale). Image-less coding mode runs the deterministic text-proxy checks instead
-(→ apex-ui-testing); this gate is the vision half.
+(→ apex-ui-testing — incl. an optional zero-LLM design-lint, `npx impeccable detect`, for web UI);
+this gate is the vision half.
 
 ## Prompt-to-design lanes (opt-in — user-invoked)
 

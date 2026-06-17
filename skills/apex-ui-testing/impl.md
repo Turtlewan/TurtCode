@@ -1,14 +1,16 @@
 ---
 skill: apex-ui-testing
 backend: deepseek
-version: 1.4.0
-last_updated: 2026-06-13
+version: 1.5.0
+last_updated: 2026-06-17
 sources:
   - Playwright Docs — playwright.dev
   - Storybook (Vitest addon) — storybook.js.org/docs/writing-tests
   - Chromatic — chromatic.com/docs
   - axe-core (official Playwright) — github.com/dequelabs/axe-core-npm
   - docs/technical/adr/ADR-017-design-brief-artifact.md
+  - docs/technical/adr/ADR-022-deterministic-design-lint-reference.md
+  - Impeccable — github.com/pbakaus/impeccable
   - docs/research/design-capability/ (WS-1/WS-4 — text-proxy visual checks)
 staleness_threshold: 14d
 description: >
@@ -133,6 +135,22 @@ seeded from the brief's `## Forbidden patterns` list. These catch the slop defau
 for; design *fidelity* (does it look good?) still needs the planning-mode visual review gate
 (apex-ui-ux-design § Visual review gate).
 
+### Deterministic design-lint (optional, web-UI only)
+
+`impeccable` is a zero-dependency, LLM-free linter — 44 DOM/CSS anti-pattern rules (low contrast,
+gradient text, cream/AI-default palette, nested cards, layout-property transitions, em-dash overuse,
+…). It mechanically catches slop tells the image-less coder can't see — the maintained version of the
+hand-written forbidden-pattern gate above. **Opt-in per project** — wire it only when the spec or
+`design-brief.md` calls for it; never add it unprompted.
+
+- On demand:  `npx impeccable@latest detect <file|dir|url>`
+- Auto-run after every UI edit: `npx impeccable@latest hooks on` installs its PostToolUse hook
+  (fires after Edit/Write, surfaces findings as a system reminder).
+
+Findings are **advisory**, not a hard gate — the ruleset is opinionated and may flag a deliberate
+brief choice; reconcile each finding against `design-brief.md` before acting on it. Requires Node ≥24.
+Source: github.com/pbakaus/impeccable (Apache-2.0, ADR-022). Validate against the first real web-UI build.
+
 ## Verification checklist
 
 - [ ] Run stories as tests: `npx vitest --project=storybook` (Vite + `@storybook/addon-vitest`).
@@ -143,6 +161,7 @@ for; design *fidelity* (does it look good?) still needs the planning-mode visual
 - [ ] Check: no `.waitForTimeout()` calls in test files
 - [ ] (UI-bearing) Token-compliance test present for each primary component; values match `design-brief.md`
 - [ ] (UI-bearing) Forbidden-pattern gate present, seeded from the brief's `## Forbidden patterns`
+- [ ] (web-UI, only if wired per spec/brief) `npx impeccable detect <changed UI files>` run; findings reconciled against `design-brief.md`
 
 ## Flag for planning-mode review
 
