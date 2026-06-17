@@ -1,7 +1,7 @@
 ---
 skill: apex-ui-ux-design
 backend: claude
-version: 1.22.1
+version: 1.23.0
 last_updated: 2026-06-17
 sources:
   - Apple HIG + Liquid Glass (WWDC25) — developer.apple.com/design/human-interface-guidelines
@@ -10,6 +10,7 @@ sources:
   - docs/research/design-capability/ (WS-1…4, 2026-06-12)
   - docs/research/swiftui-design-tooling/ (Bitrig + native lanes, 2026-06-12)
   - docs/research/ai-slop-watch/ (design-slop tells, 2026-06-16)
+  - docs/research/app-design-ai-era/ (AI-era design workflow, 2026-06-17)
   - docs/research/cross-platform-design-tooling.md (non-web/native lanes, 2026-06-16)
   - docs/technical/adr/ADR-020-capability-routed-ui-escalation.md
   - docs/research/cheap-mode-native/ (cheap-mode preview per target surface, 2026-06-16)
@@ -417,6 +418,20 @@ only ~5–7 designed things.
 - **Handoff = three artifacts:** `design-brief.md` + `app-flow.md` + the locked mockups/components.
   Build-time safety net = § Escalation rules above (ADR-020 bounded view-layer fix on visual divergence).
   Claude designs patterns + is the escalation scalpel — it does **not** hand-design the long tail.
+
+**Keeping it consistent — the AI-era contract** (research: `docs/research/app-design-ai-era/`). A blind
+coder's top drift mode is *component multiplication* (a 2nd, slightly-different card). Three rules:
+- **Promote early (rule of one), not on the 3rd use.** Human design waits ~3 uses before extracting a
+  shared component; an AI build inverts it — drafting a reusable piece is cheap, drift is the costly
+  failure → the moment a piece *could* recur, lock it as the one definition (only holds if enforced, below).
+- **The locked contract must be in-repo + inspectable** — local components / Storybook the coder can read,
+  never an imported lib it can't see (agents treat imported deps as "aspirational" and re-invent instead).
+- **Consistency rides on three gates that only work together** (a text coder can't self-verify): (1) *context*
+  — `design-brief.md` fed in, kept **prose-rich, not a bare token table** (tokens alone drift by ~screen 5–8);
+  (2) *commit lint* — token-compliance + forbidden-pattern + optional design-lint (→ apex-ui-testing, ADR-022);
+  (3) *visual verify* — § Visual review gate.
+The L0–L5 "layer stack" framing that produced these rules is deliberately **not** codified — it restates
+design tokens + Atomic Design, which the planning model already knows; only this AI-era residue earns lines.
 
 **Step 0 — establish the feel before mockup #1 (soft-default; skippable).** A cold mockup defaults to
 generic AI-slop, so before rendering the *first* one, do the lightweight half of § Aesthetic direction:
