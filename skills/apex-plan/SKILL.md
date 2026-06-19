@@ -1,8 +1,8 @@
 ---
 skill: apex-plan
 backend: claude
-version: 1.21.0
-last_updated: 2026-06-13
+version: 1.22.0
+last_updated: 2026-06-19
 sources:
   - APEX Design Specification 2026-05-24
   - GSD (Get Shit Done) — github.com/gsd-build/get-shit-done
@@ -204,6 +204,11 @@ As you build the spec, enforce these rules inline:
   "update the auth flow" (forces the worker to explore = context cost + judgment, DeepSeek's
   weakest areas)
 - Every acceptance criterion must be concrete and testable
+- **Tasks state the mechanism, not just the outcome.** When a task reuses or extends an existing
+  component to achieve a *new* behaviour, name the concrete producing step (the wiring that emits/
+  routes the behaviour) — never assume the executor infers it from the desired outcome. DeepSeek
+  executes the literal instruction: "reuse primitive X" yields X's *existing* behaviour, not the new
+  one. (The readiness gate's Sufficiency audit is the backstop for this.)
 - Permissions section must cover every action the build will take
 - Specialist context section captures any specialist findings
 - Risks/Open Questions must be empty before spec is ready
@@ -353,7 +358,8 @@ Tasks
   [ ] Task dependencies are explicit (if Task 3 needs Task 1, say so)
   [ ] Wave plan present for specs with ≥3 tasks — waves derived only from stated dependencies
   [ ] Task granularity: each task is one concern layer — not one file and not multiple features; no artificially thin tasks manufactured to increase worker count
-  [ ] Coverage audit: every acceptance criterion maps to ≥1 task, and every task traces to ≥1 criterion — no orphan tasks, no uncovered criteria (Spec-Kit /analyze)
+  [ ] Coverage audit (presence): every acceptance criterion maps to ≥1 task, and every task traces to ≥1 criterion — no orphan tasks, no uncovered criteria (Spec-Kit /analyze)
+  [ ] Sufficiency audit (mechanism): for every *behavioural* criterion, the mapped task's stated mechanism can actually produce that behaviour. A "reuse/extend existing X" task covers a behavioural criterion only if X already exhibits it (verify against the codebase) OR the task adds an explicit producing/wiring step. An outcome-stated task that omits the producing step — e.g. "re-skin to get the rich treatment" while reusing a primitive that structurally can't emit it — is UNCOVERED: fail until the wiring task exists.
 
 Permissions
   [ ] All files to write are listed with full paths
