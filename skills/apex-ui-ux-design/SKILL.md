@@ -1,8 +1,8 @@
 ---
 skill: apex-ui-ux-design
 backend: claude
-version: 1.23.0
-last_updated: 2026-06-17
+version: 1.23.1
+last_updated: 2026-06-20
 sources:
   - Apple HIG + Liquid Glass (WWDC25) — developer.apple.com/design/human-interface-guidelines
   - docs/technical/adr/ADR-013-app-flow-artifact.md
@@ -331,8 +331,10 @@ Capture per-platform divergences in the brief (nav · window chrome · input mod
 codebase, not separate per-OS toolkits. Detail: `docs/research/cross-platform-design-tooling.md`.
 
 The two mature lanes in detail:
-- **Web → Google Stitch** (free; prompt → React + agent-readable `DESIGN.md`). Browser tool on the
-  user's Google account (free tier ~350 + 200 gens/mo).
+- **Web → Google Stitch** (free; prompt/image/voice → **HTML/CSS + Tailwind**, export to **Figma**
+  (named layers + Auto Layout) or via **MCP / Antigravity**; React/Vue/SwiftUI code export roadmapped,
+  not shipped as of 2026-06). Browser tool on the user's Google account (free tier 550 gens/mo —
+  350 Flash + 200 Pro).
 - **Native SwiftUI → Bitrig** (free tier / ~$20·mo; prompt → **real SwiftUI source** + Xcode project;
   `iSwift.dev` is the browser alternative). Output is already native, so **no web→SwiftUI translation
   tax** — its advantage over using a web tool for a native app. Mac-only to run; new (Mar 2026), no
@@ -350,13 +352,13 @@ The loop:
    do not attempt to run the tool.
 3. **User generates + iterates** — refines conversationally in the tool, or pastes the result back so
    planning revises the prompt. Ping-pong until it's right.
-4. **Lock + fold into the brief** — the **design facts** (tokens + structure — Stitch's `DESIGN.md`,
-   Bitrig's source) fold into `design-brief.md`, which stays the single source of truth the coder
+4. **Lock + fold into the brief** — the **design facts** (tokens + structure — Stitch's HTML/CSS +
+   Figma export, Bitrig's source) fold into `design-brief.md`, which stays the single source of truth the coder
    reads. Tool output never wires straight to the coder.
 5. **Feed the build:**
-   - The token/`DESIGN.md` layer is the **universal, stack-agnostic spine** — always folds into the brief.
-   - **Code reuse is stack-matched:** Stitch's React feeds a React project directly (other web stacks
-     adapt); Bitrig's SwiftUI feeds a SwiftUI build directly. Cross-stack (e.g. a web design for a
+   - The token + structure layer is the **universal, stack-agnostic spine** — always folds into the brief.
+   - **Code reuse is stack-matched:** Stitch's HTML/CSS + Figma export feeds a web build (translate the
+     markup — React export roadmapped, not shipped); Bitrig's SwiftUI feeds a SwiftUI build directly. Cross-stack (e.g. a web design for a
      native app), the rendered output is a **reference to interpret, not trace** — the image-less coder
      gets the brief + spec text, never the image.
 6. **Gate** — the post-build visual review (below) scores the build against the **locked design**, not
