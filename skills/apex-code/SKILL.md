@@ -1,8 +1,8 @@
 ---
 skill: apex-code
 backend: deepseek
-version: 1.14.0
-last_updated: 2026-06-13
+version: 1.16.0
+last_updated: 2026-06-20
 sources:
   - APEX Design Specification 2026-05-24
   - GSD (Get Shit Done) — github.com/gsd-build/get-shit-done
@@ -112,9 +112,57 @@ Pre-flight:
    `"Wave 1: [task N, task M] | Wave 2: [task P] | ..."`
 
    Dispatch rule:
-   - Wave with **2+ independent tasks** → spawn one code-worker agent per task; dispatch all in parallel; wait for all to complete before starting the next wave
+   - **Workflow dispatch (opt-in):** if `wave_dispatch: workflow` is set (spec frontmatter, else
+     status.md, else default `inline`) AND the wave has **2+ independent tasks**, dispatch the wave
+     via the Workflow runtime instead of spawning code-worker agents inline — see § Workflow dispatch
+     path below. The runtime isolates worker transcripts so they never enter this context. Otherwise
+     use the inline rules below.
+   - **Fan-out cap (default 3–4):** dispatch at most 4 parallel workers per wave. If a wave has
+     more independent tasks than the cap, split it into sub-waves of ≤4 and run the sub-waves
+     sequentially (wait for each sub-wave before the next). The spec frontmatter `worker_cap`
+     overrides the default (`worker_cap: null` = unlimited; a number = that cap). This bounds the
+     launch overhead each parallel dispatch writes into the main context.
+   - Wave with **2+ independent tasks** → spawn one code-worker agent per task up to the cap; dispatch the sub-wave in parallel; wait for all to complete before the next (sub-)wave
    - Wave with **1 task** → execute that task directly (no agent spawn)
    - All tasks sequential (every wave has exactly 1 task) → execute directly in order; no agents needed
+   - **Multi-spec dispatch:** if the main session dispatches whole-spec `apex-coder` orchestrators in parallel, the same cap applies to those — at most 4 concurrent, remaining specs in the next batch.
+
+   #### Workflow dispatch path (opt-in)
+
+   When `wave_dispatch: workflow` is active, run each **2+-task (sub-)wave** through the native
+   Workflow tool instead of inline Agent dispatch. This keeps the per-worker transcripts inside the
+   Workflow runtime (ADR-015 isolation) — the main context receives only a bounded status array.
+
+   Per 2+-task (sub-)wave:
+   1. Build the `args` object from the wave plan you already produced:
+      ```
+      {
+        "spec_path": "<full path to the spec being built>",
+        "token_profile": "<active token profile>",
+        "wave_label": "Wave <N>",
+        "tasks": [
+          { "id": "<task id>", "text": "<exact task text>",
+            "files": ["<file>", ...], "acceptance": "<the task's done-when / acceptance criterion>" }
+        ]
+      }
+      ```
+   2. Invoke `Workflow({ scriptPath: "<home>/.claude/workflows/apex-build-wave.js", args })`
+      (resolve `<home>` to the absolute home directory, e.g. `C:/Users/User` here).
+   3. The call returns `{ wave, tasks: [ { task, status, files_changed, summary, concern? } ] }`.
+      Route each returned status through the **same Worker return contract** below — `DONE` /
+      `DONE_WITH_CONCERNS` → decisions table; `BLOCKED` / `NEEDS_CONTEXT` → Forks (capture-at-halt
+      stays here in apex-code, fed by the returned status).
+   4. Single-task waves still execute directly (no workflow, no agent), exactly as the inline rule.
+   5. After the wave returns, run § Wave domain review and continue — review, sequencing, and
+      post-build are unchanged by this path.
+
+   Prerequisite: `enableWorkflows: true` in settings (already set). If the `Workflow` tool is
+   unavailable or errors at dispatch, fall back to inline Agent dispatch for that wave and log it in
+   the decisions table — never block the build on the workflow path.
+
+   Validation status: this path is unproven end-to-end. The first build run with
+   `wave_dispatch: workflow` is its proving run; if it misbehaves, unset the flag (or
+   `enableWorkflows: false`) to fall back to inline dispatch.
 
    **Worker return contract** — each dispatched code-worker returns one status, not prose
    (Superpowers): `DONE` (complete, verified) · `DONE_WITH_CONCERNS` (complete, flag noted) ·
@@ -132,6 +180,7 @@ During execution:
 - Execute waves in the order produced by Wave Analysis
 - Within each wave: apply the dispatch rule (parallel agents or direct execution)
 - After each wave completes: run the wave domain review (see § Wave domain review) before starting the next wave
+- **Wave-boundary compaction:** after a wave's domain review completes and before the next wave, if main-context usage is high (≳70%), run a deliberate `/compact`. Durable state survives — spec ## Progress checkboxes, git, and docs/progress/{spec}.md — so the next wave reloads what it needs. Compact at this boundary, never mid-wave.
 - After completing each task: check it off in ## Progress
 - **In-task micro-ambiguity** (which existing pattern to follow, a name, a local detail that
   does NOT change the spec's approach): make the conservative choice, log it in the decisions table.
