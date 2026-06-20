@@ -1,7 +1,7 @@
 ---
 skill: apex-code
 backend: deepseek
-version: 1.16.0
+version: 1.17.0
 last_updated: 2026-06-20
 sources:
   - APEX Design Specification 2026-05-24
@@ -54,8 +54,16 @@ Pre-flight:
 2. Read token_profile and autonomy_level from spec metadata
    (falls back to docs/status.md, then registry defaults)
 3. Read ## Permissions section — this is the complete list of permitted actions
-4. Pre-authorise all listed operations for this session
-5. Package legitimacy check: for any new packages introduced by this spec,
+4. Set permission mode for the DeepSeek build path: run the build (interactive AFK, headless `-p`,
+   and `wave_dispatch: workflow` waves) in **`dontAsk`** mode — NOT `auto`. Auto mode's safety
+   classifier routes through `ANTHROPIC_BASE_URL`, so on a coding session it runs on DeepSeek; a blip
+   then blocks protected-path writes (`.claude/`, `.git/`, … route to the classifier even when
+   allow-listed) + non-allowlisted Bash. `dontAsk` never calls the classifier — it runs only
+   `permissions.allow` matches + read-only Bash, and `permissions.deny` keeps the destructive floor
+   (deny applies in every mode). Launch headless/workflow builds with `--permission-mode dontAsk`;
+   for an interactive session, cycle off `auto`.
+5. Pre-authorise all listed operations for this session
+6. Package legitimacy check: for any new packages introduced by this spec,
    verify the name is correct (typosquat check) and the package is actively maintained.
    If uncertain: log to Blocked Actions, do not install, flag for human review.
 
@@ -415,6 +423,13 @@ Before executing any task:
    - git_ops: set of git operations permitted
    - env_vars: set of environment variables that may be read
    - network: set of permitted network operations
+
+1a. `dontAsk` enforces this list at the harness level, so mirror the spec's `## Permissions` into
+    `permissions.allow` (`.claude/settings.local.json` or `~/.claude/settings.json`) before the build:
+    each `file_writes` path as `Write(<path>)`/`Edit(<path>)`, each `commands` entry as `Bash(<exact command>)`,
+    plus the union of the bound `stack_skills` Verification Recipe commands. An action absent from
+    `permissions.allow` is DENIED silently in `dontAsk` (no prompt) — so the allowlist must be complete
+    for the verification loop. Keep `permissions.deny` as the destructive floor (overrides allow in every mode).
 
 2. For each action during execution — check against authorised list:
    - Listed → execute normally
