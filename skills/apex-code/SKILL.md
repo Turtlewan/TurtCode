@@ -1,7 +1,7 @@
 ---
 skill: apex-code
 backend: deepseek
-version: 1.17.0
+version: 1.17.1
 last_updated: 2026-06-20
 sources:
   - APEX Design Specification 2026-05-24
@@ -430,6 +430,12 @@ Before executing any task:
     plus the union of the bound `stack_skills` Verification Recipe commands. An action absent from
     `permissions.allow` is DENIED silently in `dontAsk` (no prompt) — so the allowlist must be complete
     for the verification loop. Keep `permissions.deny` as the destructive floor (overrides allow in every mode).
+    **Protected-path exception:** writes to `.claude/`, `.git/`, and other protected paths are denied
+    outright in `dontAsk` and `permissions.allow` CANNOT override them. So a spec that must write a
+    protected path (editing a skill's `impl.md`, `~/.claude/workflows/*`, etc.) cannot run under
+    `dontAsk` — do those edits in planning mode (Anthropic classifier) or via a one-off approval path,
+    never inside the `dontAsk` build. For an ordinary project build this is a feature: the build
+    physically cannot mutate `.claude/`/`.git/`.
 
 2. For each action during execution — check against authorised list:
    - Listed → execute normally
