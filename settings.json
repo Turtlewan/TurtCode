@@ -10,8 +10,18 @@
       "Bash(tail *)",
       "Bash(find *)",
       "Bash(grep *)",
-      "Bash(rg *)"
+      "Bash(rg *)",
+      "WebSearch",
+      "WebFetch(domain:artificialanalysis.ai)",
+      "WebFetch(domain:api-docs.deepseek.com)",
+      "WebFetch(domain:docs.deepseek.com)",
+      "WebFetch(domain:docs.claude.com)",
+      "WebFetch(domain:docs.anthropic.com)",
+      "WebFetch(domain:www.anthropic.com)",
+      "WebFetch(domain:arxiv.org)",
+      "WebFetch(domain:github.com)"
     ],
+    "defaultMode": "acceptEdits",
     "disableBypassPermissionsMode": "disable",
     "additionalDirectories": [
       "C:/Users/User"
@@ -102,6 +112,16 @@
             "timeout": 5
           }
         ]
+      },
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"C:/Program Files/nodejs/node.exe\" \"C:/Users/User/.claude/hooks/destructive-command-guard.js\"",
+            "timeout": 5
+          }
+        ]
       }
     ],
     "PostToolUse": [
@@ -157,6 +177,7 @@
     "context7@claude-plugins-official": true
   },
   "autoUpdatesChannel": "latest",
+  "enableWorkflows": true,
   "skipWorkflowUsageWarning": true,
   "theme": "dark"
 }

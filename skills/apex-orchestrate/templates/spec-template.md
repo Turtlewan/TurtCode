@@ -7,8 +7,9 @@ autonomy_level: L2
 #                              independent 2nd review on the OTHER model family post-build
 #                              (apex-governance § Cross-model review). Needs a 2nd backend (Mac);
 #                              spends Claude-side capped-pool tokens — set deliberately, not default.
-# coder_tier: pro | flash     # optional — which DeepSeek tier builds this spec. Only meaningful when
-#                              status.md coder_tier_policy: split. pro = hard kernel; flash = routine.
+# coder_model: flash         # optional — pin this WHOLE spec to one model, bypassing per-task routing.
+#                              Value from status.md coder_models {flash|pro|sonnet|opus}. Absent → the
+#                              router assigns per task in ## Wave plan (ADR-024). Supersedes coder_tier.
 ---
 
 # Spec: {title}
@@ -53,7 +54,10 @@ Simplicity check: {considered simpler approach? yes/no — if yes, why this vers
 
 ## Wave plan
 <!-- Required for specs with ≥3 tasks. Planning derives this from stated dependencies; coding
-     executes it verbatim (no dependency inference). Tasks in the same wave run in parallel. -->
+     executes it verbatim (no dependency inference). Tasks in the same wave run in parallel.
+     When status.md coder_models has >1 model, the router appends a per-task model tag
+     (e.g. "task 1 ▸flash, task 2 ▸sonnet") and dispatch batches by backend — full format in
+     apex-plan § Model-routing build planning (ADR-024). -->
 Wave 1: [task 1, task 2] | Wave 2: [task 3]
 
 ## Permissions

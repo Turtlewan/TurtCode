@@ -6,7 +6,7 @@ token_profile: balanced
 autonomy_level: L2
 specialists_default: []   # domains always active for routing regardless of keywords
 stack_skills: []          # bound stack skills (apex-<framework>); coding reads their ## Verification Recipe (ADR-005/006)
-coder_tier_policy: flash  # flash | pro | split — DeepSeek coding tier(s). flash/pro = pure single-tier; split = tier-aware (planning assigns per spec + emits a Build plan)
+coder_models: [flash]     # allowed coding models, subset of {flash, pro, sonnet, opus} (ADR-024). Opus routes per-task within this menu; 1 entry = no routing. flash/pro = DeepSeek backend, sonnet/opus = Anthropic (image work + escalation). Default [flash] = backward-compatible (supersedes coder_tier_policy: flash|pro|split → [flash]|[pro]|[flash,pro])
 
 _Last updated by planning mode:_ {YYYY-MM-DD}
 
