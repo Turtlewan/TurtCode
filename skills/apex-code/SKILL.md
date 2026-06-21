@@ -1,8 +1,8 @@
 ---
 skill: apex-code
 backend: deepseek
-version: 1.17.1
-last_updated: 2026-06-20
+version: 1.17.2
+last_updated: 2026-06-21
 sources:
   - APEX Design Specification 2026-05-24
   - GSD (Get Shit Done) — github.com/gsd-build/get-shit-done
@@ -436,6 +436,16 @@ Before executing any task:
     `dontAsk` — do those edits in planning mode (Anthropic classifier) or via a one-off approval path,
     never inside the `dontAsk` build. For an ordinary project build this is a feature: the build
     physically cannot mutate `.claude/`/`.git/`.
+    **`wave_dispatch: workflow` builds need the orchestration tools allow-listed too** — add
+    `Workflow(*)`, `Agent(*)`, `Task(*)`, `Skill(*)` to `permissions.allow`, not just `Write`/`Edit`/
+    recipe-`Bash`. These are gated by `permissions.allow`, NOT the classifier (off-list = local "don't
+    ask mode" deny, no round-trip), so omitting them silently blocks dispatch and no worker spawns.
+    Dispatched workers **inherit the parent's `dontAsk`** — they get local denials for off-list actions,
+    no classifier — so the SPOF stays eliminated through the worker path. (Empirically validated
+    2026-06-21, Phase-2 probe F1+F2.) **Caveat:** a worker may intermittently be denied Bash even for
+    an allow-listed recipe command (seen once across two identical workers); main-session verification
+    still covers the build, but don't rely on per-worker Bash self-verification under `dontAsk` until
+    this is run down.
 
 2. For each action during execution — check against authorised list:
    - Listed → execute normally
