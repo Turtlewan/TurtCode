@@ -11,6 +11,11 @@ export const meta = {
 //   token_profile:  string  — lean | balanced | thorough | custom
 //   wave_label:     string  — e.g. "Wave 2" (for the returned summary)
 //   tasks:          [ { id: string, text: string, files: string[], acceptance: string } ]
+//   isolate:        boolean — true → run each worker in its own managed git worktree, so
+//                             concurrent build/test recipes don't collide on build artifacts,
+//                             lockfiles, ports, or dist/.next. Set by apex-code only when the
+//                             wave's workers each run an artifact-producing recipe, or for
+//                             headless/AFK builds. Default false (most waves are safe same-tree).
 // }
 
 const STATUS_SCHEMA = {
@@ -44,7 +49,12 @@ const results = await parallel(
         `acceptance criterion before returning. Make the conservative choice on micro-ambiguity.`,
         `Return ONLY the bounded status object — never a transcript.`,
       ].join('\n'),
-      { label: `worker:${t.id}`, agentType: 'code-worker', schema: STATUS_SCHEMA }
+      {
+        label: `worker:${t.id}`,
+        agentType: 'code-worker',
+        schema: STATUS_SCHEMA,
+        ...(args.isolate ? { isolation: 'worktree' } : {}),
+      }
     )
   )
 )

@@ -1,7 +1,7 @@
 ---
 skill: apex-code
 backend: deepseek
-version: 1.17.2
+version: 1.18.0
 last_updated: 2026-06-21
 sources:
   - APEX Design Specification 2026-05-24
@@ -130,6 +130,15 @@ Pre-flight:
      sequentially (wait for each sub-wave before the next). The spec frontmatter `worker_cap`
      overrides the default (`worker_cap: null` = unlimited; a number = that cap). This bounds the
      launch overhead each parallel dispatch writes into the main context.
+   - **Build-artifact isolation (worktree):** when a wave's parallel workers each run an
+     artifact-producing recipe (build / serve / lockfile-mutating — `dist`/`.next`, dev-server
+     ports, lockfiles), same-tree concurrency collides even though their *source* files are
+     disjoint. Dispatch those workers in an isolated managed git worktree: inline path → pass
+     `isolation: "worktree"` to each code-worker Agent; workflow path → set `"isolate": true` in
+     the args. **Default it ON for headless/AFK builds** (isolate from the user's working tree).
+     Do NOT blanket-apply — per-worker checkout has overhead, and most waves (no concurrent build,
+     or pure source edits) are safe same-tree. _Wants one `coding-session` validation — build-artifact
+     collision is real-world, not provable by reasoning._
    - Wave with **2+ independent tasks** → spawn one code-worker agent per task up to the cap; dispatch the sub-wave in parallel; wait for all to complete before the next (sub-)wave
    - Wave with **1 task** → execute that task directly (no agent spawn)
    - All tasks sequential (every wave has exactly 1 task) → execute directly in order; no agents needed
@@ -148,6 +157,7 @@ Pre-flight:
         "spec_path": "<full path to the spec being built>",
         "token_profile": "<active token profile>",
         "wave_label": "Wave <N>",
+        "isolate": <true if this wave's workers run an artifact-producing recipe, or headless/AFK; else false>,
         "tasks": [
           { "id": "<task id>", "text": "<exact task text>",
             "files": ["<file>", ...], "acceptance": "<the task's done-when / acceptance criterion>" }
@@ -401,6 +411,10 @@ Execute in this order:
    "Build complete. Handoff at docs/handoff/{date}.md.
    Reviewer: {clean | N findings — see handoff}.
    Decisions made: {count} — review in next planning session."
+   - **High-risk specs** (`risk: high`, or auth / security / data domains, or pre-PR): append a
+     recommendation — "Before you merge, consider running `/code-review ultra` (cloud multi-agent
+     review)." APEX **cannot self-launch it** (billed, user-triggered) — recommend only. It
+     complements, never replaces, the free in-pipeline reviewers above (apex-governance § Ultra review gate).
 
 ## Pause workflow
 

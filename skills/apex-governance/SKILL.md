@@ -1,8 +1,8 @@
 ---
 skill: apex-governance
 backend: claude
-version: 1.9.0
-last_updated: 2026-06-16
+version: 1.10.0
+last_updated: 2026-06-21
 sources:
   - APEX Design Specification 2026-05-24
   - Superpowers (obra) — github.com/obra/superpowers
@@ -32,6 +32,12 @@ Coding runs silently — no questions, no gates, no approvals during execution.
 Unlisted actions blocked and logged. Review decisions in next planning session.
 The one class to capture-and-surface (never block on, never silently decide): a choice that
 **opens the project to the internet or an external service** — log it and raise it at session end.
+
+**Worktree isolation (headless / AFK default):** an unattended build runs against the user's live
+working tree, so default its parallel build-recipe workers into isolated managed git worktrees
+(apex-code § dispatch rule — inline `isolation: "worktree"`, workflow `isolate: true`) — concurrent
+builds then can't collide on artifacts / lockfiles / ports or mutate the live tree mid-session.
+Interactive Edit Mode stays same-tree (the user is watching). One `coding-session` validation pending.
 
 ### Edit Mode (interactive)
 User present in coding mode. Small changes. Can ask questions.
@@ -188,6 +194,16 @@ second backend unavailable — single-model only; flagged for human." It never b
 The value is the *independence* — a different family has different blind spots, so agreement is
 real signal. Two passes of the *same* model is the santa-method dual-pass (apex-code wave review,
 ADR-010), which is weaker here because it shares blind spots. See § Evaluator independence.
+
+## Ultra review gate (recommended, not pipeline-wired)
+
+`/code-review ultra` is Claude Code's **cloud, multi-agent** review tier (local branch or a GitHub
+PR). It is **billed and user-triggered — APEX cannot self-launch it.** So it is a *recommendation*,
+never a wired pipeline step: apex-code's post-build report suggests it for **high-risk** builds
+(`risk: high`, auth / security / data domains, or pre-PR). It **complements** the free in-pipeline
+reviewers (`apex-reviewer`, `apex-wave-reviewer`, opt-in cross-model) — a heavier, independent tier —
+and replaces none of them. **Reject `/code-review --fix`** (it auto-applies edits — violates the
+advisory-reviewer invariant that review never rewrites code).
 
 ## Evaluator independence (anti-collusion invariant)
 
