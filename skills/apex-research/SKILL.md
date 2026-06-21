@@ -1,10 +1,11 @@
 ---
 skill: apex-research
 backend: claude
-version: 1.3.0
-last_updated: 2026-06-13
+version: 1.4.0
+last_updated: 2026-06-21
 sources:
   - Context7 MCP — context7.com
+  - Observed env finding 2026-06-21 — background-agent web-deny (non-interactive approval)
 staleness_threshold: 30d
 description: >
   Use when researching before a decision — comparing tools/options, verifying current best
@@ -55,7 +56,7 @@ a default.
 
 | Phase | Model | Does | Never does |
 |-------|-------|------|------------|
-| **1 · Plan** | Opus/Fable — the planning context itself (no dispatch) | Decompose the question into retrieval tasks: what to fetch, which source tier, how to split across agents, what each must return | — |
+| **1 · Plan** | Opus/Fable — the planning context itself (no dispatch) | Decompose the question into retrieval tasks: what to fetch, which source tier, how to split across agents, what each must return; **pre-authorise the source domains** the agents will fetch (§ Web access under dispatch) | Mechanical retrieval (fetch/extract) |
 | **2 · Retrieve** | **Sonnet** dispatched agents (drop to **Haiku** for wide, shallow, low-stakes fan-out) | Fetch + extract + cite from the source tiers below; tag each finding's tier | Form the cross-source comparison or final recommendation |
 | **3 · Synthesise** | Opus/Fable — back in the planning context | All reasoning: dedup across agents, confidence-weight, compare, recommend | — |
 
@@ -67,10 +68,35 @@ for a **single lookup** — there is no "just fetch it myself" escape hatch.
 **Phase 2 return contract (every retrieval agent):** write any bulky raw capture to disk; return a
 compact, **cite-or-drop** result — each finding tagged with its source tier (below) + URL. Agents
 return cited findings (and at most a *per-source* preliminary tag); the cross-source dedup, weighing,
-and final recommendation are **Phase 3 only**.
+and final recommendation are **Phase 3 only**. If a needed source is on an un-authorised domain, return
+`NEEDS-DOMAIN: <host>` rather than an empty result (§ Web access under dispatch) — never silent-drop it.
 
 Set the model explicitly on dispatch: `Agent(model: "sonnet", …)` / `Agent(model: "haiku", …)`.
 Phases 1 and 3 need no override — they *are* the planning context.
+
+### Web access under dispatch — the non-interactive wall
+
+Phase-2 agents run **non-interactively** (background dispatch), so a `WebFetch` to a domain **not in
+`permissions.allow` auto-denies** — there is no prompt for a background agent to answer
+([[background-agents-no-interactive-approval]]). `WebSearch` is allow-listed and works dispatched;
+`WebFetch` is gated **per-domain**. Open research hits *novel* domains, so the retrieve phase silently
+loses sources unless you clear the gate **first**.
+
+Resolve it **without breaking the model contract — the planning model authorises, it never fetches:**
+
+1. **Phase 1 pre-authorises (control, not retrieval).** When the plan names its source domains (a docs
+   site, a repo host, arxiv, a comparison target), add each to `permissions.allow` as
+   `WebFetch(domain:<host>)` *before* dispatch. Editing the allow-list is a permission action, **not**
+   mechanical retrieval — it stays with the planning context and does **not** violate the contract.
+2. **Discovery-first for unknown domains.** Where sources aren't known upfront, dispatch a `WebSearch`
+   sweep first (allow-listed → works dispatched); the agent returns candidate **URLs**, the planning
+   context authorises their domains, then re-dispatches the **fetch** to the cheap tier.
+3. **Agents flag, never fail silently.** A Phase-2 agent that needs an un-authorised domain returns
+   `NEEDS-DOMAIN: <host>` in its result (an extension of cite-or-drop) instead of returning empty — so
+   the planning context can authorise it and re-dispatch, rather than the source just vanishing.
+
+The cheap tier still performs **every** `WebFetch`; the planning model only clears domains and
+synthesises. "Opus/Fable plan, Sonnet/Haiku fetch" stays intact.
 
 ## Research strategy — tiered by source quality
 
@@ -264,6 +290,10 @@ Good-enough-to-act is the goal.
 
 - Never let the planning/synthesis model (Opus/Fable) perform mechanical retrieval — Phase 2
   fetch+extract is always dispatched to the cheap tier (Sonnet/Haiku), even for a single lookup.
+  (Pre-authorising a domain is a permission action, not retrieval — that *does* stay with planning.)
+- Never rely on a dispatched Phase-2 agent approving a novel `WebFetch` domain — background agents
+  can't answer a prompt, so an un-allow-listed domain **silently auto-denies**; pre-authorise the
+  domain in Phase 1 (§ Web access under dispatch), or the source vanishes with no error.
 - Never present `[ASSUMED]` training knowledge as verified fact.
 - Never ship research without a clear recommendation — a list of options is not a result.
 - Never skip the primary source when one exists (Tier 1 before Tier 2/3).
@@ -275,6 +305,7 @@ Good-enough-to-act is the goal.
 
 - [ ] Scope resolved before researching (the 4 pre-flight questions)
 - [ ] Three-phase contract held — retrieval dispatched to Sonnet/Haiku, synthesis in the planning context
+- [ ] Source domains pre-authorised before dispatch (`WebFetch` is per-domain; background agents can't approve novel ones — else silent loss)
 - [ ] At least one Tier 1 (official docs / primary) source used
 - [ ] Every claim tagged `[VERIFIED]` / `[COMMUNITY]` / `[ASSUMED]`
 - [ ] Confidence derived from source tier, not asserted
