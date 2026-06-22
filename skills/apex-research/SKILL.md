@@ -1,11 +1,11 @@
 ---
 skill: apex-research
 backend: claude
-version: 1.4.0
-last_updated: 2026-06-21
+version: 1.4.1
+last_updated: 2026-06-22
 sources:
   - Context7 MCP — context7.com
-  - Observed env finding 2026-06-21 — background-agent web-deny (non-interactive approval)
+  - APEX memory — background-agents-no-interactive-approval
 staleness_threshold: 30d
 description: >
   Use when researching before a decision — comparing tools/options, verifying current best
@@ -94,9 +94,6 @@ Resolve it **without breaking the model contract — the planning model authoris
 3. **Agents flag, never fail silently.** A Phase-2 agent that needs an un-authorised domain returns
    `NEEDS-DOMAIN: <host>` in its result (an extension of cite-or-drop) instead of returning empty — so
    the planning context can authorise it and re-dispatch, rather than the source just vanishing.
-
-The cheap tier still performs **every** `WebFetch`; the planning model only clears domains and
-synthesises. "Opus/Fable plan, Sonnet/Haiku fetch" stays intact.
 
 ## Research strategy — tiered by source quality
 
@@ -291,9 +288,7 @@ Good-enough-to-act is the goal.
 - Never let the planning/synthesis model (Opus/Fable) perform mechanical retrieval — Phase 2
   fetch+extract is always dispatched to the cheap tier (Sonnet/Haiku), even for a single lookup.
   (Pre-authorising a domain is a permission action, not retrieval — that *does* stay with planning.)
-- Never rely on a dispatched Phase-2 agent approving a novel `WebFetch` domain — background agents
-  can't answer a prompt, so an un-allow-listed domain **silently auto-denies**; pre-authorise the
-  domain in Phase 1 (§ Web access under dispatch), or the source vanishes with no error.
+- Never rely on a dispatched Phase-2 agent approving a novel `WebFetch` domain — pre-authorise it in Phase 1 (§ Web access under dispatch), else it silently auto-denies.
 - Never present `[ASSUMED]` training knowledge as verified fact.
 - Never ship research without a clear recommendation — a list of options is not a result.
 - Never skip the primary source when one exists (Tier 1 before Tier 2/3).
@@ -305,7 +300,7 @@ Good-enough-to-act is the goal.
 
 - [ ] Scope resolved before researching (the 4 pre-flight questions)
 - [ ] Three-phase contract held — retrieval dispatched to Sonnet/Haiku, synthesis in the planning context
-- [ ] Source domains pre-authorised before dispatch (`WebFetch` is per-domain; background agents can't approve novel ones — else silent loss)
+- [ ] Source domains pre-authorised before dispatch (§ Web access under dispatch)
 - [ ] At least one Tier 1 (official docs / primary) source used
 - [ ] Every claim tagged `[VERIFIED]` / `[COMMUNITY]` / `[ASSUMED]`
 - [ ] Confidence derived from source tier, not asserted

@@ -1,8 +1,8 @@
 ---
 skill: apex-skill-author
 backend: claude
-version: 1.5.0
-last_updated: 2026-06-08
+version: 1.6.0
+last_updated: 2026-06-22
 sources:
   - agentskills.io — skill spec & authoring best practices
   - superpowers:writing-skills — TDD-for-skills methodology
@@ -271,6 +271,12 @@ The model ignores what it already knows. Spend lines only on what it doesn't:
   "write full output to disk, return a ≤1–2k-token summary or pointer". Never let a child return its
   raw transcript into the orchestrator. (The dispatch return-contract invariant — apex-orchestrate / ADR-015.)
 - **NEVER/ALWAYS + Hard blocks at the top** — read first, most reliable behavior control.
+- **Skill bodies carry instruction, not history.** Keep validation status ("validated 2026-…",
+  "unproven, first run is the proving run"), session/probe narrative, ADR *rationale*, and
+  deferred-roadmap notes OUT of the loaded body — they cost context every load for zero behavioural
+  value and rot into stale misinformation. Route them to their home: status → SKILL-HISTORY; the
+  *why* → the ADR; cross-session facts → memory. The body states the standing rule; cite the ADR for
+  why. (This "changelog-as-content" creep is the most common bloat mode found in skill audits.)
 - **Omit**: explanations of things the model knows (HTTP, SQL), vague directives ("write
   clean code"), and "when to use" prose buried in the body (too late for discovery — that's
   the description's job).

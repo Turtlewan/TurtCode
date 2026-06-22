@@ -1,24 +1,14 @@
 ---
 skill: apex-ui-ux-design
 backend: claude
-version: 1.23.1
-last_updated: 2026-06-20
+version: 1.24.0
+last_updated: 2026-06-22
 sources:
   - Apple HIG + Liquid Glass (WWDC25) — developer.apple.com/design/human-interface-guidelines
-  - docs/technical/adr/ADR-013-app-flow-artifact.md
-  - docs/technical/adr/ADR-017-design-brief-artifact.md
-  - docs/research/design-capability/ (WS-1…4, 2026-06-12)
-  - docs/research/swiftui-design-tooling/ (Bitrig + native lanes, 2026-06-12)
-  - docs/research/ai-slop-watch/ (design-slop tells, 2026-06-16)
-  - docs/research/app-design-ai-era/ (AI-era design workflow, 2026-06-17)
-  - docs/research/cross-platform-design-tooling.md (non-web/native lanes, 2026-06-16)
-  - docs/technical/adr/ADR-020-capability-routed-ui-escalation.md
-  - docs/research/cheap-mode-native/ (cheap-mode preview per target surface, 2026-06-16)
+  - ADR-013 (app-flow) · ADR-017 (design-brief) · ADR-020 (capability-routed UI escalation)
   - Vercel Web Design Guidelines — github.com/vercel-labs/agent-skills
-  - UI UX Pro Max (nextlevelbuilder) — github.com/nextlevelbuilder/ui-ux-pro-max-skill
-  - Web Quality Skills (addyosmani) — github.com/addyosmani/web-quality-skills
-  - UX/UI 2026 trend surveys — uxpin / envato / uxdesign.cc
   - design-taste-frontend (taste-skill) — github.com/Leonxlnx/taste-skill
+  - (internal research provenance per topic → SKILL-HISTORY.md)
 staleness_threshold: 30d
 description: >
   Use when designing screens, flows, or visual identity — new screens, redesigns,
@@ -207,10 +197,6 @@ Contrast / touch targets / reduced motion: owned by apex-accessibility — defer
 
 ## Generic-AI ("slop") detection — reject these before shipping a UI spec
 
-_Last AI-slop refresh: 2026-06-16 · cadence: 7d._ When elapsed, a planning session runs a design-only
-(no colour) slop-pattern research pass → dated file in `docs/research/ai-slop-watch/` → proposes deduped
-additions → on approval lands via apex-skill-author; log each run in `docs/research/ai-slop-watch/log.md`.
-
 LLM-generated UI converges on a recognisable generic look. Treat any of these as a FLAG to redesign with
 product-specific intent (see § Industry-specific design reasoning). These are **FLAGs, not BLOCKs** — an
 explicit, intentional choice in a prompt or in `design-brief.md` overrides them (the list catches
@@ -330,39 +316,9 @@ Capture per-platform divergences in the brief (nav · window chrome · input mod
 "native everywhere" in 2026 means Uno/Flutter render their *own* cross-platform controls from one
 codebase, not separate per-OS toolkits. Detail: `docs/research/cross-platform-design-tooling.md`.
 
-The two mature lanes in detail:
-- **Web → Google Stitch** (free; prompt/image/voice → **HTML/CSS + Tailwind**, export to **Figma**
-  (named layers + Auto Layout) or via **MCP / Antigravity**; React/Vue/SwiftUI code export roadmapped,
-  not shipped as of 2026-06). Browser tool on the user's Google account (free tier 550 gens/mo —
-  350 Flash + 200 Pro).
-- **Native SwiftUI → Bitrig** (free tier / ~$20·mo; prompt → **real SwiftUI source** + Xcode project;
-  `iSwift.dev` is the browser alternative). Output is already native, so **no web→SwiftUI translation
-  tax** — its advantage over using a web tool for a native app. Mac-only to run; new (Mar 2026), no
-  API/MCP — validate output quality. Detail: `docs/research/swiftui-design-tooling/`.
-
-**Division of labour (fixed, both lanes):** these are browser/Mac tools planning mode **cannot
-drive**. *Planning authors + refines the prompt and translates the result into the brief/spec; the
-user runs the tool and iterates visually.*
-
-The loop:
-1. **Screen brief** — 3–5 lines: what the screen does, its states, the feel + the don'ts (from
-   `design-brief.md`).
-2. **Author the prompt** — encode the brief into one generation prompt: token values, the project
-   forbidden-pattern list as explicit "do NOT" lines, layout intent, every state. Hand it to the user;
-   do not attempt to run the tool.
-3. **User generates + iterates** — refines conversationally in the tool, or pastes the result back so
-   planning revises the prompt. Ping-pong until it's right.
-4. **Lock + fold into the brief** — the **design facts** (tokens + structure — Stitch's HTML/CSS +
-   Figma export, Bitrig's source) fold into `design-brief.md`, which stays the single source of truth the coder
-   reads. Tool output never wires straight to the coder.
-5. **Feed the build:**
-   - The token + structure layer is the **universal, stack-agnostic spine** — always folds into the brief.
-   - **Code reuse is stack-matched:** Stitch's HTML/CSS + Figma export feeds a web build (translate the
-     markup — React export roadmapped, not shipped); Bitrig's SwiftUI feeds a SwiftUI build directly. Cross-stack (e.g. a web design for a
-     native app), the rendered output is a **reference to interpret, not trace** — the image-less coder
-     gets the brief + spec text, never the image.
-6. **Gate** — the post-build visual review (below) scores the build against the **locked design**, not
-   just prose — a far sharper target.
+The two mature lanes (**Web → Google Stitch** · **Native SwiftUI → Bitrig**), the fixed division of
+labour (planning authors the prompt; the user runs the browser/Mac tool and iterates), and the 6-step
+brief→prompt→generate→lock→build→gate loop → `references/design-lane-workflow.md`.
 
 The brief's art-direction + APEX anti-slop rules outrank any tool's house aesthetic
 ([[design-style-on-demand]]); pair `stitch-design-taste` only if Stitch's look is wanted.
@@ -393,8 +349,7 @@ The full loop:
    surgical change**, then hand back to DeepSeek for volume (Claude output ≈29× the cost); **approval-
    gated + logged** (the edit hits the planning write-guard `ask`, the user approves, and the touched
    files are recorded in the handoff / status In-Flight). Authority rule + when it is *not* allowed:
-   **apex-governance § Capability-routed UI escalation**. This is capability, not authority — it
-   changes no gate, critical-file confirmation, or hard block.
+   **apex-governance § Capability-routed UI escalation**.
 
 ### Cheap-mode preview by target surface
 
@@ -432,8 +387,6 @@ coder's top drift mode is *component multiplication* (a 2nd, slightly-different 
   — `design-brief.md` fed in, kept **prose-rich, not a bare token table** (tokens alone drift by ~screen 5–8);
   (2) *commit lint* — token-compliance + forbidden-pattern + optional design-lint (→ apex-ui-testing, ADR-022);
   (3) *visual verify* — § Visual review gate.
-The L0–L5 "layer stack" framing that produced these rules is deliberately **not** codified — it restates
-design tokens + Atomic Design, which the planning model already knows; only this AI-era residue earns lines.
 
 **Step 0 — establish the feel before mockup #1 (soft-default; skippable).** A cold mockup defaults to
 generic AI-slop, so before rendering the *first* one, do the lightweight half of § Aesthetic direction:
@@ -444,46 +397,19 @@ generic baseline now and fold the feel in on a later pass. Set the brief **once*
 don't re-run step 0 per mockup — every later iteration reads the existing brief.
 
 **Two cheap-mode loops — pick by whether the user wants to be in it:**
-- **Solo self-drive (Claude's eyes, no user):** Claude runs both halves — write logic-free HTML/CSS →
-  render + screenshot via **Playwright MCP** (`browser_navigate` → `browser_take_screenshot`) → **Read**
-  the PNG → critique vs brief → iterate. For fast iteration when the user isn't watching. **Never say "I
-  can't render / you view it"** — the terminal not showing images *inline* ≠ no vision; Claude sees by
-  **Read**-ing the screenshot (conflating them is the known miss, two live sessions).
-- **Interactive co-review (the user's eyes — default when the user is present for the mockup):** Claude
-  writes a self-contained mockup to **`docs/research/mockups/<name>.html`** (inline styles; CDN
-  Tailwind/fonts if needed — that dir auto-passes the planning write-guard, so mockup writes never
-  prompt). **Default preview surface = Cursor's in-editor render:** the user keeps the `.html` open, so
-  Claude's edit lands as a live diff *and* the rendered pane updates in the same window — one surface for
-  code + pixels ([[cursor-coedit-flow]]), no external browser needed for a single mockup. Loop: user types
-  comments → Claude edits the mockup (view-layer only) → user re-views the Cursor render → repeat until
-  approved. (If the user prefers a browser instead, the same `.html` opens in their **own** Chrome tab —
-  `file://…` or served — that **stays open the whole loop**; never a Playwright-controlled tab, which is
-  Claude's *separate* headless screenshot instance and is **never `browser_close`d on the user's view**.
-  Optional `live-server`/`vite` for auto-reload.)
+- **Solo self-drive (Claude's eyes):** write logic-free HTML/CSS → render + screenshot via **Playwright
+  MCP** (`browser_navigate` → `browser_take_screenshot`) → **Read** the PNG → critique vs brief →
+  iterate. **Never say "I can't render / you view it"** — Claude sees by **Read**-ing the screenshot
+  (conflating the no-inline-images terminal with no vision is the known miss, two live sessions).
+- **Interactive co-review (the user's eyes — default when present):** write the mockup to
+  **`docs/research/mockups/<name>.html`** (that dir auto-passes the write-guard); the user views it in
+  **Cursor's in-editor render** — Claude's edit lands as a live diff *and* the pane updates, one window
+  ([[cursor-coedit-flow]]). Loop: user comments → Claude edits (view-layer) → re-view → repeat to approval.
 
-**Multiple options → all tabs in ONE persistent Chrome window** (the one case external Chrome beats
-Cursor's single-pane render — true side-by-side comparison). When the user asks for *options/variants*,
-write each to its own `docs/research/mockups/<name>.html`, then open them **all at once as tabs in the
-user's own Chrome window** in a single launch — Windows: `Start-Process chrome -ArgumentList
-'file:///…A.html','file:///…B.html',…` (Chrome opens multiple URL args as tabs in one window; appends to
-the existing window if Chrome is already running). They **persist** for side-by-side comparison. **Never
-present option tabs via Playwright** — its browser closes on context end (the reported tab-closing
-failure). Iterate per option: user comments on one → edit that file → user refreshes that tab.
-
-The cheapness depends on getting a PNG **without booting a heavy emulator/window** — three tiers:
-- **Tier A — headless host-render → PNG** (no emulator; cheapest, scriptable): **Flutter** goldens
-  (`flutter test --update-goldens`), **Android Compose** (Paparazzi / Compose Preview Screenshot
-  Testing / Roborazzi), **Avalonia** desktop (headless Skia `CaptureRenderedFrame()`). All Windows-runnable.
-- **Tier B — browser preview + Playwright screenshot** (= the web loop): Web, **Electron/Tauri**
-  (Chromium under the hood — mock in Chrome like a website), Expo/RN via Storybook-RN-Web.
-- **Tier C — run on emulator/device/window + capture**: Android `adb exec-out screencap -p > x.png`;
-  WinUI/WPF window via FlaUI / PowerShell; iOS simulator (Mac).
-
-**Apple SwiftUI is the lone hard gate** — no Windows render path at all; fall back to a CI macOS
-runner (render + upload PNG artifacts) or a web-mockup proxy for layout/feel. **Strategy:** prototype
-the look as a web mockup (cheapest, framework-agnostic) → lock the brief → use the target's Tier-A
-render for native fidelity where it exists. Full per-target table + commands + caveats:
-`docs/research/cheap-mode-native/`.
+Variants side-by-side (the Chrome multi-tab launch), the browser alternative, and the headless-render
+tiers (Flutter goldens / Compose / Avalonia / adb / FlaUI) → `references/cheap-mockup-workflow.md`.
+**Apple SwiftUI is the lone hard gate** — no Windows render path; prototype the look as a web mockup,
+lock the brief, then use the target's native render where it exists.
 
 ## Escalation rules
 

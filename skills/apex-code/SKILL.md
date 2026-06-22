@@ -1,7 +1,7 @@
 ---
 skill: apex-code
 backend: deepseek
-version: 1.19.0
+version: 1.20.0
 last_updated: 2026-06-22
 sources:
   - APEX Design Specification 2026-05-24
@@ -56,14 +56,9 @@ Pre-flight:
 2. Read token_profile and autonomy_level from spec metadata
    (falls back to docs/status.md, then registry defaults)
 3. Read ## Permissions section — this is the complete list of permitted actions
-4. Set permission mode for the DeepSeek build path: run the build (interactive AFK, headless `-p`,
-   and `wave_dispatch: workflow` waves) in **`dontAsk`** mode — NOT `auto`. Auto mode's safety
-   classifier routes through `ANTHROPIC_BASE_URL`, so on a coding session it runs on DeepSeek; a blip
-   then blocks protected-path writes (`.claude/`, `.git/`, … route to the classifier even when
-   allow-listed) + non-allowlisted Bash. `dontAsk` never calls the classifier — it runs only
-   `permissions.allow` matches + read-only Bash, and `permissions.deny` keeps the destructive floor
-   (deny applies in every mode). Launch headless/workflow builds with `--permission-mode dontAsk`;
-   for an interactive session, cycle off `auto`.
+4. Set permission mode: run the DeepSeek build path (interactive AFK, headless `-p`, workflow waves)
+   in **`dontAsk`**, NOT `auto` — see § Permissions 1a for the allowlist and rationale. Launch
+   headless/workflow builds with `--permission-mode dontAsk`; for an interactive session, cycle off `auto`.
 5. Pre-authorise all listed operations for this session
 6. Package legitimacy check: for any new packages introduced by this spec,
    verify the name is correct (typosquat check) and the package is actively maintained.
@@ -139,8 +134,7 @@ Pre-flight:
      `isolation: "worktree"` to each code-worker Agent; workflow path → set `"isolate": true` in
      the args. **Default it ON for headless/AFK builds** (isolate from the user's working tree).
      Do NOT blanket-apply — per-worker checkout has overhead, and most waves (no concurrent build,
-     or pure source edits) are safe same-tree. _Wants one `coding-session` validation — build-artifact
-     collision is real-world, not provable by reasoning._
+     or pure source edits) are safe same-tree.
    - Wave with **2+ independent tasks** → spawn one code-worker agent per task up to the cap; dispatch the sub-wave in parallel; wait for all to complete before the next (sub-)wave
    - Wave with **1 task** → execute that task directly (no agent spawn)
    - All tasks sequential (every wave has exactly 1 task) → execute directly in order; no agents needed
@@ -148,42 +142,11 @@ Pre-flight:
 
    #### Workflow dispatch path (opt-in)
 
-   When `wave_dispatch: workflow` is active, run each **2+-task (sub-)wave** through the native
-   Workflow tool instead of inline Agent dispatch. This keeps the per-worker transcripts inside the
-   Workflow runtime (ADR-015 isolation) — the main context receives only a bounded status array.
-
-   Per 2+-task (sub-)wave:
-   1. Build the `args` object from the wave plan you already produced:
-      ```
-      {
-        "spec_path": "<full path to the spec being built>",
-        "token_profile": "<active token profile>",
-        "wave_label": "Wave <N>",
-        "isolate": <true if this wave's workers run an artifact-producing recipe, or headless/AFK; else false>,
-        "tasks": [
-          { "id": "<task id>", "text": "<exact task text>",
-            "files": ["<file>", ...], "acceptance": "<the task's done-when / acceptance criterion>",
-            "model": "<within-backend model string for this batch, from the ▸<model> tag — omit if untagged/single-model>" }
-        ]
-      }
-      ```
-   2. Invoke `Workflow({ scriptPath: "<home>/.claude/workflows/apex-build-wave.js", args })`
-      (resolve `<home>` to the absolute home directory, e.g. `C:/Users/User` here).
-   3. The call returns `{ wave, tasks: [ { task, status, files_changed, summary, concern? } ] }`.
-      Route each returned status through the **same Worker return contract** below — `DONE` /
-      `DONE_WITH_CONCERNS` → decisions table; `BLOCKED` / `NEEDS_CONTEXT` → Forks (capture-at-halt
-      stays here in apex-code, fed by the returned status).
-   4. Single-task waves still execute directly (no workflow, no agent), exactly as the inline rule.
-   5. After the wave returns, run § Wave domain review and continue — review, sequencing, and
-      post-build are unchanged by this path.
-
-   Prerequisite: `enableWorkflows: true` in settings (already set). If the `Workflow` tool is
-   unavailable or errors at dispatch, fall back to inline Agent dispatch for that wave and log it in
-   the decisions table — never block the build on the workflow path.
-
-   Validation status: this path is unproven end-to-end. The first build run with
-   `wave_dispatch: workflow` is its proving run; if it misbehaves, unset the flag (or
-   `enableWorkflows: false`) to fall back to inline dispatch.
+   When `wave_dispatch: workflow` is set, run each **2+-task (sub-)wave** through the Workflow tool
+   (`apex-build-wave.js`) instead of inline Agent dispatch — per-worker transcripts stay in the runtime
+   (ADR-015 isolation), the main context gets only a bounded status array. Single-task waves execute
+   directly. **Full procedure (args object, per-wave steps, fallback) → read
+   `references/workflow-dispatch.md`.** Route returned statuses through the Worker return contract below.
 
    **Worker return contract** — each dispatched code-worker returns one status, not prose
    (Superpowers): `DONE` (complete, verified) · `DONE_WITH_CONCERNS` (complete, flag noted) ·
@@ -192,10 +155,8 @@ Pre-flight:
 
    #### Model-routing dispatch (ADR-024/025) — when the `## Wave plan` carries `▸<model>` tags
 
-   A multi-model `coder_models` menu makes apex-plan emit a per-task `▸<model>`-tagged, backend-batched
-   wave plan (`task 1 ▸flash | task 3 ▸pro | task 4 ▸opus`). **Untagged / single-model plan → ignore
-   this section: every worker runs the session default (current behaviour).** Tagged → map each tag to a
-   backend + a within-backend model string and dispatch the task with that override:
+   **Untagged / single-model plan → every worker runs the session default (current behaviour); skip this.**
+   Tagged → dispatch each task with its model override per this map:
 
    | `▸` tag | Backend | Model string (override) | Override channel |
    |---------|---------|-------------------------|------------------|
@@ -204,21 +165,9 @@ Pre-flight:
    | `sonnet`| Claude  | `sonnet`            | Agent `model:` param (native) |
    | `opus`  | Claude  | `opus`              | Agent `model:` param (native) |
 
-   - **Per-task override:** inline dispatch → pass `model: "<string>"` to each code-worker Agent; workflow
-     dispatch → set the task's `model` field (apex-build-wave.js threads it to the worker, § above).
-   - **Backend wall (C1) — one session = one backend; ≤1 crossing/build.** The plan is already ordered so
-     the DeepSeek tasks (`flash`/`pro`) are contiguous, then the Claude tasks (`sonnet`/`opus`). Run the
-     **DeepSeek batch in this session.** Before the **Claude batch**, STOP and prompt for the **one manual
-     backend swap**: switch `ANTHROPIC_BASE_URL` to the Anthropic backend **and** set `APEX_MODE=coding`
-     (→ Claude coding mode, write-guard relaxed), then resume — the Claude batch builds there. A single
-     workflow run never crosses backends; split it at the batch boundary.
-   - **Within a backend the switch is free** (`flash`↔`pro`, `sonnet`↔`opus`) — pass the per-worker model,
-     no swap, no prompt.
-   - **Validation gate (`coding-session`):** the per-worker **DeepSeek `flash`↔`pro`** override is unproven
-     on the live proxy (within-backend `model:` override). If a worker rejects the override, fall back to
-     running the whole DeepSeek batch at the session `ANTHROPIC_MODEL` and **log it** in the decisions table
-     — never block the build on per-worker routing. The Claude `sonnet`↔`opus` override is native (Agent
-     `model:` param). Whole-spec `coder_model: <m>` frontmatter pins every task to one model (no routing).
+   - **Per-task override:** inline → pass `model: "<string>"` to each code-worker Agent; workflow → set the task's `model` field.
+   - **Backend wall (C1) — one session = one backend.** Run the DeepSeek batch (`flash`/`pro`) in this session; before the Claude batch (`sonnet`/`opus`) STOP and prompt for the one manual swap (`ANTHROPIC_BASE_URL` → Anthropic + `APEX_MODE=coding`), then resume. Within a backend the switch is free (no swap).
+   - **Fallback:** if a per-worker DeepSeek `flash`↔`pro` override is rejected, run the whole DeepSeek batch at the session `ANTHROPIC_MODEL` and log it — never block on per-worker routing. Whole-spec `coder_model: <m>` frontmatter pins every task (no routing).
 
 **Task granularity** is fixed at spec authoring time by apex-plan — do not re-decompose
 tasks during Wave Analysis. If a task appears too coarse to verify atomically after
@@ -290,18 +239,11 @@ a visual direction).
 - Converge before moving to the next task. If it won't converge after a few honest attempts,
   treat it as a fork (capture-at-halt, route per Forks).
 
-**Model escalation on verify-fail (ADR-024 F3 — only when `coder_models` is multi-model; capped at one, ADR-015):**
-When a task on a routed model won't converge after honest recovery attempts, escalate **one tier up**
-within the eligible set (never skip tiers; never escalate to a model the eligibility filter excluded —
-e.g. a >64K-output text task stays off `sonnet`):
-- **Within the same backend** (`flash`→`pro`, or `sonnet`→`opus`): escalate **automatically** —
-  re-dispatch the task with the higher model override, re-run the recipe. **One** escalation only; if it
-  still fails, fork (capture-at-halt).
-- **Crossing into the Claude pool** (a DeepSeek `pro` task → `opus`): **approval-gated, never automatic** —
-  it spends the scarce Max/planning pool. Capture-at-halt with a recommended escalation; the user approves
-  the one backend swap to Claude coding mode (`APEX_MODE=coding`), where the task re-runs on Opus. One retry.
-- A single retry cap covers the whole chain — do not stack an auto within-backend escalation **and** a
-  gated cross-backend one on the same task; the first escalation is the retry.
+**Model escalation on verify-fail (ADR-024 F3 — only when `coder_models` is multi-model; one escalation per task, ADR-015):**
+When a routed task won't converge after honest recovery, escalate **one tier up** within the eligible set:
+- **Within a backend** (`flash`→`pro`, `sonnet`→`opus`): escalate **automatically** — re-dispatch at the higher model, re-run the recipe.
+- **Crossing into the Claude pool** (DeepSeek `pro` → `opus`): **approval-gated** — capture-at-halt, recommend the escalation; the user approves the swap to Claude coding mode (`APEX_MODE=coding`) and the task re-runs on Opus.
+- One escalation is the retry; if it still fails, fork (capture-at-halt).
 
 **context7 at the write step:** before writing non-trivial code against the active stack/
 framework, consult **context7** for its current API/syntax — getting it right first means fewer
@@ -484,28 +426,18 @@ Before executing any task:
    - env_vars: set of environment variables that may be read
    - network: set of permitted network operations
 
-1a. `dontAsk` enforces this list at the harness level, so mirror the spec's `## Permissions` into
-    `permissions.allow` (`.claude/settings.local.json` or `~/.claude/settings.json`) before the build:
-    each `file_writes` path as `Write(<path>)`/`Edit(<path>)`, each `commands` entry as `Bash(<exact command>)`,
-    plus the union of the bound `stack_skills` Verification Recipe commands. An action absent from
-    `permissions.allow` is DENIED silently in `dontAsk` (no prompt) — so the allowlist must be complete
-    for the verification loop. Keep `permissions.deny` as the destructive floor (overrides allow in every mode).
-    **Protected-path exception:** writes to `.claude/`, `.git/`, and other protected paths are denied
-    outright in `dontAsk` and `permissions.allow` CANNOT override them. So a spec that must write a
-    protected path (editing a skill's `impl.md`, `~/.claude/workflows/*`, etc.) cannot run under
-    `dontAsk` — do those edits in planning mode (Anthropic classifier) or via a one-off approval path,
-    never inside the `dontAsk` build. For an ordinary project build this is a feature: the build
-    physically cannot mutate `.claude/`/`.git/`.
-    **`wave_dispatch: workflow` builds need the orchestration tools allow-listed too** — add
-    `Workflow(*)`, `Agent(*)`, `Task(*)`, `Skill(*)` to `permissions.allow`, not just `Write`/`Edit`/
-    recipe-`Bash`. These are gated by `permissions.allow`, NOT the classifier (off-list = local "don't
-    ask mode" deny, no round-trip), so omitting them silently blocks dispatch and no worker spawns.
-    Dispatched workers **inherit the parent's `dontAsk`** — they get local denials for off-list actions,
-    no classifier — so the SPOF stays eliminated through the worker path. (Empirically validated
-    2026-06-21, Phase-2 probe F1+F2.) **Caveat:** a worker may intermittently be denied Bash even for
-    an allow-listed recipe command (seen once across two identical workers); main-session verification
-    still covers the build, but don't rely on per-worker Bash self-verification under `dontAsk` until
-    this is run down.
+1a. **`dontAsk` build-mode policy.** `dontAsk` enforces permissions at the harness level (no classifier),
+    so mirror the spec's `## Permissions` into `permissions.allow` (`.claude/settings.local.json` or
+    `~/.claude/settings.json`) before the build:
+    - Each `file_writes` path → `Write(<path>)`/`Edit(<path>)`; each `commands` entry → `Bash(<exact command>)`;
+      plus the bound `stack_skills` Verification Recipe commands. **Off-list = silently denied (no prompt)** —
+      the allowlist must be complete for the verify loop. `permissions.deny` is the destructive floor (overrides allow in every mode).
+    - **`wave_dispatch: workflow`** also needs `Workflow(*)`, `Agent(*)`, `Task(*)`, `Skill(*)` allow-listed
+      (gated by `permissions.allow`, not the classifier — omit them and dispatch silently blocks, no worker spawns).
+      Dispatched workers **inherit the parent's `dontAsk`** (local denials, no classifier).
+    - **Protected paths** (`.claude/`, `.git/`, …) are denied outright and `permissions.allow` cannot override them —
+      a spec that must write one (a skill `impl.md`, `~/.claude/workflows/*`) can't run under `dontAsk`; do those in
+      planning mode or a one-off approval. For an ordinary project build this is a feature (the build can't mutate `.claude/`/`.git/`).
 
 2. For each action during execution — check against authorised list:
    - Listed → execute normally

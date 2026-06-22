@@ -1,7 +1,7 @@
 ---
 skill: apex-governance
 backend: claude
-version: 1.11.0
+version: 1.11.1
 last_updated: 2026-06-22
 sources:
   - APEX Design Specification 2026-05-24
@@ -37,7 +37,7 @@ The one class to capture-and-surface (never block on, never silently decide): a 
 working tree, so default its parallel build-recipe workers into isolated managed git worktrees
 (apex-code § dispatch rule — inline `isolation: "worktree"`, workflow `isolate: true`) — concurrent
 builds then can't collide on artifacts / lockfiles / ports or mutate the live tree mid-session.
-Interactive Edit Mode stays same-tree (the user is watching). One `coding-session` validation pending.
+Interactive Edit Mode stays same-tree (the user is watching).
 
 ### Edit Mode (interactive)
 User present in coding mode. Small changes. Can ask questions.
@@ -70,23 +70,19 @@ confirmation, or hard block because the stronger coder is in use.
 
 APEX runs coding in one of **two backends** (the model-router picks per task, batched by backend):
 **DeepSeek coding** (`deepseek` URL → Flash/Pro) and **Claude coding** (Anthropic backend +
-`APEX_MODE=coding` → Sonnet/Opus). Detection precedence: `deepseek` URL → DeepSeek coding; else
-`APEX_MODE=coding` → Claude coding; else planning. Same capability-not-authority rule applies — the
-router widens *which model codes*, never an autonomy gate, critical-file confirmation, or hard block.
+`APEX_MODE=coding` → Sonnet/Opus); detection precedence in CLAUDE.md §3. Same capability-not-authority
+rule applies — the router widens *which model codes*, never an autonomy gate, critical-file
+confirmation, or hard block.
 
 **Soft pool guard (Claude coding mode — the one real risk).** Interactive Claude coding draws the
 **same Max subscription pool as planning**, and the Opus weekly cap is APEX's scarcest resource. There
 is **no programmatic budget cap** for interactive sessions, so this is **discipline, not enforcement**:
 - On entry, **warn** that this session draws the planning pool.
 - **Default the coder to Sonnet;** let the ADR-024 router reach Opus only when task complexity warrants.
-- **Track** usage via `/status`. **No hard block** — heavy Claude builds are bounded by mode discipline
-  + small batches, not a cap. The durable fix (isolated, budget-capped) is the headless `claude -p`
-  path (deferred).
+- **Track** usage via `/status`. **No hard block** — heavy Claude builds are bounded by mode discipline + small batches, not a cap.
 
-**Cross-backend escalation is approval-gated (ADR-024 F3).** Within a backend, a verify-fail escalates
-one model tier **automatically** (Flash→Pro, Sonnet→Opus). Crossing **into** the Claude pool — a
-DeepSeek `pro` task that fails verification escalating to Opus — is **approval-gated**, never automatic
-(it spends the scarce planning pool). Capped at one retry (ADR-015).
+Cross-backend escalation (within-backend auto; crossing into the Claude pool approval-gated; one retry):
+see apex-code § Model escalation on verify-fail.
 
 ## Capability-routed UI escalation (ADR-020)
 
@@ -109,9 +105,8 @@ Bounds (all simultaneous):
 - **Approval-gated + logged** — the edit hits the planning write-guard `ask`; the user approves; the
   touched files are recorded in the handoff / status In-Flight so the next coding session knows.
 
-**Not** a general planning-mode coding licence: outside this visual-divergence trigger, code edits
-still default to a DeepSeek coding session. The loop itself is homed in apex-ui-ux-design § Live
-preview + Claude visual escalation.
+**Not** a general planning-mode coding licence — outside this visual-divergence trigger, code edits
+default to a DeepSeek coding session. Loop: apex-ui-ux-design § Live preview + Claude visual escalation.
 
 ## Critical files — always require explicit confirmation regardless of level
 

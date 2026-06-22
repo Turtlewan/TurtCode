@@ -1,8 +1,8 @@
 ---
 skill: apex-ui-testing
 backend: deepseek
-version: 1.5.0
-last_updated: 2026-06-17
+version: 1.5.1
+last_updated: 2026-06-22
 sources:
   - Playwright Docs — playwright.dev
   - Storybook (Vitest addon) — storybook.js.org/docs/writing-tests
@@ -148,8 +148,8 @@ hand-written forbidden-pattern gate above. **Opt-in per project** — wire it on
   (fires after Edit/Write, surfaces findings as a system reminder).
 
 Findings are **advisory**, not a hard gate — the ruleset is opinionated and may flag a deliberate
-brief choice; reconcile each finding against `design-brief.md` before acting on it. Requires Node ≥24.
-Source: github.com/pbakaus/impeccable (Apache-2.0, ADR-022). Validate against the first real web-UI build.
+brief choice; reconcile each finding against `design-brief.md` before acting on it. Source:
+github.com/pbakaus/impeccable (ADR-022).
 
 ## Verification checklist
 

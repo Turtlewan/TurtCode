@@ -1,8 +1,8 @@
 ---
 skill: apex-plan
 backend: claude
-version: 1.23.0
-last_updated: 2026-06-21
+version: 1.24.0
+last_updated: 2026-06-22
 sources:
   - APEX Design Specification 2026-05-24
   - GSD (Get Shit Done) — github.com/gsd-build/get-shit-done
@@ -206,9 +206,7 @@ As you build the spec, enforce these rules inline:
 - Every acceptance criterion must be concrete and testable
 - **Tasks state the mechanism, not just the outcome.** When a task reuses or extends an existing
   component to achieve a *new* behaviour, name the concrete producing step (the wiring that emits/
-  routes the behaviour) — never assume the executor infers it from the desired outcome. DeepSeek
-  executes the literal instruction: "reuse primitive X" yields X's *existing* behaviour, not the new
-  one. (The readiness gate's Sufficiency audit is the backstop for this.)
+  routes the behaviour) — never assume the executor infers it from the desired outcome.
 - Permissions section must cover every action the build will take
 - Specialist context section captures any specialist findings
 - Risks/Open Questions must be empty before spec is ready
@@ -408,39 +406,13 @@ If any item fails: surface what is unresolved, revise in-place, re-run gate from
 
 ## Model-routing build planning — when the project sets a coder_models menu
 
-Read `coder_models` from status.md (default `[flash]`; if absent, map legacy `coder_tier_policy`:
-flash→`[flash]`, pro→`[pro]`, split→`[flash, pro]`).
-
-- **Single-model menu** (e.g. `[flash]`) — no routing: every task runs that model; emit the normal
-  untagged `## Wave plan`.
-- **Multi-model menu** — route **per task** (ADR-024), considering only models in the menu:
-
-  **Step 1 — eligibility filter (hard gates):** image input needed (mockup/screenshot/Figma) → drop
-  `flash`+`pro` (DeepSeek is text-only); output > ~64K expected → drop `sonnet`. Intersect with the menu.
-  **Step 2 — cheapest eligible model that clears the complexity bar.** Cost order: `flash < pro < sonnet
-  < opus`. Score the task's complexity (rubric below); pick the cheapest eligible model whose ceiling meets it.
-
-  **Complexity rubric (judgment, not a formula — read from the task's Files to Change):** logic novelty ·
-  blast radius / coupling · risk domain (security/auth/concurrency/crypto/transactions) · horizon (one
-  edit ↔ long agentic) · size · (brownfield) health of the touched files.
-  **Model ceilings:** `flash` = routine / short-horizon · `pro` = hard-kernel **text** (novel logic,
-  security/concurrency, big multi-file) · `sonnet` = **image** tasks of moderate complexity · `opus` =
-  **image** tasks that are complex / large-output / long-horizon. **`pro` is the proactive *text* ceiling**
-  — never proactively route a text task to `opus` (Pro is near-Opus at ~1/29 the cash and pool-neutral);
-  `opus` is reached for text **only** via build-time escalation on a Pro verify-fail (apex-code). For
-  **text**, `sonnet` is never chosen — `pro` dominates it on every axis.
-
-  **Split a feature across models only when the boundary is a contract you can freeze + conformance-test**
-  (the stronger model commits the interface, the cheaper builds against it; tests travel — ADR-019);
-  diffuse / un-freezable → keep the feature on one model.
-
-  **Emit a per-task-tagged, backend-batched `## Wave plan`:** append `▸<model>` to each task and order so
-  same-backend tasks are contiguous (DeepSeek batch, then Claude batch) → ≤1 backend crossing/build:
-  `Wave 1: [task 1 ▸flash, task 2 ▸flash] | Wave 2: [task 3 ▸pro] | Wave 3: [task 4 ▸sonnet]`
-  apex-code dispatches each backend batch with the per-task model override, prompting for the one manual
-  backend swap before the Claude batch.
-
-A spec's optional frontmatter `coder_model: <m>` pins the WHOLE spec to one model (bypasses per-task routing).
+Read `coder_models` from status.md (default `[flash]`; absent → map legacy `coder_tier_policy` per `references/model-routing.md`).
+- **Single-model menu** → no routing; emit the normal untagged `## Wave plan`.
+- **Multi-model menu** → route **per task** (ADR-024): run the 2-step select per task, then **emit a
+  per-task `▸<model>`-tagged, backend-batched `## Wave plan`** (same-backend tasks contiguous → ≤1
+  crossing; apex-code dispatches each batch and prompts for the one manual swap before the Claude batch).
+  **2-step select, emit-format example, and full rubric → `references/model-routing.md`.**
+- A spec's optional `coder_model: <m>` frontmatter pins the WHOLE spec to one model (bypasses routing).
 
 ## Confirmation digest — how the user signs off
 

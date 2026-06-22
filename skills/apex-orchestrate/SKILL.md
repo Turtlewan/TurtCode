@@ -1,7 +1,7 @@
 ---
 skill: apex-orchestrate
 backend: claude
-version: 1.5.0
+version: 1.5.1
 last_updated: 2026-06-22
 sources:
   - APEX Design Specification 2026-05-24
@@ -91,10 +91,8 @@ Detection precedence (first match wins):
 3. Else → **planning** → route to apex-plan.
 
 Claude coding mode is a real build session, not a planning detour — treat it like a DeepSeek
-coding session (read specs from docs/changes/, execute, no spec-authoring), with one added
-discipline: the **soft pool guard** — it draws the same Max subscription pool as planning, so
-keep the coder on Sonnet by default and reach Opus only when complexity warrants (apex-governance
-owns the guard). Both coding modes go to apex-code regardless of the Step-4 signal.
+coding session (read specs from docs/changes/, execute, no spec-authoring), under the **soft pool
+guard** (apex-governance owns it). Both coding modes go to apex-code regardless of the Step-4 signal.
 
 ## Step 4: Route
 
