@@ -18,10 +18,13 @@ Per 2+-task (sub-)wave:
      "tasks": [
        { "id": "<task id>", "text": "<exact task text>",
          "files": ["<file>", ...], "acceptance": "<the task's done-when / acceptance criterion>",
-         "model": "<within-backend model string for this batch, from the ▸<model> tag — omit if untagged/single-model>" }
+         "model": "opus" }
      ]
    }
    ```
+   > `model` carries **only `opus`** (the fallback). Codex — the default coder — is **NOT** dispatched
+   > here: it runs as a sequential `codex exec` subprocess in-session (ADR-027). The workflow / parallel
+   > fan-out path applies only to the Opus-fallback builds.
 2. Invoke `Workflow({ scriptPath: "<home>/.claude/workflows/apex-build-wave.js", args })`
    (resolve `<home>` to the absolute home directory, e.g. `C:/Users/User` here).
 3. The call returns `{ wave, tasks: [ { task, status, files_changed, summary, concern? } ] }`.

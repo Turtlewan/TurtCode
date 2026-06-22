@@ -12,16 +12,14 @@ export const meta = {
 //   wave_label:     string  — e.g. "Wave 2" (for the returned summary)
 //   tasks:          [ { id: string, text: string, files: string[], acceptance: string,
 //                        model?: string } ]
-//                     model — optional per-task coder override from the spec's ▸<model>-tagged
-//                     ## Wave plan (ADR-024). Pass the within-backend model string for THIS
-//                     dispatch's backend only (a single workflow run never crosses backends —
-//                     apex-code splits the DeepSeek batch from the Claude batch). Omit → the
-//                     session default. e.g. 'deepseek-v4-pro' on the DeepSeek backend,
-//                     'opus' on the Claude (APEX_MODE=coding) backend.
-//                     NOTE (ADR-026): `▸codex` tasks are NOT dispatched here — agent() spawns
-//                     Claude-Code subagents, not the external Codex CLI. apex-code runs codex
-//                     tasks itself, sequentially, via `codex exec` (subprocess). Only Claude-family
-//                     model strings (flash/pro/sonnet/opus) ever reach this `model` field.
+//                     model — optional per-task coder override. Under ADR-027 the only value that
+//                     reaches this field is 'opus' (the fallback coder, run in the APEX_MODE=coding
+//                     host). Omit → the session default.
+//                     NOTE (ADR-027): Codex — the DEFAULT coder — is NOT dispatched here. agent()
+//                     spawns Claude-Code subagents, not the external Codex CLI; apex-code runs codex
+//                     tasks itself, sequentially, via `codex exec` (subprocess). This workflow / the
+//                     parallel fan-out path is therefore used only for Opus-fallback builds.
+//                     (DeepSeek flash/pro are archived — ADR-027.)
 //   isolate:        boolean — true → run each worker in its own managed git worktree, so
 //                             concurrent build/test recipes don't collide on build artifacts,
 //                             lockfiles, ports, or dist/.next. Set by apex-code only when the

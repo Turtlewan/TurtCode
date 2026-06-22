@@ -44,8 +44,8 @@ reviewer_depth: quick         # quick | deep
 testing_agent: false          # only when spec has testing tasks
 docs_product: true            # run apex-docs-product-agent
 docs_inline: true             # inline JSDoc/TSDoc generation
-model_workers: deepseek-chat  # model override for workers
-model_reviewer: deepseek-chat # model override for reviewer
+model_workers: opus           # coding-host worker model (Opus fallback); primary coding = Codex via `codex exec` subprocess (ADR-027)
+model_reviewer: opus          # reviewer of Codex-built code = Opus (cross-family); DeepSeek archived (ADR-027)
 
 ## Setting the Profile
 

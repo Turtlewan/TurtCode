@@ -1,47 +1,37 @@
 # Model-routing build planning — full rubric
 
-Loaded on demand when a project's `coder_models` menu is multi-model. SKILL.md carries the trigger,
-the single-vs-multi branch, and the `## Wave plan` emit format; this file carries the per-task
-selection rubric (ADR-024).
+Loaded on demand when a project's `coder_models` menu has >1 entry. Under ADR-027 the menu is
+`{codex, opus}` and routing **collapses**: Codex is the default coder for every task; Opus is reached
+only as the **manual fallback** when Codex quota is exhausted. There is no per-task cost/complexity
+routing — both coders are frontier-class and Opus is not a proactive choice.
 
-## Legacy `coder_tier_policy` mapping (when `coder_models` is absent)
-flash→`[flash]` · pro→`[pro]` · split→`[flash, pro]`.
+## Legacy `coder_tier_policy` / DeepSeek tiers — ARCHIVED (ADR-027)
+The old DeepSeek Flash/Pro tiers and the `flash < pro < codex` cost-routing are archived (recoverable,
+not in the active menu). If an old project still carries `coder_tier_policy`, treat it as `[codex]`.
 
-## Per-task selection (two steps, considering only models in the menu)
+## Per-task selection — collapses to a default + manual fallback
+- **Default: `codex`** for every task — text and image alike (gpt-5.5 is sighted, so the old image gate
+  is moot). No cost-tier decision; do not route proactively to Opus.
+- **Fallback: `opus`**, reached only when Codex quota runs out mid-build (operator-confirmed) — apex-code's
+  Opus `APEX_MODE=coding` host builds the task inline. This is a build-time event, not a planning-time
+  per-task route. See apex-code § Model fallback on verify-fail or quota-out.
+- A whole-spec `coder_model: opus` frontmatter can pin a spec to Opus up front (e.g. when you already
+  know Codex quota is gone) — bypasses Codex entirely.
 
-**Step 1 — eligibility filter (hard gates):** image input needed (mockup/screenshot/Figma) → drop
-`flash`+`pro` (DeepSeek is text-only); only `codex` (gpt-5.5, sighted) is image-eligible. Intersect with the menu.
+## Family-aware review routing (when `cross_model_review: true`)
+Reviewer family ≠ builder family:
+- Codex-built task (the default) → **Opus** (Claude) reviews.
+- Opus-built task (the fallback) → **Codex** reviews (`codex exec`) — but Opus builds only because Codex
+  quota is out, so this usually degrades to single-model + human flag (apex-governance § Cross-model review).
 
-**Step 2 — cheapest eligible model that clears the complexity bar.** Cost order: `flash < pro < codex`.
-Score the task's complexity (rubric below); pick the cheapest eligible model whose ceiling meets it.
-
-**Complexity rubric (judgment, not a formula — read from the task's Files to Change):** logic novelty ·
-blast radius / coupling · risk domain (security/auth/concurrency/crypto/transactions) · horizon (one
-edit ↔ long agentic) · size · (brownfield) health of the touched files.
-
-**Model ceilings:** `flash` = routine / short-horizon · `pro` = hard-kernel **text** (novel logic,
-security/concurrency, big multi-file) · `codex` = **all image/visual** work **and** the **hard-text
-ceiling above `pro`**. **`pro` is the proactive *text* ceiling** — for text, route proactively no higher
-than `pro`; `codex` is reached for text **only** via build-time escalation on a `pro` verify-fail
-(apex-code § Model escalation). Route to `codex` **proactively** for **image** tasks (it is the only
-sighted coder in the menu). The retired `sonnet`/`opus` coder tiers fold into `codex`.
-
-> Codex runs as a `codex exec` subprocess from the build session (its own OpenAI pool, no backend swap,
-> no session restart) — so a `▸codex` task adds none of the cross-backend cost `opus`/`sonnet` once did.
-
-## Family-aware review routing (when `cross_model_review: true` — ADR-026)
-The independent reviewer family is **derived from each task's builder — reviewer family ≠ builder family**:
-- DeepSeek-built task (`▸flash`/`▸pro`) → **Codex** reviews (`codex exec`).
-- Codex-built task (`▸codex`) → **Opus** (Claude) reviews.
-This preserves evaluator-independence (apex-governance § Evaluator independence) — no task is reviewed
-by its own family. apex-code derives the reviewer from the `▸` tag at review time.
+Preserves evaluator-independence — no task reviewed by its own family. apex-code derives the reviewer
+from the builder at review time.
 
 ## Wave plan emit format
-Append `▸<model>` to each task and order so same-backend DeepSeek tasks are contiguous (one DeepSeek
-batch); `▸codex` tasks apex-code runs via `codex exec` (sequential subprocess, no session):
-`Wave 1: [task 1 ▸flash, task 2 ▸flash] | Wave 2: [task 3 ▸pro] | Wave 3: [task 4 ▸codex]`
+With a single proactive coder, emit the normal **untagged** `## Wave plan` (every task → Codex). Do not
+tag `▸opus` proactively — the Opus fallback is a session-level manual switch, not a per-task tag.
 
 ## Splitting a feature across models
-Split only when the boundary is a contract you can freeze + conformance-test (the stronger model commits
-the interface, the cheaper builds against it; tests travel — ADR-019); diffuse / un-freezable → keep the
-feature on one model.
+Largely moot with one proactive coder. If a Codex build must hand a frozen-contract slice to Opus (or
+vice-versa during fallback), split only when the boundary is a contract you can freeze + conformance-test
+(tests travel); diffuse / un-freezable → keep the feature on one coder.

@@ -1,7 +1,7 @@
 ---
 skill: apex-governance
 backend: claude
-version: 1.11.1
+version: 1.13.0
 last_updated: 2026-06-22
 sources:
   - APEX Design Specification 2026-05-24
@@ -62,26 +62,30 @@ global CLAUDE.md (prompt the user → draft message → user approves → commit
 action and is permitted at **every** level L2+. "No git commits" at L2/L3 means: never commit
 without that explicit prompt-and-approval exchange.
 
-**Coder tier is capability, not authority.** The Flash/Pro coder tier (`coder_tier`) is orthogonal to
-the autonomy level — "let Pro do more" means raise the L-level, never relax a gate, critical-file
-confirmation, or hard block because the stronger coder is in use.
+**Coder model is capability, not authority.** Which model codes (Codex / Opus) is orthogonal to the
+autonomy level — "let the stronger coder do more" means raise the L-level, never relax a gate,
+critical-file confirmation, or hard block because a particular coder is in use.
 
-## Coding model routing (ADR-024/026)
+## Coding model routing (ADR-027, supersedes ADR-024/026)
 
-APEX routes coding per task across the `coder_models` menu `{flash, pro, codex}`: **DeepSeek**
-(`deepseek` URL → Flash/Pro, Claude-Code subagents) and **OpenAI Codex** (`gpt-5.5`, run as a
-`codex exec` subprocess from the build session). Capability-not-authority applies — the router widens
-*which model codes*, never an autonomy gate, critical-file confirmation, or hard block.
+APEX coding is **Codex-primary**: `gpt-5.5` (run as a `codex exec -p apex-coder` subprocess from the
+build session) is the default coder for every task. The `coder_models` menu is `{codex, opus}`;
+per-task routing collapses to **"codex unless its quota is exhausted, then Opus."** Capability-not-
+authority applies — the model that codes never widens an autonomy gate, critical-file confirmation, or
+hard block.
 
-**Soft pool guard — DISCHARGED for coding (ADR-026).** The guard existed because the old ceiling coder
-(Opus via `APEX_MODE=coding`) drew the **same Max pool as planning** (the scarce Opus weekly cap).
-**Codex replaces Opus/Sonnet as the coding ceiling and spends a separate OpenAI pool**, so a build no
-longer starves planning. The only residual Max-pool draw is **Opus reviewing Codex-built tasks**
-(light, read-only, advisory) — bounded, not a starvation risk. Claude coding mode (`APEX_MODE=coding`)
-remains a valid mechanism but is **no longer the coder-ceiling routing target**.
+**Opus is the manual fallback coder** (mechanic A): the build runs in an Opus `APEX_MODE=coding` host
+that dispatches Codex per task; when Codex quota runs out the **same host builds the task inline as
+Opus** (no restart, no backend swap). Operator-driven, not auto-escalation. See apex-code § Model
+escalation on verify-fail.
 
-Escalation (`flash`→`pro` auto within DeepSeek; `pro`→`codex` approval-gated, subprocess, one retry):
-see apex-code § Model escalation on verify-fail.
+**Soft pool guard — RE-INSTATED, scoped to the fallback.** Steady-state coding spends the separate
+OpenAI pool; the only Max-pool draw is light (host orchestration + Opus reviewing Codex-built tasks).
+**But when the build falls back to Opus, Opus builds draw the same scarce Max weekly pool as planning**
+→ treat the fallback as a budgeted exception: surface remaining planning headroom at the switch, and
+prefer parking or splitting the build over draining the shared pool. Warn, don't block.
+
+DeepSeek (Flash/Pro) is **archived/parked** — recoverable, not in the active menu.
 
 ## Capability-routed UI escalation (ADR-020)
 
@@ -188,11 +192,13 @@ Add `scope: directory/path` to Permissions to activate freeze for that build.
 
 A second, **independent review by a different model family than the builder** before shipping a
 high-stakes build (auth / security / data migrations). Opt-in, not default. **Invariant: reviewer
-family ≠ builder family** (family-aware routing, ADR-026):
-- **DeepSeek-built** task (`▸flash`/`▸pro`) → **Codex** (`gpt-5.5`) reviews, via headless `codex exec`
+family ≠ builder family** (family-aware routing, ADR-027):
+- **Codex-built** task (the default coder) → **Opus** (Claude) reviews (`apex-reviewer`, Claude family).
+  This is the common path.
+- **Opus-built** task (the fallback coder) → **Codex** (`gpt-5.5`) reviews, via headless `codex exec`
   (read-only, schema'd — apex-code § Cross-model review + `references/codex-review.md`). **Advisory** —
-  never auto-blocks, never auto-fixes.
-- **Codex-built** task (`▸codex`) → **Opus** (Claude) reviews (`apex-reviewer`, Claude family).
+  never auto-blocks, never auto-fixes. Note: Opus builds only *because* Codex quota is exhausted, so this
+  Codex review usually can't run either → degrade to single-model + human flag (below).
 
 **How it runs (coding-side, wired in apex-code post-build):**
 1. The normal single-model review runs first (`apex-reviewer`, same family as the build).
@@ -203,8 +209,8 @@ family ≠ builder family** (family-aware routing, ADR-026):
    - **Both flag the same issue** → high-confidence finding; resolve before shipping.
    - **Only one flags it** → divergent; route to the human to adjudicate — do not auto-dismiss.
 
-**Graceful degrade:** if the reviewer family is unavailable (e.g. `codex --version` fails), do **not**
-silently pass — run the single-model review and emit "cross-model review requested but {family}
+**Graceful degrade:** if the reviewer family is unavailable (`codex --version` fails **or Codex quota is
+exhausted** — the latter is the usual case when Opus is the fallback builder), do **not** silently pass — run the single-model review and emit "cross-model review requested but {family}
 unavailable — single-model only; flagged for human." Never a silent skip. Codex runs on **any host**
 (its own auth — the old Mac co-location prerequisite is retired).
 

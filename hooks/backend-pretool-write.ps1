@@ -5,7 +5,8 @@
 # grant a deliberate one-off. CODING mode (DeepSeek) never blocks.
 $ErrorActionPreference = 'Stop'
 
-# --- Coding backend (DeepSeek): never blocks ---
+# --- Coding backend (DeepSeek): never blocks. ARCHIVED (ADR-027) — DeepSeek is parked, so this
+#     branch is inert/recovery-only; the Opus fallback coder runs via APEX_MODE=coding below. ---
 $url = $env:ANTHROPIC_BASE_URL
 if ($url -like '*deepseek*') { exit 0 }
 

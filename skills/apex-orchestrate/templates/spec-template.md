@@ -5,11 +5,11 @@ token_profile: balanced
 autonomy_level: L2
 # cross_model_review: true   # optional — high-stakes builds (auth / security / data). Runs an
 #                              independent 2nd review by a DIFFERENT model family than the builder
-#                              (family-aware: DeepSeek-built → Codex reviews; Codex-built → Opus).
-#                              Runs via headless `codex exec` on any host (ADR-026). Advisory only.
-# coder_model: flash         # optional — pin this WHOLE spec to one model, bypassing per-task routing.
-#                              Value from status.md coder_models {flash|pro|codex}. Absent → the
-#                              router assigns per task in ## Wave plan (ADR-024/026). Supersedes coder_tier.
+#                              (family-aware: Codex-built → Opus reviews; Opus-built → Codex reviews).
+#                              Runs via headless `codex exec` on any host (ADR-027). Advisory only.
+# coder_model: codex         # optional — pin this WHOLE spec to one coder. Value from status.md
+#                              coder_models {codex|opus}. Absent → Codex (the default); opus pins the
+#                              whole spec to the Opus fallback coder (ADR-027).
 ---
 
 # Spec: {title}
@@ -55,9 +55,9 @@ Simplicity check: {considered simpler approach? yes/no — if yes, why this vers
 ## Wave plan
 <!-- Required for specs with ≥3 tasks. Planning derives this from stated dependencies; coding
      executes it verbatim (no dependency inference). Tasks in the same wave run in parallel.
-     When status.md coder_models has >1 model, the router appends a per-task model tag
-     (e.g. "task 1 ▸flash, task 2 ▸sonnet") and dispatch batches by backend — full format in
-     apex-plan § Model-routing build planning (ADR-024). -->
+     Under ADR-027 the coder is Codex by default for every task (Opus is the manual fallback,
+     handled at build time by apex-code) — emit the normal untagged wave plan; don't tag ▸opus
+     proactively. Full rubric in apex-plan § Model-routing build planning. -->
 Wave 1: [task 1, task 2] | Wave 2: [task 3]
 
 ## Permissions

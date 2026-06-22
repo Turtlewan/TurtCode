@@ -7,11 +7,11 @@
 
 | Agent | File | Mode | Spawned by | Job |
 |-------|------|------|-----------|-----|
-| apex-coder | agents/apex-coder.md | DeepSeek | apex-code | Dependency analysis + parallel planning |
-| code-worker | agents/code-worker.md | DeepSeek | apex-coder | Executes one isolated task |
-| apex-reviewer | agents/apex-reviewer.md | DeepSeek | apex-code | Post-build advisory review |
+| apex-coder | agents/apex-coder.md | Coding host | apex-code | Dependency analysis + parallel planning |
+| code-worker | agents/code-worker.md | Coding host | apex-coder | Executes one isolated task |
+| apex-reviewer | agents/apex-reviewer.md | Coding host | apex-code | Post-build advisory review |
 | apex-docs-technical-agent | agents/apex-docs-technical-agent.md | Claude | apex-code | Writes handoff, ADRs |
-| apex-docs-product-agent | agents/apex-docs-product-agent.md | DeepSeek | apex-code | Inline docs, changelog, README |
+| apex-docs-product-agent | agents/apex-docs-product-agent.md | Coding host | apex-code | Inline docs, changelog, README |
 
 ## Phase 3 Agents (domain review + tooling)
 
@@ -27,7 +27,7 @@ Agents retained for domain-specific **tooling** (not review stubs):
 | Agent | File | Mode | Activation |
 |-------|------|------|-----------|
 | apex-security-agent | agents/apex-security-agent.md | Both | security, auth, crypto keywords (Bash security verification) |
-| apex-figma-agent | agents/apex-figma-agent.md | DeepSeek only | When spec includes a Figma URL (MCP / image steps) |
+| apex-figma-agent | agents/apex-figma-agent.md | Coding host | When spec includes a Figma URL (MCP / image steps). Note: ADR-027 coders (Codex/Opus) are both sighted, so the old image-blind detour is moot. |
 
 The post-build doc agents are listed in Phase 2 (`apex-docs-technical-agent`, `apex-docs-product-agent`).
 

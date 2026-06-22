@@ -1,12 +1,12 @@
 ---
 skill: apex-orchestrate
 backend: claude
-version: 1.5.1
+version: 1.6.0
 last_updated: 2026-06-22
 sources:
   - APEX Design Specification 2026-05-24
   - GSD (Get Shit Done) — github.com/gsd-build/get-shit-done
-  - ADR-024 / ADR-025 — complexity-routed multi-model coding + Claude coding mode
+  - ADR-027 — Codex-primary coding, Opus fallback, DeepSeek archived
 staleness_threshold: 30d
 description: >
   APEX session orchestrator — runs first every session: reads docs/status.md,
@@ -81,18 +81,18 @@ Resume signals: "resuming", "picking up", "continue where we left off", "back", 
 On pause → run pause workflow for current mode (see below).
 On resume → read In-Flight table, surface what was in progress, continue.
 
-## Step 3.5: Confirm operating mode (3 modes, ADR-024/025)
+## Step 3.5: Confirm operating mode (ADR-027)
 
 The SessionStart hook has already detected the mode; confirm it and route accordingly.
 Detection precedence (first match wins):
 
-1. `ANTHROPIC_BASE_URL` contains `deepseek` → **DeepSeek coding** (Flash/Pro coder) → route to apex-code.
-2. Else `APEX_MODE=coding` → **Claude coding** (Sonnet default / Opus coder, write-guard relaxed) → route to apex-code.
+1. `ANTHROPIC_BASE_URL` contains `deepseek` → **DeepSeek coding** (ARCHIVED — ADR-027, recovery-only) → route to apex-code.
+2. Else `APEX_MODE=coding` → **Claude coding** = the build host: **Codex (`gpt-5.5`) is the primary coder** (dispatched per task as a `codex exec` subprocess); **Opus is the inline fallback** when Codex quota runs out. Write-guard relaxed → route to apex-code.
 3. Else → **planning** → route to apex-plan.
 
-Claude coding mode is a real build session, not a planning detour — treat it like a DeepSeek
-coding session (read specs from docs/changes/, execute, no spec-authoring), under the **soft pool
-guard** (apex-governance owns it). Both coding modes go to apex-code regardless of the Step-4 signal.
+Claude coding mode is a real build session, not a planning detour — read specs from docs/changes/,
+execute (apex-code dispatches Codex per task), no spec-authoring, under the **soft pool guard scoped to
+the Opus fallback** (apex-governance owns it). Routes to apex-code regardless of the Step-4 signal.
 
 ## Step 4: Route
 
@@ -145,7 +145,7 @@ Rules:
 ## Step 6: State active context
 
 After routing, always output one line:
-"Running at L{n} | Profile: {profile} | Stack: {stack_skills or 'none'} | Mode: {planning / deepseek-coding / claude-coding}"
+"Running at L{n} | Profile: {profile} | Stack: {stack_skills or 'none'} | Mode: {planning / claude-coding (Codex-primary, Opus fallback) / deepseek-coding (archived)}"
 
 ---
 
@@ -204,7 +204,7 @@ No manual state tracking needed. The In-Flight table is the checkpoint.
 ## Governance rules
 
 At every session start, state the active level:
-"Running at L{n} | Profile: {profile} | Stack: {stack_skills or 'none'} | Mode: {planning / deepseek-coding / claude-coding}"
+"Running at L{n} | Profile: {profile} | Stack: {stack_skills or 'none'} | Mode: {planning / claude-coding (Codex-primary, Opus fallback) / deepseek-coding (archived)}"
 
 If user says "set level L{n}" or "run at L{n}" or "drop to L{n}":
 1. Update the autonomy_level in docs/status.md

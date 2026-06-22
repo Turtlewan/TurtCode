@@ -15,26 +15,26 @@ if ($isDeepSeek) {
     $model = $env:ANTHROPIC_MODEL
     if ($model -and $model -like '*pro*') { $coderTier = 'pro' } else { $coderTier = 'flash' }
     $policy = @"
-Mode: CODING (DeepSeek backend)
+Mode: CODING (DeepSeek backend -- ARCHIVED, ADR-027: DeepSeek is parked; primary coder is Codex. This branch is inert / recovery-only.)
 Coder tier: $coderTier (ANTHROPIC_MODEL: $(if ($model) { $model } else { '(unset - default flash)' }))
 You MAY: edit source code, run build/test/lint commands, complete implementation tasks.
 You SHOULD: look for technical change specs in docs/changes/*.md (or wherever the user keeps them) and execute them. After completing each spec, update its status (e.g., mark Done at top, or move the file to docs/changes/done/).
 "@
 } elseif ($isClaudeCoding) {
-    # Claude coding mode (ADR-025) — third operating mode. Anthropic backend, but an
-    # explicit APEX_MODE=coding signal makes Claude a first-class coder for an ADR-024
-    # build's Claude batch (visual work DeepSeek can't do, or a gated Pro->Opus escalation).
+    # Claude coding mode (ADR-025/027) — the OPUS FALLBACK coder path. Anthropic backend +
+    # APEX_MODE=coding. Codex (gpt-5.5) is the PRIMARY coder, dispatched per task as a
+    # `codex exec` subprocess from this host; Opus builds inline only when Codex quota is out.
     $coderTier = ''
     $mode = 'CODING'
-    $backend = 'Anthropic (Claude coding mode)'
+    $backend = 'Anthropic (Claude coding mode -- Opus fallback coder)'
     $model = $env:ANTHROPIC_MODEL
-    $coderModel = if ($model) { $model } else { 'Sonnet (default coder for this mode)' }
+    $coderModel = if ($model) { $model } else { 'Opus (fallback coder for this mode)' }
     $policy = @"
 Mode: CODING (Claude coding mode -- Anthropic backend + APEX_MODE=coding)
-Coder model: $coderModel. Within this mode Sonnet<->Opus switching is free; the ADR-024 router assigns the model per task (Sonnet = image/moderate; Opus only when complexity genuinely warrants).
+Coder model: $coderModel. This is the Codex-quota FALLBACK build path (ADR-027): Codex (gpt-5.5) is the primary coder, dispatched per task via `codex exec`; when Codex quota is exhausted this Opus host builds the task inline itself. No backend swap.
 You MAY: edit source code, run build/test/lint commands, complete implementation tasks. The planning write-guard is relaxed in this mode.
-You SHOULD: look for technical change specs in docs/changes/*.md and execute them, same as a DeepSeek coding session. After completing each spec, update its status (mark Done at top, or move it to docs/changes/done/).
-SOFT POOL GUARD (the one real risk -- ADR-025): interactive Claude coding draws the SAME Max subscription pool as planning, and the Opus weekly cap is the scarcest resource. There is NO programmatic budget cap here. So: this is mode discipline, not enforcement -- keep batches small, default the coder to Sonnet, let the router reach Opus only when complexity warrants, and track usage via /status. No hard block.
+You SHOULD: look for technical change specs in docs/changes/*.md and execute them, same as any coding session. After completing each spec, update its status (mark Done at top, or move it to docs/changes/done/).
+SOFT POOL GUARD (ADR-027, scoped to fallback): Opus building draws the SAME scarce Max weekly pool as planning, with NO programmatic cap. Treat an Opus-fallback build as a budgeted exception -- prefer parking or splitting the build over draining the shared pool, surface remaining planning headroom before a large fallback build, and track usage via /status. Mode discipline, not a hard block.
 "@
 } else {
     $coderTier = ''

@@ -1,7 +1,7 @@
 ---
 skill: apex-code
-backend: deepseek
-version: 1.21.2
+backend: claude
+version: 1.22.0
 last_updated: 2026-06-22
 sources:
   - APEX Design Specification 2026-05-24
@@ -13,11 +13,12 @@ sources:
   - docs/technical/adr/ADR-018-apex-sole-coding-workflow.md
   - docs/technical/adr/ADR-024-complexity-routed-multi-model-coding.md
   - docs/technical/adr/ADR-025-claude-coding-mode.md
+  - docs/technical/adr/ADR-027-codex-primary-opus-fallback-deepseek-archived.md
   - donor-analysis (Superpowers 4-status worker contract) — docs/research/donor-analysis/
   - Agent Skills (addyosmani) — github.com/addyosmani/agent-skills
 staleness_threshold: 30d
 description: >
-  APEX coding-mode workflow (DeepSeek) — executes docs/changes/ specs: session start,
+  APEX coding-mode workflow (Codex-primary / Opus fallback) — executes docs/changes/ specs: session start,
   AFK build vs edit mode, Karpathy pre-flight, wave-parallel dispatch, fork routing,
   and the stack-agnostic recipe-driven verify loop (reads the stack_skills Verification
   Recipe, runs it per task, recovers on failure). Loads when building/executing a spec.
@@ -25,8 +26,8 @@ description: >
 
 # APEX Coding Workflow
 
-You are in coding mode (DeepSeek). Execute specs from docs/changes/ silently
-and completely. Questions belong in planning — execution is silent.
+You are in coding mode (Codex-primary via the Claude coding host; Opus fallback — ADR-027). Execute
+specs from docs/changes/ silently and completely. Questions belong in planning — execution is silent.
 
 **APEX is the sole coding workflow.** In coding mode follow this skill and the impl.md cores
 it loads — that is the only execution loop. Any other dev-system or coding-process skill
@@ -56,7 +57,7 @@ Pre-flight:
 2. Read token_profile and autonomy_level from spec metadata
    (falls back to docs/status.md, then registry defaults)
 3. Read ## Permissions section — this is the complete list of permitted actions
-4. Set permission mode: run the DeepSeek build path (interactive AFK, headless `-p`, workflow waves)
+4. Set permission mode: run the build path (interactive AFK, headless `-p`, workflow waves)
    in **`dontAsk`**, NOT `auto` — see § Permissions 1a for the allowlist and rationale. Launch
    headless/workflow builds with `--permission-mode dontAsk`; for an interactive session, cycle off `auto`.
 5. Pre-authorise all listed operations for this session
@@ -153,25 +154,24 @@ Pre-flight:
    `BLOCKED` (could not complete — reason) · `NEEDS_CONTEXT` (missing a fact/file to proceed). Route
    `DONE_WITH_CONCERNS` to the decisions table; `BLOCKED` / `NEEDS_CONTEXT` through Forks.
 
-   #### Model-routing dispatch (ADR-024/025) — when the `## Wave plan` carries `▸<model>` tags
+   #### Model-routing dispatch (ADR-027) — coders {codex (default), opus (fallback)}
 
-   **Untagged / single-model plan → every worker runs the session default (current behaviour); skip this.**
-   Tagged → dispatch each task with its model override per this map:
+   **Codex is the default coder for every task** (untagged plan → all Codex). Opus is reached only as the
+   manual fallback when Codex quota is exhausted (below). Dispatch per this map:
 
-   | `▸` tag | Backend / agent | Model string | Dispatch channel |
+   | `▸` tag | Builder / agent | Model string | Dispatch channel |
    |---------|-----------------|--------------|------------------|
-   | `flash` | DeepSeek (Claude-Code subagent) | `deepseek-v4-flash` | per-worker `model:` (within DeepSeek) |
-   | `pro`   | DeepSeek (Claude-Code subagent) | `deepseek-v4-pro`   | per-worker `model:` (within DeepSeek) |
-   | `codex` | OpenAI Codex (external CLI)     | `gpt-5.5`           | **`codex exec` subprocess — NOT a subagent** |
+   | `codex` (default) | OpenAI Codex (external CLI) | `gpt-5.5` | **`codex exec -p apex-coder` subprocess — NOT a subagent**, sequential |
+   | `opus` (fallback) | the Opus `APEX_MODE=coding` host, inline | `opus` | built inline in the host session (no subagent, no subprocess) |
 
-   - **`flash`/`pro` per-task override:** inline → pass `model: "<string>"` to each code-worker Agent; workflow → set the task's `model` field.
-   - **`codex` dispatch (ADR-026) — runs in THIS session, not the workflow.** `agent()` spawns Claude-Code subagents, so it cannot dispatch the external Codex CLI. apex-code executes each `▸codex` task itself, **sequentially**, via Bash. Codex runs under the **`apex-coder` profile** (`~/.codex/apex-coder.config.toml`: `approval_policy=never` + `workspace-write` network-on; canonical tracked source `apex:docs/technical/setup/codex-apex-coder-profile.toml` — copy it to `~/.codex/` on a new host) so it behaves like a DeepSeek in-session worker — writes, verifies, fixes, iterates; **never halts to escalate** (in non-interactive `exec`, any policy but `never` turns the first sandbox/command failure into a dead-stop). **Pipe the prompt via stdin — never pass it as a positional arg** (a bare-arg `codex exec` hangs in a non-interactive shell waiting on stdin; proven 2026-06-22 pilot):
+   - **Host = an Opus `APEX_MODE=coding` session (mechanic A).** It dispatches Codex per task and, on quota-out, builds the task itself inline as Opus. DeepSeek (`flash`/`pro`) is archived — ADR-027.
+   - **`codex` dispatch (ADR-026) — runs in THIS session, not the workflow.** `agent()` spawns Claude-Code subagents, so it cannot dispatch the external Codex CLI. apex-code executes each `▸codex` task itself, **sequentially**, via Bash. Codex runs under the **`apex-coder` profile** (`~/.codex/apex-coder.config.toml`: `approval_policy=never` + `workspace-write` network-on; canonical tracked source `apex:docs/technical/setup/codex-apex-coder-profile.toml` — copy it to `~/.codex/` on a new host) so it behaves like a first-class in-session worker — writes, verifies, fixes, iterates; **never halts to escalate** (in non-interactive `exec`, any policy but `never` turns the first sandbox/command failure into a dead-stop). **Pipe the prompt via stdin — never pass it as a positional arg** (a bare-arg `codex exec` hangs in a non-interactive shell waiting on stdin; proven 2026-06-22 pilot):
      `printf '%s' "<task text + Files for this task + acceptance criterion + the autonomy clause below>" | codex exec -p apex-coder --sandbox workspace-write -m gpt-5.5 -C <repo-root>`
      **Autonomy clause** (append to every coder prompt — config kills halt-to-escalate, this kills report-and-stop-by-disposition): *"Follow AGENTS.md. Surgical scope — touch only the listed files. Work autonomously to completion: run the verify recipe, and if a test fails / lint errors / you hit a problem, fix it and re-run — do not stop to ask. Only end when the acceptance criterion passes, or you are genuinely blocked (missing credential, ambiguous spec) — then state exactly what blocked you."*
      Codex returns its own diff; apex-code then runs the spec's Verification Recipe on it like any task. No backend swap, no session restart (Codex has its own auth). **Blast radius:** the Codex subprocess does NOT ride Claude Code's `permissions.deny` floor — `workspace-write` is its only guardrail, so keep it repo-confined (never `danger-full-access`). Parallel Codex is OUT of scope — keep `▸codex` tasks sequential.
    - **Windows sandbox artifact ownership (`▸codex`).** The Windows restricted-token sandbox tags files written by Codex's *shell commands* with the sandbox SID — the interactive user can't delete them without elevation. Codex's *source-file edits* are unaffected (normal-user-owned). Two rules keep this from biting: (1) the `apex-coder` profile suppresses the common in-tree caches (`PYTHONDONTWRITEBYTECODE`, `PYTEST_ADDOPTS=-p no:cacheprovider`); (2) **install dependencies as the normal user in the apex-code session** (`npm install` / `uv sync` etc. before or as part of the verify step) — never let the Codex subprocess create `node_modules`/`.venv`, or the verify (run as your user) hits a locked tree. To clear any locked residue **without elevation**, run a cleanup `codex exec -p apex-coder --sandbox workspace-write -C <repo> "delete <dir>"` — Codex runs under the same sandbox SID that owns the files, so it can remove them (proven 2026-06-22); an elevated `Remove-Item -Recurse -Force` is the fallback (normal-user `takeown` reclaims source files but not deep-locked cache dirs).
-   - **Backend wall (C1) — applies only to the DeepSeek↔Claude (`APEX_MODE=coding`) split, NOT to Codex.** Run the DeepSeek batch (`flash`/`pro`) in-session; `▸codex` tasks run inline as subprocesses needing no swap. (`sonnet`/`opus` are no longer coder tiers — ADR-026.)
-   - **Fallback:** if a per-worker DeepSeek `flash`↔`pro` override is rejected, run the whole DeepSeek batch at the session `ANTHROPIC_MODEL` and log it. If `codex --version` fails, a `▸codex` task **falls back to `pro` + logs it** (never silent). Whole-spec `coder_model: <m>` frontmatter pins every task (no routing).
+   - **No backend swap.** Codex runs as a subprocess (its own auth); the Opus fallback builds inline in the same `APEX_MODE=coding` host. No `ANTHROPIC_BASE_URL` change, no restart.
+   - **Fallback (codex → opus):** if `codex --version` fails, or Codex quota is exhausted mid-run (non-zero exit / rate-limit error from `codex exec`), the task **falls back to Opus** — the host builds it inline + logs it (never silent). Whole-spec `coder_model: <m>` frontmatter (`{codex|opus}`) pins every task (no routing).
 
 **Task granularity** is fixed at spec authoring time by apex-plan — do not re-decompose
 tasks during Wave Analysis. If a task appears too coarse to verify atomically after
@@ -243,11 +243,14 @@ a visual direction).
 - Converge before moving to the next task. If it won't converge after a few honest attempts,
   treat it as a fork (capture-at-halt, route per Forks).
 
-**Model escalation on verify-fail (ADR-024/026 F3 — only when `coder_models` is multi-model; one escalation per task, ADR-015):**
-When a routed task won't converge after honest recovery, escalate **one tier up** within the eligible set:
-- **Within DeepSeek** (`flash`→`pro`): escalate **automatically** — re-dispatch at `pro`, re-run the recipe.
-- **`pro` → `codex` (the text ceiling, ADR-026):** **approval-gated** — capture-at-halt, recommend the escalation; on approval apex-code re-runs the task via `codex exec` (no session swap — subprocess) and re-runs the recipe. Codex spends the OpenAI pool, so gate it.
-- One escalation is the retry; if it still fails, fork (capture-at-halt).
+**Model fallback on verify-fail or quota-out (ADR-027; one fallback per task, ADR-015):**
+The default coder is Codex. Fall back to Opus when a Codex task won't converge after honest recovery, **or**
+Codex quota is exhausted (non-zero exit / rate-limit from `codex exec`):
+- **codex → opus (manual fallback):** capture-at-halt, recommend the switch; on operator confirmation the
+  Opus `APEX_MODE=coding` host builds the task **inline itself** (no subprocess, no session swap — the
+  write-guard is already relaxed under `APEX_MODE=coding`) and re-runs the recipe. Opus draws the shared Max
+  pool, so gate it (apex-governance § soft pool guard).
+- One fallback is the retry; if Opus still fails, fork (capture-at-halt).
 
 **context7 at the write step:** before writing non-trivial code against the active stack/
 framework, consult **context7** for its current API/syntax — getting it right first means fewer
@@ -381,18 +384,19 @@ Execute in this order:
    **Cross-model review — only if the spec frontmatter has `cross_model_review: true`**
    (apex-governance § Cross-model review). After apex-reviewer returns, run an independent review by a
    **different model family than the builder** (family-aware, ADR-026):
-   - **Per task, derive the reviewer from the `▸` builder tag:** DeepSeek-built (`▸flash`/`▸pro`) →
-     **Codex** reviews; Codex-built (`▸codex`) → **Opus** reviews. (Default whole-build path: DeepSeek
-     built → Codex reviews the diff.)
+   - **Per task, derive the reviewer from the builder:** Codex-built (the default) → **Opus** reviews;
+     Opus-built (the fallback) → **Codex** reviews. (Default whole-build path: Codex built → Opus reviews
+     the diff.)
    - **Codex review** runs via Bash, read-only, schema'd — full invocation + schema + prompt in
      `references/codex-review.md`. **Pipe the prompt via stdin** (bare-arg hangs):
      `printf '%s' "<review prompt + acceptance criteria + git diff>" | codex exec -c approval_policy="never" --sandbox read-only --output-schema ~/.claude/skills/apex-code/references/codex-review-schema.json -o <out.json> -m gpt-5.5`, then read `<out.json>` (the schema-constrained final message: `{findings[], verdict}`). (`approval_policy=never` so a sandboxed command never stalls the review; read-only keeps zero blast radius — no profile needed here.)
      Give it the spec + changed files only — **never** apex-reviewer's findings (evaluator independence).
-   - **Opus review** (for `▸codex` tasks) → dispatch one `apex-reviewer` on the Claude family, same independence rule.
+   - **Opus review** (for Codex-built tasks — the common path) → dispatch one `apex-reviewer` on the Claude family, same independence rule.
    - Combine: a finding **both** raise → high-confidence, resolve before "complete"; **only one** → decisions
      table "cross-model divergence — human adjudication ⚠️." Codex findings are **advisory** (never auto-block, no auto-fix).
-   - **Codex unavailable** (`codex --version` fails) → do NOT skip silently: record "cross_model_review
-     requested but codex unavailable — single-model review only ⚠️" and continue.
+   - **Codex unavailable** (`codex --version` fails **or quota exhausted** — the usual case when Opus is the
+     fallback builder, since Codex can't review on a dead pool) → do NOT skip silently: record
+     "cross_model_review requested but codex unavailable — single-model review only ⚠️" and continue.
 
 2. Spawn apex-docs-technical-agent:
    Inputs: spec_path, coder_summary, reviewer_findings, docs_summary, today's date

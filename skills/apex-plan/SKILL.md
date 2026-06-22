@@ -1,7 +1,7 @@
 ---
 skill: apex-plan
 backend: claude
-version: 1.24.0
+version: 1.26.0
 last_updated: 2026-06-22
 sources:
   - APEX Design Specification 2026-05-24
@@ -404,15 +404,15 @@ Documentation
 
 If any item fails: surface what is unresolved, revise in-place, re-run gate from top. Repeat until clean.
 
-## Model-routing build planning — when the project sets a coder_models menu
+## Model-routing build planning — coders {codex (default), opus (fallback)}
 
-Read `coder_models` from status.md (default `[flash]`; absent → map legacy `coder_tier_policy` per `references/model-routing.md`).
-- **Single-model menu** → no routing; emit the normal untagged `## Wave plan`.
-- **Multi-model menu** → route **per task** (ADR-024): run the 2-step select per task, then **emit a
-  per-task `▸<model>`-tagged, backend-batched `## Wave plan`** (same-backend tasks contiguous → ≤1
-  crossing; apex-code dispatches each batch and prompts for the one manual swap before the Claude batch).
-  **2-step select, emit-format example, and full rubric → `references/model-routing.md`.**
-- A spec's optional `coder_model: <m>` frontmatter pins the WHOLE spec to one model (bypasses routing).
+Read `coder_models` from status.md (default `[codex]`; ADR-027). Routing **collapses** to a single
+proactive coder: **Codex builds every task; Opus is the manual fallback when Codex quota is exhausted**
+(a build-time event handled by apex-code, not a planning-time per-task route). So:
+- **Emit the normal untagged `## Wave plan`** — every task → Codex. Do not tag `▸opus` proactively.
+- A spec's optional `coder_model: opus` frontmatter pins the WHOLE spec to Opus up front (e.g. when you
+  already know Codex quota is gone).
+- Full rubric (family-aware review, fallback mechanic, archived DeepSeek mapping) → `references/model-routing.md`.
 
 ## Confirmation digest — how the user signs off
 
