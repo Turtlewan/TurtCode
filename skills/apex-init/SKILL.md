@@ -1,8 +1,8 @@
 ---
 skill: apex-init
 backend: claude
-version: 1.6.0
-last_updated: 2026-06-12
+version: 1.7.0
+last_updated: 2026-06-22
 sources:
   - APEX Design Specification 2026-05-24
   - GSD (Get Shit Done) — github.com/gsd-build/get-shit-done
@@ -10,6 +10,7 @@ sources:
   - docs/technical/adr/ADR-013-app-flow-artifact.md
   - docs/technical/adr/ADR-014-living-capability-overview.md
   - docs/technical/adr/ADR-017-design-brief-artifact.md
+  - docs/technical/adr/ADR-026-codex-third-model-family.md
 staleness_threshold: 30d
 description: >
   Use when bootstrapping a brand-new APEX project — triggered automatically by
@@ -82,6 +83,7 @@ Create these files in the project root if they don't already exist:
 - PROJECT.md (vision statement — write from Question 1 + 2 answers)
 - REQUIREMENTS.md (scope boundaries — stub with "In scope / Out of scope" sections)
 - ROADMAP.md (phase direction — stub, to be filled during planning)
+- AGENTS.md (Codex build instructions — seed from the AGENTS template; see "AGENTS.md" below)
 
 Also seed the **System Overview stub** at `docs/technical/architecture/overview.md`
 if it doesn't already exist (template below). Leave it as the stub — it carries the
@@ -111,6 +113,15 @@ coverage check. Same scope-gate as app-flow (skip for headless / CLI). Leave it 
 fills tokens + art-direction + forbidden-patterns once a visual direction is chosen, using the full
 template at `~/.claude/skills/apex-ui-ux-design/references/design-brief-template.md`; do not design
 during bootstrap.
+
+**AGENTS.md — Codex build instructions (ADR-026).** Seed `AGENTS.md` in the project root from
+`~/.claude/skills/apex-orchestrate/templates/AGENTS-template.md`. The universal sections (the
+build-a-spec workflow + hard rules) are verbatim. Fill **What this repo is** from PROJECT.md, and the
+**Verify commands** from the bound `stack_skills` `## Verification Recipe` (leave the
+`<!-- apex:agents:verify -->` stub if the stack is TBD). Leave **Project layout** + **Conventions** as
+`<!-- apex:agents:stub -->` blocks — planning fills them as code takes shape. AGENTS.md is the
+Codex-facing projection of the project's build context (commands + hard-blocks + structure); it tracks
+the stack recipe and hard-blocks, it is not hand-maintained in parallel with CLAUDE.md.
 
 ## Step 3: Write docs/status.md
 
@@ -142,6 +153,7 @@ Fill in:
   ROADMAP.md        ← phase direction — fill this during planning
   CHANGELOG.md
   README.md
+  AGENTS.md         ← Codex build instructions (build-a-spec workflow + verify recipe + hard rules)
 
 Running at L2 | Profile: balanced | Mode: planning
 
