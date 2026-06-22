@@ -1,5 +1,6 @@
 # APEX Project Memory
 
+- [Research tier by difficulty](research-tier-by-difficulty.md) — default lean searches / apex-research; reach for the deep-research exhaustive harness (~100 agents) ONLY for contested × high-stakes × hard-to-reverse questions; gate is model-native (RED-confirmed), so no skill edits — just trigger discipline
 - [Cheap-mockup interactive loop](cheap-mockup-interactive-loop.md) — UI design-prototype default: single mockup previews in Cursor's in-editor render (same window as live code diff); Chrome only for multi-variant side-by-side; user comments → Claude view-layer edit → user re-views → repeat to approval; never Playwright's tab
 - [Agentic-OS video ingestion mode](agentic-os-video-ingestion.md) — for each suggested video: ingest→research→deep-dive→log verdict; DON'T implement; consolidated report only on request; ledger = docs/research/agentic-os-video-audit.md
 
@@ -28,3 +29,7 @@
 - [UI design = cheap-display default](ui-design-cheap-display-default.md) — design UI via logic-free mockup + cheap display, Claude as primary UI hand at this stage, then DeepSeek wires the locked design
 - [Cursor co-edit flow](cursor-coedit-flow.md) — user's primary coding flow: APEX in Cursor's terminal, co-edit files live in editor; keep files open + auto-accept + edit mode; integration pushes diffs but can't drive tabs
 - [Spec mechanism not just outcome](spec-mechanism-not-just-outcome.md) — spec tasks must state the *producing mechanism*, not just the outcome; a "reuse X" task can't achieve a behaviour X structurally lacks (P6-maths dead-heroes); now enforced by apex-plan readiness-gate Sufficiency audit (v1.22.0)
+- [Classifier gates protected-path edits](classifier-gates-protected-path-edits.md) — auto-mode classifier (separate from APEX write-guard) gates `.claude/` writes; planning-mode false-positives on permission-meta content (approve, don't route around); `dontAsk` denies protected paths outright so skill/workflow edits stay in planning, not the build
+- [dontAsk probe cleanup paradox](dontask-probe-cleanup-paradox.md) — a dontAsk session can't self-clean (settings/spec-move edits aren't allow-listed); arrange probe cleanup outside dontAsk (pre-arrange / allow-list / next-planning-drain)
+- [Background agents can't get interactive approval](background-agents-no-interactive-approval.md) — dispatched/background subagents run non-interactively → approval-gated calls (WebFetch on novel domains, off-list tools) auto-deny silently; breaks apex-research's dispatched-retrieval on novel web sources; fetch in the main agent or pre-authorise domains
+- [Propose coder model at coding shift](propose-coder-model-at-coding-shift.md) — at any "let's build"/shift-to-coding, name the coder path (ADR-027: Codex primary via `codex-code` or `apex-opus` host / Opus manual fallback; DeepSeek archived) and confirm; scoped exception to high-autonomy ([[user-autonomy-preference]])
