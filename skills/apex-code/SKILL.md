@@ -158,16 +158,18 @@ Pre-flight:
    **Untagged / single-model plan → every worker runs the session default (current behaviour); skip this.**
    Tagged → dispatch each task with its model override per this map:
 
-   | `▸` tag | Backend | Model string (override) | Override channel |
-   |---------|---------|-------------------------|------------------|
-   | `flash` | DeepSeek | `deepseek-v4-flash` | per-worker (within DeepSeek) |
-   | `pro`   | DeepSeek | `deepseek-v4-pro`   | per-worker (within DeepSeek) |
-   | `sonnet`| Claude  | `sonnet`            | Agent `model:` param (native) |
-   | `opus`  | Claude  | `opus`              | Agent `model:` param (native) |
+   | `▸` tag | Backend / agent | Model string | Dispatch channel |
+   |---------|-----------------|--------------|------------------|
+   | `flash` | DeepSeek (Claude-Code subagent) | `deepseek-v4-flash` | per-worker `model:` (within DeepSeek) |
+   | `pro`   | DeepSeek (Claude-Code subagent) | `deepseek-v4-pro`   | per-worker `model:` (within DeepSeek) |
+   | `codex` | OpenAI Codex (external CLI)     | `gpt-5.5`           | **`codex exec` subprocess — NOT a subagent** |
 
-   - **Per-task override:** inline → pass `model: "<string>"` to each code-worker Agent; workflow → set the task's `model` field.
-   - **Backend wall (C1) — one session = one backend.** Run the DeepSeek batch (`flash`/`pro`) in this session; before the Claude batch (`sonnet`/`opus`) STOP and prompt for the one manual swap (`ANTHROPIC_BASE_URL` → Anthropic + `APEX_MODE=coding`), then resume. Within a backend the switch is free (no swap).
-   - **Fallback:** if a per-worker DeepSeek `flash`↔`pro` override is rejected, run the whole DeepSeek batch at the session `ANTHROPIC_MODEL` and log it — never block on per-worker routing. Whole-spec `coder_model: <m>` frontmatter pins every task (no routing).
+   - **`flash`/`pro` per-task override:** inline → pass `model: "<string>"` to each code-worker Agent; workflow → set the task's `model` field.
+   - **`codex` dispatch (ADR-026) — runs in THIS session, not the workflow.** `agent()` spawns Claude-Code subagents, so it cannot dispatch the external Codex CLI. apex-code executes each `▸codex` task itself, **sequentially**, via Bash. **Pipe the prompt via stdin — never pass it as a positional arg** (a bare-arg `codex exec` hangs in a non-interactive shell waiting on stdin; proven 2026-06-22 pilot):
+     `printf '%s' "<task text + Files for this task + acceptance criterion + 'follow AGENTS.md; surgical scope — touch only the listed files; run the verify recipe'>" | codex exec --sandbox workspace-write -m gpt-5.5 -C <repo-root>`
+     Codex returns its own diff; apex-code then runs the spec's Verification Recipe on it like any task. No backend swap, no session restart (Codex has its own auth). Parallel Codex is OUT of scope — keep `▸codex` tasks sequential.
+   - **Backend wall (C1) — applies only to the DeepSeek↔Claude (`APEX_MODE=coding`) split, NOT to Codex.** Run the DeepSeek batch (`flash`/`pro`) in-session; `▸codex` tasks run inline as subprocesses needing no swap. (`sonnet`/`opus` are no longer coder tiers — ADR-026.)
+   - **Fallback:** if a per-worker DeepSeek `flash`↔`pro` override is rejected, run the whole DeepSeek batch at the session `ANTHROPIC_MODEL` and log it. If `codex --version` fails, a `▸codex` task **falls back to `pro` + logs it** (never silent). Whole-spec `coder_model: <m>` frontmatter pins every task (no routing).
 
 **Task granularity** is fixed at spec authoring time by apex-plan — do not re-decompose
 tasks during Wave Analysis. If a task appears too coarse to verify atomically after
@@ -239,10 +241,10 @@ a visual direction).
 - Converge before moving to the next task. If it won't converge after a few honest attempts,
   treat it as a fork (capture-at-halt, route per Forks).
 
-**Model escalation on verify-fail (ADR-024 F3 — only when `coder_models` is multi-model; one escalation per task, ADR-015):**
+**Model escalation on verify-fail (ADR-024/026 F3 — only when `coder_models` is multi-model; one escalation per task, ADR-015):**
 When a routed task won't converge after honest recovery, escalate **one tier up** within the eligible set:
-- **Within a backend** (`flash`→`pro`, `sonnet`→`opus`): escalate **automatically** — re-dispatch at the higher model, re-run the recipe.
-- **Crossing into the Claude pool** (DeepSeek `pro` → `opus`): **approval-gated** — capture-at-halt, recommend the escalation; the user approves the swap to Claude coding mode (`APEX_MODE=coding`) and the task re-runs on Opus.
+- **Within DeepSeek** (`flash`→`pro`): escalate **automatically** — re-dispatch at `pro`, re-run the recipe.
+- **`pro` → `codex` (the text ceiling, ADR-026):** **approval-gated** — capture-at-halt, recommend the escalation; on approval apex-code re-runs the task via `codex exec` (no session swap — subprocess) and re-runs the recipe. Codex spends the OpenAI pool, so gate it.
 - One escalation is the retry; if it still fails, fork (capture-at-halt).
 
 **context7 at the write step:** before writing non-trivial code against the active stack/
@@ -375,17 +377,20 @@ Execute in this order:
    Wait for both to complete. Collect docs_summary and reviewer_findings.
 
    **Cross-model review — only if the spec frontmatter has `cross_model_review: true`**
-   (apex-governance § Cross-model review). After apex-reviewer returns:
-   - Check a second backend is available — a host configured to route a subagent to the
-     *other* model family (this build is on DeepSeek and Claude is reachable, or vice versa).
-   - **Available** → dispatch one more `apex-reviewer` on that other backend. Inputs:
-     spec_path, files_changed — and NOTHING from the first review (it must not see the first
-     findings). Combine: a finding **both** reviews raise → high-confidence, must resolve
-     before reporting "complete"; a finding **only one** raises → add to the decisions table as
-     "cross-model divergence — human adjudication ⚠️."
-   - **Not available** → do NOT skip silently. Record in the decisions table: "cross_model_review
-     requested but no second backend — single-model review only ⚠️" and continue. (On a
-     single-backend host this is the expected path.)
+   (apex-governance § Cross-model review). After apex-reviewer returns, run an independent review by a
+   **different model family than the builder** (family-aware, ADR-026):
+   - **Per task, derive the reviewer from the `▸` builder tag:** DeepSeek-built (`▸flash`/`▸pro`) →
+     **Codex** reviews; Codex-built (`▸codex`) → **Opus** reviews. (Default whole-build path: DeepSeek
+     built → Codex reviews the diff.)
+   - **Codex review** runs via Bash, read-only, schema'd — full invocation + schema + prompt in
+     `references/codex-review.md`. **Pipe the prompt via stdin** (bare-arg hangs):
+     `printf '%s' "<review prompt + acceptance criteria + git diff>" | codex exec --sandbox read-only --output-schema ~/.claude/skills/apex-code/references/codex-review-schema.json -o <out.json> -m gpt-5.5`, then read `<out.json>` (the schema-constrained final message: `{findings[], verdict}`).
+     Give it the spec + changed files only — **never** apex-reviewer's findings (evaluator independence).
+   - **Opus review** (for `▸codex` tasks) → dispatch one `apex-reviewer` on the Claude family, same independence rule.
+   - Combine: a finding **both** raise → high-confidence, resolve before "complete"; **only one** → decisions
+     table "cross-model divergence — human adjudication ⚠️." Codex findings are **advisory** (never auto-block, no auto-fix).
+   - **Codex unavailable** (`codex --version` fails) → do NOT skip silently: record "cross_model_review
+     requested but codex unavailable — single-model review only ⚠️" and continue.
 
 2. Spawn apex-docs-technical-agent:
    Inputs: spec_path, coder_summary, reviewer_findings, docs_summary, today's date

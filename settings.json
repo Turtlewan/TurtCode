@@ -11,6 +11,7 @@
       "Bash(find *)",
       "Bash(grep *)",
       "Bash(rg *)",
+      "Bash(codex exec:*)",
       "WebSearch",
       "WebFetch(domain:artificialanalysis.ai)",
       "WebFetch(domain:api-docs.deepseek.com)",
@@ -19,7 +20,13 @@
       "WebFetch(domain:docs.anthropic.com)",
       "WebFetch(domain:www.anthropic.com)",
       "WebFetch(domain:arxiv.org)",
-      "WebFetch(domain:github.com)"
+      "WebFetch(domain:github.com)",
+      "WebFetch(domain:raw.githubusercontent.com)",
+      "WebFetch(domain:developers.openai.com)",
+      "WebFetch(domain:platform.openai.com)",
+      "WebFetch(domain:openai.com)",
+      "WebFetch(domain:help.openai.com)",
+      "WebFetch(domain:cookbook.openai.com)"
     ],
     "defaultMode": "acceptEdits",
     "disableBypassPermissionsMode": "disable",

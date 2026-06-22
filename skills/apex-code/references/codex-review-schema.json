@@ -1,0 +1,23 @@
+{
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "findings": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "severity": { "type": "string", "enum": ["BLOCK", "FLAG", "CLEAN"] },
+          "file": { "type": "string" },
+          "line": { "type": ["integer", "null"] },
+          "criterion": { "type": ["string", "null"] },
+          "rationale": { "type": "string" }
+        },
+        "required": ["severity", "file", "line", "criterion", "rationale"]
+      }
+    },
+    "verdict": { "type": "string", "enum": ["BLOCK", "FLAG", "CLEAN"] }
+  },
+  "required": ["findings", "verdict"]
+}

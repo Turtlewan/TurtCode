@@ -4,12 +4,12 @@ status: draft
 token_profile: balanced
 autonomy_level: L2
 # cross_model_review: true   # optional — high-stakes builds (auth / security / data). Runs an
-#                              independent 2nd review on the OTHER model family post-build
-#                              (apex-governance § Cross-model review). Needs a 2nd backend (Mac);
-#                              spends Claude-side capped-pool tokens — set deliberately, not default.
+#                              independent 2nd review by a DIFFERENT model family than the builder
+#                              (family-aware: DeepSeek-built → Codex reviews; Codex-built → Opus).
+#                              Runs via headless `codex exec` on any host (ADR-026). Advisory only.
 # coder_model: flash         # optional — pin this WHOLE spec to one model, bypassing per-task routing.
-#                              Value from status.md coder_models {flash|pro|sonnet|opus}. Absent → the
-#                              router assigns per task in ## Wave plan (ADR-024). Supersedes coder_tier.
+#                              Value from status.md coder_models {flash|pro|codex}. Absent → the
+#                              router assigns per task in ## Wave plan (ADR-024/026). Supersedes coder_tier.
 ---
 
 # Spec: {title}

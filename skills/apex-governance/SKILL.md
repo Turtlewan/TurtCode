@@ -66,22 +66,21 @@ without that explicit prompt-and-approval exchange.
 the autonomy level — "let Pro do more" means raise the L-level, never relax a gate, critical-file
 confirmation, or hard block because the stronger coder is in use.
 
-## Coding model routing & the soft pool guard (ADR-024/025)
+## Coding model routing (ADR-024/026)
 
-APEX runs coding in one of **two backends** (the model-router picks per task, batched by backend):
-**DeepSeek coding** (`deepseek` URL → Flash/Pro) and **Claude coding** (Anthropic backend +
-`APEX_MODE=coding` → Sonnet/Opus); detection precedence in CLAUDE.md §3. Same capability-not-authority
-rule applies — the router widens *which model codes*, never an autonomy gate, critical-file
-confirmation, or hard block.
+APEX routes coding per task across the `coder_models` menu `{flash, pro, codex}`: **DeepSeek**
+(`deepseek` URL → Flash/Pro, Claude-Code subagents) and **OpenAI Codex** (`gpt-5.5`, run as a
+`codex exec` subprocess from the build session). Capability-not-authority applies — the router widens
+*which model codes*, never an autonomy gate, critical-file confirmation, or hard block.
 
-**Soft pool guard (Claude coding mode — the one real risk).** Interactive Claude coding draws the
-**same Max subscription pool as planning**, and the Opus weekly cap is APEX's scarcest resource. There
-is **no programmatic budget cap** for interactive sessions, so this is **discipline, not enforcement**:
-- On entry, **warn** that this session draws the planning pool.
-- **Default the coder to Sonnet;** let the ADR-024 router reach Opus only when task complexity warrants.
-- **Track** usage via `/status`. **No hard block** — heavy Claude builds are bounded by mode discipline + small batches, not a cap.
+**Soft pool guard — DISCHARGED for coding (ADR-026).** The guard existed because the old ceiling coder
+(Opus via `APEX_MODE=coding`) drew the **same Max pool as planning** (the scarce Opus weekly cap).
+**Codex replaces Opus/Sonnet as the coding ceiling and spends a separate OpenAI pool**, so a build no
+longer starves planning. The only residual Max-pool draw is **Opus reviewing Codex-built tasks**
+(light, read-only, advisory) — bounded, not a starvation risk. Claude coding mode (`APEX_MODE=coding`)
+remains a valid mechanism but is **no longer the coder-ceiling routing target**.
 
-Cross-backend escalation (within-backend auto; crossing into the Claude pool approval-gated; one retry):
+Escalation (`flash`→`pro` auto within DeepSeek; `pro`→`codex` approval-gated, subprocess, one retry):
 see apex-code § Model escalation on verify-fail.
 
 ## Capability-routed UI escalation (ADR-020)
@@ -187,26 +186,27 @@ Add `scope: directory/path` to Permissions to activate freeze for that build.
 
 ## Cross-model review (opt-in — spec flag `cross_model_review: true`)
 
-A second, **independent review by a different model family** before shipping a high-stakes
-build (auth / security / data migrations). Opt-in, not default — it spends the *stronger*
-model's tokens (Claude reviewing DeepSeek-built code), which on the headless path draw from the
-capped credit pool. The planner sets the flag deliberately for the builds that earn it.
+A second, **independent review by a different model family than the builder** before shipping a
+high-stakes build (auth / security / data migrations). Opt-in, not default. **Invariant: reviewer
+family ≠ builder family** (family-aware routing, ADR-026):
+- **DeepSeek-built** task (`▸flash`/`▸pro`) → **Codex** (`gpt-5.5`) reviews, via headless `codex exec`
+  (read-only, schema'd — apex-code § Cross-model review + `references/codex-review.md`). **Advisory** —
+  never auto-blocks, never auto-fixes.
+- **Codex-built** task (`▸codex`) → **Opus** (Claude) reviews (`apex-reviewer`, Claude family).
 
 **How it runs (coding-side, wired in apex-code post-build):**
-1. The normal single-model review runs first (`apex-reviewer`, same backend as the build).
-2. If the spec sets `cross_model_review: true` **and a second backend is available**, dispatch
-   one more independent review on the **other** model family — the one that did *not* write the
-   code (standard path: DeepSeek built → Claude reviews). Give it only the spec + changed files,
-   **never the first review's findings** (evaluator independence — it must judge the code, not
+1. The normal single-model review runs first (`apex-reviewer`, same family as the build).
+2. If `cross_model_review: true`, run the family-aware independent review above. Give it only the spec
+   + changed files, **never the first review's findings** (evaluator independence — judge the code, not
    anchor on the first verdict).
-3. Combine the two verdicts:
-   - **Both models flag the same issue** → high-confidence finding; resolve before shipping.
+3. Combine the verdicts:
+   - **Both flag the same issue** → high-confidence finding; resolve before shipping.
    - **Only one flags it** → divergent; route to the human to adjudicate — do not auto-dismiss.
 
-**Prerequisite / graceful degrade:** this needs a host that can route a review to the other
-backend (the Mac co-locating Claude + DeepSeek). If no second backend is available, do **not**
-silently pass: run the single-model review and emit a flag — "cross-model review requested but
-second backend unavailable — single-model only; flagged for human." It never becomes a silent skip.
+**Graceful degrade:** if the reviewer family is unavailable (e.g. `codex --version` fails), do **not**
+silently pass — run the single-model review and emit "cross-model review requested but {family}
+unavailable — single-model only; flagged for human." Never a silent skip. Codex runs on **any host**
+(its own auth — the old Mac co-location prerequisite is retired).
 
 The value is the *independence* — a different family has different blind spots, so agreement is
 real signal. Two passes of the *same* model is the santa-method dual-pass (apex-code wave review,

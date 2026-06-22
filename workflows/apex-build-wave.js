@@ -18,6 +18,10 @@ export const meta = {
 //                     apex-code splits the DeepSeek batch from the Claude batch). Omit → the
 //                     session default. e.g. 'deepseek-v4-pro' on the DeepSeek backend,
 //                     'opus' on the Claude (APEX_MODE=coding) backend.
+//                     NOTE (ADR-026): `▸codex` tasks are NOT dispatched here — agent() spawns
+//                     Claude-Code subagents, not the external Codex CLI. apex-code runs codex
+//                     tasks itself, sequentially, via `codex exec` (subprocess). Only Claude-family
+//                     model strings (flash/pro/sonnet/opus) ever reach this `model` field.
 //   isolate:        boolean — true → run each worker in its own managed git worktree, so
 //                             concurrent build/test recipes don't collide on build artifacts,
 //                             lockfiles, ports, or dist/.next. Set by apex-code only when the
