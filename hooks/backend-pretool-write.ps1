@@ -9,6 +9,15 @@ $ErrorActionPreference = 'Stop'
 $url = $env:ANTHROPIC_BASE_URL
 if ($url -like '*deepseek*') { exit 0 }
 
+# --- Claude coding mode (ADR-025): the explicit APEX_MODE=coding signal on the
+#     Anthropic backend relaxes the write-guard exactly like the DeepSeek backend.
+#     Scoped STRICTLY to this env var — when APEX_MODE is unset (planning), every
+#     line below runs unchanged, so planning-mode gating is byte-identical to before.
+#     Precedence (ADR-025): `deepseek` URL wins (handled above) → APEX_MODE=coding →
+#     planning. Relaxing here only when the var equals 'coding' keeps the planning
+#     safety net intact. ---
+if ($env:APEX_MODE -eq 'coding') { exit 0 }
+
 # --- Read PreToolUse payload from stdin ---
 $raw = [Console]::In.ReadToEnd()
 if (-not $raw) { exit 0 }

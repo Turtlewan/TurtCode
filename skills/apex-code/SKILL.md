@@ -1,8 +1,8 @@
 ---
 skill: apex-code
 backend: deepseek
-version: 1.18.0
-last_updated: 2026-06-21
+version: 1.19.0
+last_updated: 2026-06-22
 sources:
   - APEX Design Specification 2026-05-24
   - GSD (Get Shit Done) — github.com/gsd-build/get-shit-done
@@ -11,6 +11,8 @@ sources:
   - docs/technical/adr/ADR-014-living-capability-overview.md
   - docs/technical/adr/ADR-017-design-brief-artifact.md
   - docs/technical/adr/ADR-018-apex-sole-coding-workflow.md
+  - docs/technical/adr/ADR-024-complexity-routed-multi-model-coding.md
+  - docs/technical/adr/ADR-025-claude-coding-mode.md
   - donor-analysis (Superpowers 4-status worker contract) — docs/research/donor-analysis/
   - Agent Skills (addyosmani) — github.com/addyosmani/agent-skills
 staleness_threshold: 30d
@@ -160,7 +162,8 @@ Pre-flight:
         "isolate": <true if this wave's workers run an artifact-producing recipe, or headless/AFK; else false>,
         "tasks": [
           { "id": "<task id>", "text": "<exact task text>",
-            "files": ["<file>", ...], "acceptance": "<the task's done-when / acceptance criterion>" }
+            "files": ["<file>", ...], "acceptance": "<the task's done-when / acceptance criterion>",
+            "model": "<within-backend model string for this batch, from the ▸<model> tag — omit if untagged/single-model>" }
         ]
       }
       ```
@@ -186,6 +189,36 @@ Pre-flight:
    (Superpowers): `DONE` (complete, verified) · `DONE_WITH_CONCERNS` (complete, flag noted) ·
    `BLOCKED` (could not complete — reason) · `NEEDS_CONTEXT` (missing a fact/file to proceed). Route
    `DONE_WITH_CONCERNS` to the decisions table; `BLOCKED` / `NEEDS_CONTEXT` through Forks.
+
+   #### Model-routing dispatch (ADR-024/025) — when the `## Wave plan` carries `▸<model>` tags
+
+   A multi-model `coder_models` menu makes apex-plan emit a per-task `▸<model>`-tagged, backend-batched
+   wave plan (`task 1 ▸flash | task 3 ▸pro | task 4 ▸opus`). **Untagged / single-model plan → ignore
+   this section: every worker runs the session default (current behaviour).** Tagged → map each tag to a
+   backend + a within-backend model string and dispatch the task with that override:
+
+   | `▸` tag | Backend | Model string (override) | Override channel |
+   |---------|---------|-------------------------|------------------|
+   | `flash` | DeepSeek | `deepseek-v4-flash` | per-worker (within DeepSeek) |
+   | `pro`   | DeepSeek | `deepseek-v4-pro`   | per-worker (within DeepSeek) |
+   | `sonnet`| Claude  | `sonnet`            | Agent `model:` param (native) |
+   | `opus`  | Claude  | `opus`              | Agent `model:` param (native) |
+
+   - **Per-task override:** inline dispatch → pass `model: "<string>"` to each code-worker Agent; workflow
+     dispatch → set the task's `model` field (apex-build-wave.js threads it to the worker, § above).
+   - **Backend wall (C1) — one session = one backend; ≤1 crossing/build.** The plan is already ordered so
+     the DeepSeek tasks (`flash`/`pro`) are contiguous, then the Claude tasks (`sonnet`/`opus`). Run the
+     **DeepSeek batch in this session.** Before the **Claude batch**, STOP and prompt for the **one manual
+     backend swap**: switch `ANTHROPIC_BASE_URL` to the Anthropic backend **and** set `APEX_MODE=coding`
+     (→ Claude coding mode, write-guard relaxed), then resume — the Claude batch builds there. A single
+     workflow run never crosses backends; split it at the batch boundary.
+   - **Within a backend the switch is free** (`flash`↔`pro`, `sonnet`↔`opus`) — pass the per-worker model,
+     no swap, no prompt.
+   - **Validation gate (`coding-session`):** the per-worker **DeepSeek `flash`↔`pro`** override is unproven
+     on the live proxy (within-backend `model:` override). If a worker rejects the override, fall back to
+     running the whole DeepSeek batch at the session `ANTHROPIC_MODEL` and **log it** in the decisions table
+     — never block the build on per-worker routing. The Claude `sonnet`↔`opus` override is native (Agent
+     `model:` param). Whole-spec `coder_model: <m>` frontmatter pins every task to one model (no routing).
 
 **Task granularity** is fixed at spec authoring time by apex-plan — do not re-decompose
 tasks during Wave Analysis. If a task appears too coarse to verify atomically after
@@ -256,6 +289,19 @@ a visual direction).
   fix → re-run the recipe. One hypothesis at a time; never shotgun multiple changes.
 - Converge before moving to the next task. If it won't converge after a few honest attempts,
   treat it as a fork (capture-at-halt, route per Forks).
+
+**Model escalation on verify-fail (ADR-024 F3 — only when `coder_models` is multi-model; capped at one, ADR-015):**
+When a task on a routed model won't converge after honest recovery attempts, escalate **one tier up**
+within the eligible set (never skip tiers; never escalate to a model the eligibility filter excluded —
+e.g. a >64K-output text task stays off `sonnet`):
+- **Within the same backend** (`flash`→`pro`, or `sonnet`→`opus`): escalate **automatically** —
+  re-dispatch the task with the higher model override, re-run the recipe. **One** escalation only; if it
+  still fails, fork (capture-at-halt).
+- **Crossing into the Claude pool** (a DeepSeek `pro` task → `opus`): **approval-gated, never automatic** —
+  it spends the scarce Max/planning pool. Capture-at-halt with a recommended escalation; the user approves
+  the one backend swap to Claude coding mode (`APEX_MODE=coding`), where the task re-runs on Opus. One retry.
+- A single retry cap covers the whole chain — do not stack an auto within-backend escalation **and** a
+  gated cross-backend one on the same task; the first escalation is the retry.
 
 **context7 at the write step:** before writing non-trivial code against the active stack/
 framework, consult **context7** for its current API/syntax — getting it right first means fewer

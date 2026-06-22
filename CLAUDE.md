@@ -118,12 +118,13 @@ APEX is active in every session in every project. The orchestrator runs first, b
    - If In-Flight table has rows: "You were in the middle of [what]. Continue or set aside?"
    - If empty: proceed
 
-3. Detect mode from ANTHROPIC_BASE_URL
-   - Unset or api.anthropic.com → planning mode → route to `apex-plan`
-   - Contains "deepseek" → coding mode → route to `apex-code`
+3. Detect mode (precedence order — first match wins; ADR-024/025)
+   - `ANTHROPIC_BASE_URL` contains "deepseek" → **DeepSeek coding mode** (Flash/Pro coder) → route to `apex-code`
+   - Else `APEX_MODE=coding` (Anthropic backend + explicit signal) → **Claude coding mode** (Sonnet/Opus coder, write-guard relaxed) → route to `apex-code`
+   - Else (unset / api.anthropic.com, no flag) → **planning mode** → route to `apex-plan`
 
 4. State active context
-   - Always output: "Running at L{n} | Profile: {profile} | Mode: {planning/coding}"
+   - Always output: "Running at L{n} | Profile: {profile} | Mode: {planning / deepseek-coding / claude-coding}"
 
 ### Skill locations
 
@@ -144,6 +145,8 @@ On resume: read docs/status.md In-Flight table, surface what was in progress, co
 ## 5. Backend-Gated Workflow (DeepSeek vs Anthropic)
 
 This machine runs Claude Code against two backends, switched via `ANTHROPIC_BASE_URL`. Each backend has a distinct role. A SessionStart hook surfaces the active backend and routes the session through `apex-orchestrate` (each session opens with an `[APEX] Using APEX system` banner); a PreToolUse hook gates planning-mode code edits behind an approval prompt — the APEX project itself and `~/.claude/` system files are exempt (APEX is self-hosting).
+
+**Third mode — Claude coding (ADR-024/025).** On the Anthropic backend, an explicit `APEX_MODE=coding` env var puts the session into **Claude coding mode**: Claude (Sonnet default / Opus) runs as a first-class coder for the Claude batch of a multi-model build (visual work DeepSeek can't do, or a gated Pro→Opus escalation). The write-guard is **relaxed exactly like the DeepSeek backend** but **only** when `APEX_MODE=coding` — planning (the var unset) is unchanged. Detection precedence: `deepseek` URL → DeepSeek coding; else `APEX_MODE=coding` → Claude coding; else planning. The one risk is pool contention — interactive Claude coding draws the same Max subscription pool as planning, so it carries a **soft** guard (warn, default Sonnet, Opus only when warranted, track via `/status`), not a hard cap. See `apex-governance` + ADR-025.
 
 ### The Loop
 

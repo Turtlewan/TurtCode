@@ -3,6 +3,9 @@
 $url = $env:ANTHROPIC_BASE_URL
 if (-not $url) { $url = '(unset - default Anthropic)' }
 $isDeepSeek = $url -like '*deepseek*'
+# Mode precedence (ADR-025): `deepseek` URL wins -> DeepSeek coding; else APEX_MODE=coding
+# -> Claude coding; else planning. Claude coding is only considered on a non-DeepSeek backend.
+$isClaudeCoding = (-not $isDeepSeek) -and ($env:APEX_MODE -eq 'coding')
 
 $handoffContent = ''
 
@@ -16,6 +19,22 @@ Mode: CODING (DeepSeek backend)
 Coder tier: $coderTier (ANTHROPIC_MODEL: $(if ($model) { $model } else { '(unset - default flash)' }))
 You MAY: edit source code, run build/test/lint commands, complete implementation tasks.
 You SHOULD: look for technical change specs in docs/changes/*.md (or wherever the user keeps them) and execute them. After completing each spec, update its status (e.g., mark Done at top, or move the file to docs/changes/done/).
+"@
+} elseif ($isClaudeCoding) {
+    # Claude coding mode (ADR-025) — third operating mode. Anthropic backend, but an
+    # explicit APEX_MODE=coding signal makes Claude a first-class coder for an ADR-024
+    # build's Claude batch (visual work DeepSeek can't do, or a gated Pro->Opus escalation).
+    $coderTier = ''
+    $mode = 'CODING'
+    $backend = 'Anthropic (Claude coding mode)'
+    $model = $env:ANTHROPIC_MODEL
+    $coderModel = if ($model) { $model } else { 'Sonnet (default coder for this mode)' }
+    $policy = @"
+Mode: CODING (Claude coding mode -- Anthropic backend + APEX_MODE=coding)
+Coder model: $coderModel. Within this mode Sonnet<->Opus switching is free; the ADR-024 router assigns the model per task (Sonnet = image/moderate; Opus only when complexity genuinely warrants).
+You MAY: edit source code, run build/test/lint commands, complete implementation tasks. The planning write-guard is relaxed in this mode.
+You SHOULD: look for technical change specs in docs/changes/*.md and execute them, same as a DeepSeek coding session. After completing each spec, update its status (mark Done at top, or move it to docs/changes/done/).
+SOFT POOL GUARD (the one real risk -- ADR-025): interactive Claude coding draws the SAME Max subscription pool as planning, and the Opus weekly cap is the scarcest resource. There is NO programmatic budget cap here. So: this is mode discipline, not enforcement -- keep batches small, default the coder to Sonnet, let the router reach Opus only when complexity warrants, and track usage via /status. No hard block.
 "@
 } else {
     $coderTier = ''

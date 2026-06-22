@@ -1,8 +1,8 @@
 ---
 skill: apex-governance
 backend: claude
-version: 1.10.0
-last_updated: 2026-06-21
+version: 1.11.0
+last_updated: 2026-06-22
 sources:
   - APEX Design Specification 2026-05-24
   - Superpowers (obra) — github.com/obra/superpowers
@@ -65,6 +65,28 @@ without that explicit prompt-and-approval exchange.
 **Coder tier is capability, not authority.** The Flash/Pro coder tier (`coder_tier`) is orthogonal to
 the autonomy level — "let Pro do more" means raise the L-level, never relax a gate, critical-file
 confirmation, or hard block because the stronger coder is in use.
+
+## Coding model routing & the soft pool guard (ADR-024/025)
+
+APEX runs coding in one of **two backends** (the model-router picks per task, batched by backend):
+**DeepSeek coding** (`deepseek` URL → Flash/Pro) and **Claude coding** (Anthropic backend +
+`APEX_MODE=coding` → Sonnet/Opus). Detection precedence: `deepseek` URL → DeepSeek coding; else
+`APEX_MODE=coding` → Claude coding; else planning. Same capability-not-authority rule applies — the
+router widens *which model codes*, never an autonomy gate, critical-file confirmation, or hard block.
+
+**Soft pool guard (Claude coding mode — the one real risk).** Interactive Claude coding draws the
+**same Max subscription pool as planning**, and the Opus weekly cap is APEX's scarcest resource. There
+is **no programmatic budget cap** for interactive sessions, so this is **discipline, not enforcement**:
+- On entry, **warn** that this session draws the planning pool.
+- **Default the coder to Sonnet;** let the ADR-024 router reach Opus only when task complexity warrants.
+- **Track** usage via `/status`. **No hard block** — heavy Claude builds are bounded by mode discipline
+  + small batches, not a cap. The durable fix (isolated, budget-capped) is the headless `claude -p`
+  path (deferred).
+
+**Cross-backend escalation is approval-gated (ADR-024 F3).** Within a backend, a verify-fail escalates
+one model tier **automatically** (Flash→Pro, Sonnet→Opus). Crossing **into** the Claude pool — a
+DeepSeek `pro` task that fails verification escalating to Opus — is **approval-gated**, never automatic
+(it spends the scarce planning pool). Capped at one retry (ADR-015).
 
 ## Capability-routed UI escalation (ADR-020)
 

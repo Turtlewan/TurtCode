@@ -10,7 +10,14 @@ export const meta = {
 //   spec_path:      string  — full path to the spec (workers read it; the script cannot)
 //   token_profile:  string  — lean | balanced | thorough | custom
 //   wave_label:     string  — e.g. "Wave 2" (for the returned summary)
-//   tasks:          [ { id: string, text: string, files: string[], acceptance: string } ]
+//   tasks:          [ { id: string, text: string, files: string[], acceptance: string,
+//                        model?: string } ]
+//                     model — optional per-task coder override from the spec's ▸<model>-tagged
+//                     ## Wave plan (ADR-024). Pass the within-backend model string for THIS
+//                     dispatch's backend only (a single workflow run never crosses backends —
+//                     apex-code splits the DeepSeek batch from the Claude batch). Omit → the
+//                     session default. e.g. 'deepseek-v4-pro' on the DeepSeek backend,
+//                     'opus' on the Claude (APEX_MODE=coding) backend.
 //   isolate:        boolean — true → run each worker in its own managed git worktree, so
 //                             concurrent build/test recipes don't collide on build artifacts,
 //                             lockfiles, ports, or dist/.next. Set by apex-code only when the
@@ -50,9 +57,10 @@ const results = await parallel(
         `Return ONLY the bounded status object — never a transcript.`,
       ].join('\n'),
       {
-        label: `worker:${t.id}`,
+        label: t.model ? `worker:${t.id} (${t.model})` : `worker:${t.id}`,
         agentType: 'code-worker',
         schema: STATUS_SCHEMA,
+        ...(t.model ? { model: t.model } : {}),
         ...(args.isolate ? { isolation: 'worktree' } : {}),
       }
     )
