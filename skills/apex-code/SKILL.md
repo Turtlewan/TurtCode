@@ -1,7 +1,7 @@
 ---
 skill: apex-code
 backend: deepseek
-version: 1.20.0
+version: 1.21.2
 last_updated: 2026-06-22
 sources:
   - APEX Design Specification 2026-05-24
@@ -165,9 +165,11 @@ Pre-flight:
    | `codex` | OpenAI Codex (external CLI)     | `gpt-5.5`           | **`codex exec` subprocess — NOT a subagent** |
 
    - **`flash`/`pro` per-task override:** inline → pass `model: "<string>"` to each code-worker Agent; workflow → set the task's `model` field.
-   - **`codex` dispatch (ADR-026) — runs in THIS session, not the workflow.** `agent()` spawns Claude-Code subagents, so it cannot dispatch the external Codex CLI. apex-code executes each `▸codex` task itself, **sequentially**, via Bash. **Pipe the prompt via stdin — never pass it as a positional arg** (a bare-arg `codex exec` hangs in a non-interactive shell waiting on stdin; proven 2026-06-22 pilot):
-     `printf '%s' "<task text + Files for this task + acceptance criterion + 'follow AGENTS.md; surgical scope — touch only the listed files; run the verify recipe'>" | codex exec --sandbox workspace-write -m gpt-5.5 -C <repo-root>`
-     Codex returns its own diff; apex-code then runs the spec's Verification Recipe on it like any task. No backend swap, no session restart (Codex has its own auth). Parallel Codex is OUT of scope — keep `▸codex` tasks sequential.
+   - **`codex` dispatch (ADR-026) — runs in THIS session, not the workflow.** `agent()` spawns Claude-Code subagents, so it cannot dispatch the external Codex CLI. apex-code executes each `▸codex` task itself, **sequentially**, via Bash. Codex runs under the **`apex-coder` profile** (`~/.codex/apex-coder.config.toml`: `approval_policy=never` + `workspace-write` network-on) so it behaves like a DeepSeek in-session worker — writes, verifies, fixes, iterates; **never halts to escalate** (in non-interactive `exec`, any policy but `never` turns the first sandbox/command failure into a dead-stop). **Pipe the prompt via stdin — never pass it as a positional arg** (a bare-arg `codex exec` hangs in a non-interactive shell waiting on stdin; proven 2026-06-22 pilot):
+     `printf '%s' "<task text + Files for this task + acceptance criterion + the autonomy clause below>" | codex exec -p apex-coder --sandbox workspace-write -m gpt-5.5 -C <repo-root>`
+     **Autonomy clause** (append to every coder prompt — config kills halt-to-escalate, this kills report-and-stop-by-disposition): *"Follow AGENTS.md. Surgical scope — touch only the listed files. Work autonomously to completion: run the verify recipe, and if a test fails / lint errors / you hit a problem, fix it and re-run — do not stop to ask. Only end when the acceptance criterion passes, or you are genuinely blocked (missing credential, ambiguous spec) — then state exactly what blocked you."*
+     Codex returns its own diff; apex-code then runs the spec's Verification Recipe on it like any task. No backend swap, no session restart (Codex has its own auth). **Blast radius:** the Codex subprocess does NOT ride Claude Code's `permissions.deny` floor — `workspace-write` is its only guardrail, so keep it repo-confined (never `danger-full-access`). Parallel Codex is OUT of scope — keep `▸codex` tasks sequential.
+   - **Windows sandbox artifact ownership (`▸codex`).** The Windows restricted-token sandbox tags files written by Codex's *shell commands* with the sandbox SID — the interactive user can't delete them without elevation. Codex's *source-file edits* are unaffected (normal-user-owned). Two rules keep this from biting: (1) the `apex-coder` profile suppresses the common in-tree caches (`PYTHONDONTWRITEBYTECODE`, `PYTEST_ADDOPTS=-p no:cacheprovider`); (2) **install dependencies as the normal user in the apex-code session** (`npm install` / `uv sync` etc. before or as part of the verify step) — never let the Codex subprocess create `node_modules`/`.venv`, or the verify (run as your user) hits a locked tree. To clear any locked residue **without elevation**, run a cleanup `codex exec -p apex-coder --sandbox workspace-write -C <repo> "delete <dir>"` — Codex runs under the same sandbox SID that owns the files, so it can remove them (proven 2026-06-22); an elevated `Remove-Item -Recurse -Force` is the fallback (normal-user `takeown` reclaims source files but not deep-locked cache dirs).
    - **Backend wall (C1) — applies only to the DeepSeek↔Claude (`APEX_MODE=coding`) split, NOT to Codex.** Run the DeepSeek batch (`flash`/`pro`) in-session; `▸codex` tasks run inline as subprocesses needing no swap. (`sonnet`/`opus` are no longer coder tiers — ADR-026.)
    - **Fallback:** if a per-worker DeepSeek `flash`↔`pro` override is rejected, run the whole DeepSeek batch at the session `ANTHROPIC_MODEL` and log it. If `codex --version` fails, a `▸codex` task **falls back to `pro` + logs it** (never silent). Whole-spec `coder_model: <m>` frontmatter pins every task (no routing).
 
@@ -384,7 +386,7 @@ Execute in this order:
      built → Codex reviews the diff.)
    - **Codex review** runs via Bash, read-only, schema'd — full invocation + schema + prompt in
      `references/codex-review.md`. **Pipe the prompt via stdin** (bare-arg hangs):
-     `printf '%s' "<review prompt + acceptance criteria + git diff>" | codex exec --sandbox read-only --output-schema ~/.claude/skills/apex-code/references/codex-review-schema.json -o <out.json> -m gpt-5.5`, then read `<out.json>` (the schema-constrained final message: `{findings[], verdict}`).
+     `printf '%s' "<review prompt + acceptance criteria + git diff>" | codex exec -c approval_policy="never" --sandbox read-only --output-schema ~/.claude/skills/apex-code/references/codex-review-schema.json -o <out.json> -m gpt-5.5`, then read `<out.json>` (the schema-constrained final message: `{findings[], verdict}`). (`approval_policy=never` so a sandboxed command never stalls the review; read-only keeps zero blast radius — no profile needed here.)
      Give it the spec + changed files only — **never** apex-reviewer's findings (evaluator independence).
    - **Opus review** (for `▸codex` tasks) → dispatch one `apex-reviewer` on the Claude family, same independence rule.
    - Combine: a finding **both** raise → high-confidence, resolve before "complete"; **only one** → decisions

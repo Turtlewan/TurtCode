@@ -10,12 +10,16 @@ From the repo root, after the build. **Pipe the prompt via stdin — never pass 
 
 ```sh
 printf '%s' "<review prompt below, placeholders filled>" | \
-  codex exec --sandbox read-only \
+  codex exec -c approval_policy="never" --sandbox read-only \
     --output-schema ~/.claude/skills/apex-code/references/codex-review-schema.json \
     -o <out.json> -m gpt-5.5 -C <repo-root>
 ```
 Then read `<out.json>` — the schema-constrained final message `{ findings[], verdict }`.
 
+- `-c approval_policy="never"` → in non-interactive `exec`, any other policy turns the first
+  sandboxed-command failure into a halt-to-escalate that nobody can answer → the review stalls. `never`
+  feeds failures back to the model so it finishes the review. (Coder path uses the `apex-coder` profile;
+  the reviewer is read-only so it just needs this one override, not the profile.)
 - `--sandbox read-only` → the reviewer cannot modify the tree (zero blast radius).
 - `--output-schema <file>` → forces the final message into the findings schema. **Strict mode: every
   property must be in `required`; keep `line`/`criterion` nullable** (omitting them → HTTP 400). `-o <file>`
