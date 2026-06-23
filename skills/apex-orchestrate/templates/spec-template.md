@@ -10,6 +10,9 @@ autonomy_level: L2
 # coder_model: codex         # optional — pin this WHOLE spec to one coder. Value from status.md
 #                              coder_models {codex|opus}. Absent → Codex (the default); opus pins the
 #                              whole spec to the Opus fallback coder (ADR-027).
+# max_parallel_codex: 3      # optional — cap on concurrent `codex exec` subprocesses per wave
+#                              (ADR-028). 1 = sequential. Absent → status.md default (auto-sized
+#                              min(4, floor(cores/2)−1), fallback 3). Machine-protection, not a quota cap.
 ---
 
 # Spec: {title}
