@@ -21,8 +21,8 @@ autonomy_level: L2
 <!-- Optional, on its own line: → why: see docs/technical/adr/ADR-NNN-*.md (a pointer, never the content). -->
 
 <!-- A spec is an EXECUTION SCRIPT, not a design doc: rich on the *what* (exact files,
-     copy-paste-ready detail, per-task verify), stripped of the *why*. DeepSeek executes
-     literally and cannot fill gaps. Spec-authoring rules:
+     copy-paste-ready detail, per-task verify), stripped of the *why*. The coder executes against
+     frozen acceptance criteria; build-changing judgment is resolved in planning, not the build. Spec-authoring rules:
      - No why inline. Litmus when tempted: does it change what gets built? No → cut it
        (home = ADR / planning discussion). Yes → don't add the why, make the *what* explicit.
      - List files per task — every task names its exact files (see ## Tasks). Never "update the auth flow."
@@ -50,7 +50,7 @@ Simplicity check: {considered simpler approach? yes/no — if yes, why this vers
 | {full/path/to/file.ts} | create \| modify \| delete | {what changes} |
 
 ## Tasks
-<!-- Every task names its exact files — never "update the auth flow" (forces the worker to explore = context cost + judgment, DeepSeek's two weakest areas). -->
+<!-- Every task names its exact files — never "update the auth flow" (forces the worker to explore = context cost + scope creep; the file list is also the wave grouping + scope lock). -->
 - [ ] Task 1: {description} — files: {full/path/a.ts, full/path/b.ts} — done when: {observable outcome}
 - [ ] Task 2: {description} — files: {full/path/c.ts} — done when: {observable outcome}
 - [ ] Task 3: {description} — files: {full/path/d.ts} — done when: {observable outcome}

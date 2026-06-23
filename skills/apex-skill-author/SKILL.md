@@ -1,8 +1,8 @@
 ---
 skill: apex-skill-author
 backend: claude
-version: 1.6.0
-last_updated: 2026-06-22
+version: 1.7.0
+last_updated: 2026-06-23
 sources:
   - agentskills.io — skill spec & authoring best practices
   - superpowers:writing-skills — TDD-for-skills methodology
@@ -205,15 +205,18 @@ Each file is read by a *specific* model, not an abstract capable reader. "Write 
 enforcement content" is necessary but not sufficient — tune it to who runs it. This is the
 most-skipped judgment in `impl.md` authoring.
 
-- **`impl.md` → the coding backend (DeepSeek V4 Flash).** Flash needs explicit scaffolding
-  and degrades on judgment calls and long tool chains. So:
-  - **Pre-resolve every decision — no judgment calls in `impl.md`.** Not "use SES if the
-    setup cost is worth it", not "pick an expiry that fits". State the default outright. If
-    a step genuinely needs judgment, it cannot live in `impl.md`: pre-resolve it in the
-    spec, or flag it back to planning (the pattern `apex-figma` uses for image steps).
-  - **Keep tool chains short and checkpointed** — aim for ≤2 tools per step, verify after
-    each step, and give an explicit error/recovery path. Flash loses state across long
-    multi-step chains and won't recover from unexpected output on its own.
+- **`impl.md` → the coder (Codex `gpt-5.5`; Opus on fallback — ADR-027).** Both are
+  frontier-class, so the old DeepSeek-Flash scaffolding (pre-resolve *every* decision, ≤2 tools
+  per step, lockstep checkpointing) is **no longer forced by coder weakness**. What still earns
+  its lines:
+  - **Defaults, not menus.** State the default outright ("use X; for the OCR case, Y") rather
+    than "pick an expiry that fits" — for determinism and consistency across builds, not because
+    the coder can't choose. A genuinely *build-changing* decision still belongs in the spec or
+    planning, never buried in `impl.md`.
+  - **Gotchas are the real value** — domain facts the model lacks (the `users` table soft-deletes;
+    this API rate-limits at N; this lib's v3 default changed). These are capability-independent: a
+    frontier coder misses them just as a weak one does. Spend `impl.md` lines here, not on
+    scaffolding a capable model doesn't need.
 - **`SKILL.md` → planning (Claude Opus / Sonnet).** Judgment-framed prose is correct here,
   but **name the scope explicitly**: Opus interprets instructions literally and won't
   generalize a rule across items on its own. Write "apply to every skill / all `impl.md`
@@ -304,7 +307,7 @@ governed by the two-tier core/references convention — see § impl.md loading t
 - Never ship a new skill without the triple-write.
 - Never write a `description` that summarizes the workflow instead of triggering on the task.
 - Never create `impl.md` that just duplicates SKILL.md.
-- Never leave a judgment call in `impl.md` — pre-resolve it or flag back to planning; Flash can't reliably make it.
+- Never leave a *build-changing* judgment call in `impl.md` — resolve it in the spec or planning; `impl.md` states defaults, not open choices.
 - Never exceed 500 lines / 5k tokens in a SKILL.md.
 - Never author a domain skill from training memory when best practices are stale — research first.
 - Never classify a stack skill (`apex-<framework>`) as a plain capability/reference skill — it's a distinct family (always SKILL+impl, always triggers `apex-research`).
@@ -318,7 +321,7 @@ governed by the two-tier core/references convention — see § impl.md loading t
 - [ ] Domain researched via apex-research if knowledge could be stale
 - [ ] Frontmatter complete, including a trigger-style `description`
 - [ ] SKILL vs impl decided deliberately (default planning-only)
-- [ ] impl.md authored to the Flash floor — no judgment calls, short checkpointed chains; SKILL.md names scope explicitly
+- [ ] impl.md authored for the coder (Codex/Opus) — defaults-not-menus, gotchas over scaffolding, no build-changing choices left open; SKILL.md names scope explicitly
 - [ ] impl.md tiered: core (frontmatter + `## Stack assumptions` [capability] + NEVER/ALWAYS + Verification Recipe + compact errors) by section identity; bulky patterns in `references/*.md` with load conditions; lean files left whole
 - [ ] Content is gotchas/defaults/procedures — not what the model already knows
 - [ ] Under 500 lines / 5k tokens

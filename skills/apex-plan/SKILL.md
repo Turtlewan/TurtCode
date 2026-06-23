@@ -1,8 +1,8 @@
 ---
 skill: apex-plan
 backend: claude
-version: 1.26.0
-last_updated: 2026-06-22
+version: 1.27.0
+last_updated: 2026-06-23
 sources:
   - APEX Design Specification 2026-05-24
   - GSD (Get Shit Done) — github.com/gsd-build/get-shit-done
@@ -24,7 +24,7 @@ description: >
 # APEX Planning Workflow
 
 You are in planning mode (Claude). Your job: turn requirements into complete,
-question-free specs that DeepSeek can execute without asking anything.
+question-free specs the coder can execute without asking anything.
 
 ## Session start — read context first
 
@@ -108,9 +108,13 @@ change (scale-adaptive routing). Reserve Deep Details for multi-file / architect
 
 ### Elicit intent before drafting — front-load the build-changing decisions
 
-DeepSeek executes literally and cannot fill gaps, so **all judgment must be resolved before
-the spec freezes** — and planning is the only place that can happen. Pull the decisions you
-need *before* drafting; do not draft-then-validate.
+The coder (Codex `gpt-5.5`; Opus on fallback) executes the spec silently against frozen
+acceptance criteria — questions belong in planning, which alone holds the conversation +
+research context. So **all build-changing judgment must be resolved before the spec freezes**;
+planning is the only place that can happen. Pull the decisions you need *before* drafting; do
+not draft-then-validate. (Bounded micro-ambiguity — which existing pattern to follow, a local
+name — can be left to the coder's conservative-choice protocol in apex-code; it is
+*build-changing* judgment that must not reach the build.)
 
 - **Resolve yourself — don't ask:** codebase facts (read the files), clear technical defaults
   (defaults-not-menus), anything derivable from patterns or research. Asking these wastes the
@@ -201,8 +205,8 @@ Split rule: if the spec touches more than 3 files or has more than 2 logical pha
 As you build the spec, enforce these rules inline:
 - Every file must have a full absolute path
 - Every task must be a single unambiguous action that **names its exact files** — never
-  "update the auth flow" (forces the worker to explore = context cost + judgment, DeepSeek's
-  weakest areas)
+  "update the auth flow" (forces the worker to explore = context cost + scope creep; the file
+  list is also the parallel-wave grouping and the scope lock)
 - Every acceptance criterion must be concrete and testable
 - **Tasks state the mechanism, not just the outcome.** When a task reuses or extends an existing
   component to achieve a *new* behaviour, name the concrete producing step (the wiring that emits/
@@ -285,7 +289,7 @@ Write an intent doc directly to docs/changes/{short-name}.md (skip drafts/). Str
 - {why this way — non-obvious trade-offs Claude resolved}
 
 ## Gotchas / edge cases
-{things DeepSeek might miss, subtle interactions, ordering constraints}
+{things the coder might miss, subtle interactions, ordering constraints}
 
 ## Tasks
 1. {one action, exact files named} — done when: {observable check}
@@ -297,8 +301,8 @@ Write an intent doc directly to docs/changes/{short-name}.md (skip drafts/). Str
 **Planning provides everything that needs judgment** — intent, trade-offs, edge cases, AND a
 minimal ordered task list with a "done when:" per task. Light mode trims *ceremony* (gate,
 ADRs, specialist review), never *decomposition* — coding mode executes tasks as written and
-does not backfill task breakdown, acceptance criteria, or test strategy (judgment DeepSeek
-cannot supply; apex-code's task granularity is fixed at spec time).
+does not backfill task breakdown, acceptance criteria, or test strategy (planning's job —
+apex-code's task granularity is fixed at spec time).
 
 No readiness gate. No ADRs. No specialist context. **Light mode quality check (no gate, but run this before confirming):**
 - Assumptions block written? Every non-obvious assumption stated.

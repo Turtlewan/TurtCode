@@ -1,8 +1,8 @@
 ---
 skill: apex-ui-ux-design
 backend: claude
-version: 1.24.0
-last_updated: 2026-06-22
+version: 1.25.0
+last_updated: 2026-06-23
 sources:
   - Apple HIG + Liquid Glass (WWDC25) — developer.apple.com/design/human-interface-guidelines
   - ADR-013 (app-flow) · ADR-017 (design-brief) · ADR-020 (capability-routed UI escalation)
@@ -47,8 +47,8 @@ This skill owns the *technique*; apex-docs-technical owns the doc's place in the
 
 For any UI-bearing project, a small per-project **design brief** is a persisted artifact the
 *coding* model reads: `docs/technical/architecture/design-brief.md` (seeded by apex-init, owned
-here). It exists because the coding backend is image-less and literal — anything it must honour
-visually has to be explicit text in its context, not planning-side judgment it cannot see.
+here). It exists because design decisions must be an **explicit, persisted, in-repo contract** the
+coder honours by name — durable, inspectable build input, not ephemeral planning-side judgment.
 
 **Scope (ADR-017 — partially amends ADR-013's "visual stays un-persisted").** Persist only the
 *stable, single-homed* visual decisions:
@@ -273,8 +273,8 @@ dimension < 4, is a FLAG** to fix before ship. This is the threshold the § Visu
 
 ## Visual review gate (screenshot critique — post-build)
 
-The coding backend can't see what it built, so visual defects are caught planning-side by a
-*separate* reviewer (evaluator-independence — a generator rates its own UI as fine when it isn't).
+A generator rates its own UI as fine when it isn't, so visual defects are caught by a
+*separate* reviewer (evaluator-independence) — independent of whether the builder can see.
 After a UI build completes, in planning mode:
 
 1. Capture the rendered UI at the target sizes:
@@ -288,9 +288,9 @@ After a UI build completes, in planning mode:
 
 Dispatch the review as a **fresh reviewer** — don't self-review the build you just reasoned about.
 Environment: the app must be reachable from planning mode (local web; Mac-hosted app over LAN /
-Tailscale). Image-less coding mode runs the deterministic text-proxy checks instead
+Tailscale). Coding mode runs the deterministic text-proxy checks during the build
 (→ apex-ui-testing — incl. an optional zero-LLM design-lint, `npx impeccable detect`, for web UI);
-this gate is the vision half.
+this planning-side gate adds the **independent** eyes-on critique (evaluator-independence).
 
 ## Prompt-to-design lanes (opt-in — user-invoked)
 
@@ -323,16 +323,17 @@ brief→prompt→generate→lock→build→gate loop → `references/design-lane
 The brief's art-direction + APEX anti-slop rules outrank any tool's house aesthetic
 ([[design-style-on-demand]]); pair `stitch-design-taste` only if Stitch's look is wanted.
 
-## Live preview + Claude visual escalation (during build) — ADR-020
+## Live preview during build — ADR-020 escalation retired (ADR-027)
 
-The middle of the UI loop, between the design lane (before) and the visual gate (after). The
-coding model (DeepSeek) is **image-blind** — it writes UI code against the brief text and never sees
-the render. So the live window is the **human's** eyes, and Claude is the **escalation** scalpel when
-prose to a blind coder won't converge.
+The middle of the UI loop, between the design lane (before) and the visual gate (after). The coder
+(Codex `gpt-5.5`, native vision; Opus on fallback) **sees the render** — so a visual divergence is
+fixed in the build like any other task, and the old Claude-escalation scalpel (ADR-020, built for an
+image-blind DeepSeek coder) is **retired**. The live window is still the **human's** eyes-on loop
+during the build.
 
 The full loop:
 1. **Design** → `design-brief.md` (optionally via the Bitrig/Stitch lane above).
-2. **Build** — DeepSeek codes the UI blind against the brief.
+2. **Build** — the coder writes the UI against the brief, seeing the render.
 3. **Live preview (human watches, during build)** — keep a render window open:
    - **Web (Windows / Cursor):** run the dev server, then open Cursor's **Simple Browser** pane
      (Command Palette → "Simple Browser: Show" → the localhost URL) docked beside the terminal — hot
@@ -341,15 +342,10 @@ The full loop:
      the only SwiftUI visual route is the Bitrig design lane (generate-and-iterate, not live-as-you-code).
    Divergences feed back to the coder as prose, or trigger escalation (next).
 4. **Visual gate** — score the build against the locked design (rubric below).
-5. **Claude visual escalation (bounded)** — Claude (planning) makes a **direct UI code edit** only
-   when *all* hold: a **visual divergence** exists; the fix is **inherently visual** (pixel / spacing /
-   optical) **or** prose feedback has failed to converge (≥2 rounds); and Claude can **see the render**
-   (web: a Playwright-MCP screenshot or a pasted image; SwiftUI: Mac-gated). Bounds: **view-layer only**
-   (markup / styles / view files — never logic, data, auth, or any critical-file path); **smallest
-   surgical change**, then hand back to DeepSeek for volume (Claude output ≈29× the cost); **approval-
-   gated + logged** (the edit hits the planning write-guard `ask`, the user approves, and the touched
-   files are recorded in the handoff / status In-Flight). Authority rule + when it is *not* allowed:
-   **apex-governance § Capability-routed UI escalation**.
+5. **Fix divergences in the build** — the coder sees the render, so a visual divergence (pixel /
+   spacing / optical) is corrected in coding mode against the locked design, like any other task. The
+   old ADR-020 planning-mode escalation scalpel is **retired** (the coder is no longer image-blind —
+   ADR-027 / apex-governance). For a hands-on human tweak, use normal edit mode.
 
 ### Cheap-mode preview by target surface
 
@@ -357,33 +353,33 @@ The full loop:
 image model can read** — a small, fast, token-light loop. On a logic-free surface the cost is low
 enough that **Claude can be the primary UI hand at the design/prototype stage**, not just the
 escalation scalpel (the ≈29× is per-token; a tiny mockup is cheap in absolute terms). Once it's wired
-into the real app, logic + bigger files return → DeepSeek carries the bulk again.
+into the real app, logic + bigger files return → coding mode carries the bulk again.
 
 **Design archetypes, not pages — the design→build handoff.** The unit of design is the *pattern*, not
-the page: design each archetype **once**, then coding mode (DeepSeek) builds every page that recombines
+the page: design each archetype **once**, then coding mode builds every page that recombines
 locked archetypes. "How much to design" is pattern-count, not page-count — a 30-screen app often needs
 only ~5–7 designed things.
 - **Claude designs (cheap mode):** the brief (tokens + art-direction + forbidden, once) · one **anchor
   screen** at high finish · each distinct **archetype** (index/list · detail · form · dashboard · modal
   + empty/loading/error states) · recurring **component patterns**. That's the lock point.
-- **DeepSeek builds (coding mode):** every remaining page that's a *variation on a locked archetype* —
-  apply brief tokens, reuse locked components, follow the established layout. Image-blind-safe **because
-  it traces a locked design, not judges pixels**.
+- **The coder builds (coding mode):** every remaining page that's a *variation on a locked archetype* —
+  apply brief tokens, reuse locked components, follow the established layout. Safe **because it traces a
+  locked design rather than re-judging it**.
 - **Boundary test, per page:** a *new* visual pattern or a hard taste call → design in cheap mode first
   (the seeing model is needed); a recombination of locked patterns → coding mode builds it directly.
   Don't re-design instances.
 - **Handoff = three artifacts:** `design-brief.md` + `app-flow.md` + the locked mockups/components.
-  Build-time safety net = § Escalation rules above (ADR-020 bounded view-layer fix on visual divergence).
+  Build-time safety net = the live-preview loop + visual gate above (the coder sees the render and corrects divergences in the build).
   Claude designs patterns + is the escalation scalpel — it does **not** hand-design the long tail.
 
-**Keeping it consistent — the AI-era contract** (research: `docs/research/app-design-ai-era/`). A blind
+**Keeping it consistent — the AI-era contract** (research: `docs/research/app-design-ai-era/`). A
 coder's top drift mode is *component multiplication* (a 2nd, slightly-different card). Three rules:
 - **Promote early (rule of one), not on the 3rd use.** Human design waits ~3 uses before extracting a
   shared component; an AI build inverts it — drafting a reusable piece is cheap, drift is the costly
   failure → the moment a piece *could* recur, lock it as the one definition (only holds if enforced, below).
 - **The locked contract must be in-repo + inspectable** — local components / Storybook the coder can read,
   never an imported lib it can't see (agents treat imported deps as "aspirational" and re-invent instead).
-- **Consistency rides on three gates that only work together** (a text coder can't self-verify): (1) *context*
+- **Consistency rides on three gates that only work together** (a coder can't reliably self-verify cross-screen consistency): (1) *context*
   — `design-brief.md` fed in, kept **prose-rich, not a bare token table** (tokens alone drift by ~screen 5–8);
   (2) *commit lint* — token-compliance + forbidden-pattern + optional design-lint (→ apex-ui-testing, ADR-022);
   (3) *visual verify* — § Visual review gate.

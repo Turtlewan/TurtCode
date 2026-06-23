@@ -1,8 +1,8 @@
 ---
 skill: apex-governance
 backend: claude
-version: 1.13.0
-last_updated: 2026-06-22
+version: 1.14.0
+last_updated: 2026-06-23
 sources:
   - APEX Design Specification 2026-05-24
   - Superpowers (obra) — github.com/obra/superpowers
@@ -87,29 +87,14 @@ prefer parking or splitting the build over draining the shared pool. Warn, don't
 
 DeepSeek (Flash/Pro) is **archived/parked** — recoverable, not in the active menu.
 
-## Capability-routed UI escalation (ADR-020)
+## Capability-routed UI escalation (ADR-020) — RETIRED (ADR-027)
 
-The one sanctioned exception to "planning does not write code": because DeepSeek is **image-blind**
-and Claude is **multimodal**, Claude (planning) may make a **direct UI code edit** to fix a visual
-divergence the blind coder can't resolve from prose. This is **capability, not authority** — same as
-the coder-tier rule above: it widens *which model may make a UI edit*, and relaxes **no** gate.
-
-Allowed only when **all** hold:
-1. A **visual divergence** from the locked design exists (live preview or visual gate caught it).
-2. The fix is **inherently visual** (pixel / spacing / alignment / optical) **or** prose feedback to
-   the blind coder has failed to converge (≥2 rounds).
-3. Claude can **see the render** (web: Playwright-MCP screenshot or pasted image; SwiftUI: Mac-gated).
-
-Bounds (all simultaneous):
-- **View-layer only** — markup / styles / view files. **Never** business logic, data, auth, or any
-  path on the critical-files list (those keep their confirmation gate regardless).
-- **Smallest surgical change**, then hand back to DeepSeek for follow-on volume (Claude output ≈29×
-  the cost — a scalpel, not a second coding lane).
-- **Approval-gated + logged** — the edit hits the planning write-guard `ask`; the user approves; the
-  touched files are recorded in the handoff / status In-Flight so the next coding session knows.
-
-**Not** a general planning-mode coding licence — outside this visual-divergence trigger, code edits
-default to a DeepSeek coding session. Loop: apex-ui-ux-design § Live preview + Claude visual escalation.
+**Retired 2026-06-23.** This carve-out let planning (Claude, multimodal) make a bounded view-layer UI
+edit because the coder (DeepSeek) was **image-blind**. Under ADR-027 the coder is **Codex (`gpt-5.5`,
+native vision)** or **Opus (multimodal)** on fallback — it **sees the render**, so a visual divergence
+is fixed as a **normal coding task**, not a planning-mode escalation. No special exception is needed;
+"planning does not write code" stands without it. The live-preview design loop (design lane → build →
+visual gate) survives in apex-ui-ux-design — only the image-blindness escalation is gone.
 
 ## Critical files — always require explicit confirmation regardless of level
 

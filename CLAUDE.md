@@ -226,9 +226,9 @@ If the session ends without a handoff doc, the next planning session has no cont
   3. **Exact changes** — code-level detail: signatures, new functions, modifications. Pseudocode or full snippets.
   4. **Acceptance criteria** — one runnable check per task.
   5. **Commands to run** — exact commands with flags.
-- **Spec authoring rules** (a spec is an *execution script*, not a design doc — DeepSeek executes literally and can't fill gaps):
+- **Spec authoring rules** (a spec is an *execution script*, not a design doc — the coder executes against frozen acceptance criteria; build-changing judgment is resolved in planning, not the build):
   - **No *why* inline.** Litmus when tempted to add one: does it change what gets built? **No** → cut it (home = ADR / planning discussion). **Yes** → don't add the why, make the *what* explicit. The spec carries at most a one-line identity + a single link to where the why lives.
-  - **List files per task** — every task names its exact files. Never "update the auth flow" (forces exploration = context cost + judgment, DeepSeek's weakest areas).
+  - **List files per task** — every task names its exact files. Never "update the auth flow" (forces exploration = context cost + scope creep; the file list is also the wave grouping + scope lock).
   - **Cross-cutting conventions live in the skill's `impl.md`, never copied into the spec.**
 - Resolve all risks and open questions before the spec moves to `docs/changes/`. Do not include a Risks section in the ready spec.
 - Split rule: if a spec touches more than 3 files or has more than 2 logical phases, split it into separate specs.
