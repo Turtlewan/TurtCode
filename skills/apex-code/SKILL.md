@@ -1,8 +1,8 @@
 ---
 skill: apex-code
 backend: claude
-version: 1.23.0
-last_updated: 2026-06-23
+version: 1.25.0
+last_updated: 2026-06-24
 sources:
   - APEX Design Specification 2026-05-24
   - GSD (Get Shit Done) — github.com/gsd-build/get-shit-done
@@ -184,9 +184,13 @@ Pre-flight:
    `min(4, floor(cores/2)−1)`, fallback **3**) — machine-protection, not a quota cap; a wave wider than
    the cap splits into sequential sub-waves of ≤cap. Each task runs in its own git worktree, integrates
    via `git checkout <branch> -- <files>` (NOT `git merge`), then the integrated tree is re-verified;
-   quota-out on any subprocess → remaining sub-wave falls back to Opus. **Full procedure (worktree
-   setup, integrate, teardown, fallback) → read `references/parallel-codex.md` when a wave has 2+
-   `▸codex` tasks.**
+   quota-out on any subprocess → remaining sub-wave falls back to Opus.
+
+   **Cross-spec parallel (ADR-029).** At **"build specs"** (batch over `docs/changes/`) the same one cap
+   widens the pool across *independent ready specs*: a pair shares a wave only if BOTH dependency-
+   independent (transitive `## Prerequisites`) AND file-disjoint (`## Files to Change` don't intersect) —
+   overlap serializes (checkout overwrites, no merge). High-risk specs (`risk: high`/auth/security/data)
+   stay sequential+foreground for watchability; integrate→verify→commit per-spec, in dep order. **Full procedure → `references/parallel-codex.md`.**
 
 **Task granularity** is fixed at spec authoring time by apex-plan — do not re-decompose
 tasks during Wave Analysis. If a task appears too coarse to verify atomically after
@@ -292,19 +296,19 @@ If no file matches any row → skip. Proceed to next wave.
 
 **Step 2 — dispatch (santa-method dual-pass, in parallel — ADR-010):**
 
-The matched domains (auth/security/data) are the critical subset, so each is reviewed by **two**
-independent `apex-wave-reviewer` instances by default — a missed violation here is shipped-code
-defect-grade. For each matched domain dispatch **two** reviewers in parallel, each with identical
-inputs:
+The matched domains (auth/security/data) are the critical subset, reviewed by independent
+`apex-wave-reviewer` instances — **two** (dual-pass) where a missed violation is shipped-code
+defect-grade, **one** otherwise, per the **pass-count rule** below. For each domain resolving to
+dual-pass dispatch two reviewers in parallel (one for single-pass), each with identical inputs:
 - `changed_files`: list of file paths written in this wave
 - `domain_impl_path`: `~/.claude/skills/apex-{domain}/impl.md`
 - `acceptance_criteria`: the "done when:" clauses for this wave's tasks
 
 The two passes run in isolated contexts — do not share state between them.
 
-**Single-pass override:** if the spec frontmatter sets `risk: low`, dispatch **one** reviewer per
-matched domain instead of two (the planner judged it low-stakes despite touching a critical path).
-`risk: high` or absent → dual-pass (the default).
+**Pass-count rule (per matched domain):** **auth/security** → dual-pass. **data** → single-pass if it
+matched only on additive-DDL (`schema`/`/schema/`), dual-pass if a migration signal matched (`/migrations/`/`migration`/`seed`).
+Spec `risk: high` → dual-pass for all matched domains (use for a destructive `schema.py` change, e.g. a table/column drop); `risk: low` → single-pass for all.
 
 Wait for all dispatched reviewers to complete before proceeding.
 
@@ -315,7 +319,7 @@ taking the worst:
 - else **CLEAN** (only when *both* passes are CLEAN)
 
 Union the two findings lists; dedupe findings that point at the same file+rule. Use this single
-unioned verdict in Step 3. (Single-pass override → the one verdict is used as-is.)
+unioned verdict in Step 3. (Single-pass → the one verdict is used as-is.)
 
 **Step 3 — handle findings (unioned verdict per domain):**
 

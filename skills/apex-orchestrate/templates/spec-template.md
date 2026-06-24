@@ -41,6 +41,11 @@ autonomy_level: L2
 Simplicity check: {considered simpler approach? yes/no — if yes, why this version instead}
 
 ## Prerequisites
+<!-- Build-load-bearing for cross-spec parallelism (ADR-029): at a batch "build specs", two specs
+     run concurrently only when BOTH dependency-independent (this list, transitive) AND file-disjoint
+     (their ## Files to Change don't intersect). List every prerequisite spec precisely — a missing
+     edge, or a shared file unlisted here/below (e.g. two specs both editing one types.py or
+     re-exporting into one package __init__.py), costs a needless serialization or a clobbering build. -->
 - Specs that must be complete first (or "none")
 - Environment setup required (or "none")
 
