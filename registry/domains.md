@@ -58,3 +58,4 @@ are spawned by `apex-code`, not from this table.
 | nextjs | apex-nextjs/SKILL.md | apex-nextjs/impl.md | — | Next.js, Next, App Router, Server Components, Server Actions, React 19, RSC, caching, revalidation, SSR, ISR, Static Generation |
 | python | apex-python/SKILL.md | apex-python/impl.md | — | Python, FastAPI, uv, ruff, mypy, pydantic, pydantic-settings, async, asyncio, uvicorn, ASGI, pytest, typed Python, type hints |
 | swift | apex-swift/SKILL.md | apex-swift/impl.md | — | Swift, SwiftUI, Xcode, xcodebuild, Swift 6, strict concurrency, @Observable, SwiftData, NavigationStack, actor, Sendable, MainActor, macOS app, iPadOS, native iOS, SPM, Swift Package |
+| tauri | apex-tauri/SKILL.md | apex-tauri/impl.md | — | Tauri, Tauri 2, desktop client, .exe, .app, webview, WebView2, WKWebView, invoke, capabilities, permissions, CSP, src-tauri, tauri.conf.json, Rust shell, backdrop-filter, vibrancy, native FFI |
