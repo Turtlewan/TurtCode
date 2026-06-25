@@ -45,7 +45,9 @@ Simplicity check: {considered simpler approach? yes/no — if yes, why this vers
      run concurrently only when BOTH dependency-independent (this list, transitive) AND file-disjoint
      (their ## Files to Change don't intersect). List every prerequisite spec precisely — a missing
      edge, or a shared file unlisted here/below (e.g. two specs both editing one types.py or
-     re-exporting into one package __init__.py), costs a needless serialization or a clobbering build. -->
+     re-exporting into one package __init__.py), costs a needless serialization or a clobbering build.
+     Design FOR this: give each shared file ONE owning spec and list that spec here, rather than
+     co-editing it from two specs. -->
 - Specs that must be complete first (or "none")
 - Environment setup required (or "none")
 

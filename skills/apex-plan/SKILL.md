@@ -1,8 +1,8 @@
 ---
 skill: apex-plan
 backend: claude
-version: 1.27.0
-last_updated: 2026-06-23
+version: 1.28.0
+last_updated: 2026-06-25
 sources:
   - APEX Design Specification 2026-05-24
   - GSD (Get Shit Done) — github.com/gsd-build/get-shit-done
@@ -200,7 +200,7 @@ Use the template at ~/.claude/skills/apex-orchestrate/templates/spec-template.md
 
 Write to docs/drafts/{short-name}.md first — not docs/changes/.
 
-Split rule: if the spec touches more than 3 files or has more than 2 logical phases, split it into separate specs before proceeding.
+Split rule: if the spec touches more than 3 files or has more than 2 logical phases, split it into separate specs before proceeding. When you split (or write a spec alongside other pending specs), make the resulting specs **file-disjoint** — any real dependency a `## Prerequisites` edge — so a session drains the set as parallel waves (ADR-029, *Batch-joinable* in the readiness gate).
 
 As you build the spec, enforce these rules inline:
 - Every file must have a full absolute path
@@ -214,12 +214,9 @@ As you build the spec, enforce these rules inline:
 - Permissions section must cover every action the build will take
 - Specialist context section captures any specialist findings
 - Risks/Open Questions must be empty before spec is ready
-- **Task granularity:** size each task as one concern layer — API layer, DB layer, UI layer,
-  test layer. One task should not span multiple layers; one layer should not be split into
-  multiple thin tasks. Independent concern layers run in parallel waves in coding mode;
-  artificially thin tasks (one import, one function, one file) cost more in agent-spawn
-  overhead than they save in parallelism. Natural independence is the signal — do not
-  manufacture it.
+- **Task granularity:** one concern layer per task (API / DB / UI / test) — don't span layers or
+  split one layer into thin tasks. Independent layers run as parallel waves; tasks made thin to
+  raise worker count cost more in spawn overhead than they save — never manufacture independence.
 
 **A spec is an execution script, not a design doc — rich on the *what*, stripped of the *why*:**
 - **Scope = a one-line identity** (what this builds, for routing/review/recall), optionally
@@ -359,6 +356,7 @@ Tasks
   [ ] No task contains "or", "maybe", "depending on", "TBD"
   [ ] Task dependencies are explicit (if Task 3 needs Task 1, say so)
   [ ] Wave plan present for specs with ≥3 tasks — waves derived only from stated dependencies
+  [ ] Batch-joinable: ## Files to Change disjoint from sibling pending specs', or each shared file (types / barrel re-export / schema / route registry) owned by one spec with others declaring it in ## Prerequisites (ADR-029)
   [ ] Task granularity: each task is one concern layer — not one file and not multiple features; no artificially thin tasks manufactured to increase worker count
   [ ] Coverage audit (presence): every acceptance criterion maps to ≥1 task, and every task traces to ≥1 criterion — no orphan tasks, no uncovered criteria (Spec-Kit /analyze)
   [ ] Sufficiency audit (mechanism): for every *behavioural* criterion, the mapped task's stated mechanism can actually produce that behaviour. A "reuse/extend existing X" task covers a behavioural criterion only if X already exhibits it (verify against the codebase) OR the task adds an explicit producing/wiring step. An outcome-stated task that omits the producing step — e.g. "re-skin to get the rich treatment" while reusing a primitive that structurally can't emit it — is UNCOVERED: fail until the wiring task exists.
@@ -410,13 +408,11 @@ If any item fails: surface what is unresolved, revise in-place, re-run gate from
 
 ## Model-routing build planning — coders {codex (default), opus (fallback)}
 
-Read `coder_models` from status.md (default `[codex]`; ADR-027). Routing **collapses** to a single
-proactive coder: **Codex builds every task; Opus is the manual fallback when Codex quota is exhausted**
-(a build-time event handled by apex-code, not a planning-time per-task route). So:
-- **Emit the normal untagged `## Wave plan`** — every task → Codex. Do not tag `▸opus` proactively.
-- A spec's optional `coder_model: opus` frontmatter pins the WHOLE spec to Opus up front (e.g. when you
-  already know Codex quota is gone).
-- Full rubric (family-aware review, fallback mechanic, archived DeepSeek mapping) → `references/model-routing.md`.
+`coder_models` from status.md (default `[codex]`; ADR-027): **Codex builds every task; Opus is the
+manual fallback at quota-out** (a build-time event handled by apex-code, not a planning route). So emit
+the normal **untagged `## Wave plan`** (every task → Codex; don't tag `▸opus` proactively); a spec's
+optional `coder_model: opus` frontmatter pins the whole spec to Opus up front. Full rubric (family-aware
+review, fallback mechanic, archived DeepSeek mapping) → `references/model-routing.md`.
 
 ## Confirmation digest — how the user signs off
 
