@@ -19,11 +19,14 @@ For each parallel task: `git worktree add <path> -b codex/<task-id>` from HEAD, 
 + autonomy clause as the sequential path:
 
 ```
-printf '%s' "<task prompt>" | codex exec -p apex-coder --sandbox workspace-write -m gpt-5.5 -C <worktree>
+printf '%s' "<task prompt>" | codex exec -p apex-coder --sandbox workspace-write -m gpt-5.5 -C <worktree> \
+  --json -o <scratch>/codex-<task>.final --color never > docs/progress/codex-<task>.log 2>&1
 ```
 
 Launch every task in the sub-wave with `run_in_background`; wait for all subprocesses to exit before
-integrating.
+integrating. The `--json`/`-o`/log split is the standard observability recipe — give the user every
+task's log path so they can `tail -f` each one in parallel (the host reads only each `.final`). Full
+recipe + teardown → `references/codex-observability.md`.
 
 ## Integrate (NOT `git merge` — hard block)
 Tasks in a wave write disjoint files, so bring each task's changes into the main tree with
@@ -78,9 +81,11 @@ anything else under that subtree.
 ## Supervision gate — parallel-safe is not parallel-eligible
 Two specs passing both safety constraints still do **not** background if either is **high-risk**
 (`risk: high`, or an auth / security / data domain — the same set apex-code already dual-pass-reviews).
-Parallel dispatch backgrounds the `codex exec` subprocess, forfeiting the per-spec live watch; the
-high-risk set is exactly what earns watching, so it runs **sequentially in the foreground** instead
-(and does not fan its own tasks into the pool either). **Opt-out default:** routine `risk: low`/unmarked
+Parallel dispatch runs several specs unattended at once; the high-risk set is exactly what earns close,
+one-at-a-time **host supervision** (the ability to react, not just to read), so it runs **sequentially in
+the foreground** instead (and does not fan its own tasks into the pool either). The live log
+(`references/codex-observability.md`) is written for every spec regardless, so this gate is about
+intervention, not visibility — background specs are no longer blind. **Opt-out default:** routine `risk: low`/unmarked
 specs are pool-eligible; only the high-risk set is excluded. (This differs from the review gate, where
 an *absent* `risk` defaults to cautious — there absence means "be careful"; here it means "routine.")
 
