@@ -12,6 +12,15 @@
       "Bash(grep *)",
       "Bash(rg *)",
       "Bash(codex exec:*)",
+      "Bash(git status:*)",
+      "Bash(git diff:*)",
+      "Bash(git log:*)",
+      "Bash(git show:*)",
+      "Bash(git branch:*)",
+      "Bash(git rev-parse:*)",
+      "Bash(git add:*)",
+      "Bash(wc:*)",
+      "Bash(which:*)",
       "WebSearch",
       "WebFetch(domain:artificialanalysis.ai)",
       "WebFetch(domain:api-docs.deepseek.com)",
@@ -49,22 +58,6 @@
         "hooks": [
           {
             "type": "command",
-            "command": "\"C:/Program Files/nodejs/node.exe\" \"C:/Users/User/.claude/hooks/gsd-check-update.js\""
-          }
-        ]
-      },
-      {
-        "hooks": [
-          {
-            "type": "command",
-            "command": "bash \"C:/Users/User/.claude/hooks/gsd-session-state.sh\""
-          }
-        ]
-      },
-      {
-        "hooks": [
-          {
-            "type": "command",
             "command": "\"C:/Program Files/nodejs/node.exe\" \"C:/Users/User/Projects/claude-cockpit/hooks/mode-stamp.js\""
           }
         ]
@@ -77,46 +70,6 @@
           {
             "type": "command",
             "command": "powershell.exe -NoProfile -ExecutionPolicy Bypass -File 'C:/Users/User/.claude/hooks/backend-pretool-write.ps1'"
-          }
-        ]
-      },
-      {
-        "matcher": "Write|Edit",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "\"C:/Program Files/nodejs/node.exe\" \"C:/Users/User/.claude/hooks/gsd-prompt-guard.js\"",
-            "timeout": 5
-          }
-        ]
-      },
-      {
-        "matcher": "Write|Edit",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "\"C:/Program Files/nodejs/node.exe\" \"C:/Users/User/.claude/hooks/gsd-read-guard.js\"",
-            "timeout": 5
-          }
-        ]
-      },
-      {
-        "matcher": "Write|Edit",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "\"C:/Program Files/nodejs/node.exe\" \"C:/Users/User/.claude/hooks/gsd-workflow-guard.js\"",
-            "timeout": 5
-          }
-        ]
-      },
-      {
-        "matcher": "Bash",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "bash \"C:/Users/User/.claude/hooks/gsd-validate-commit.sh\"",
-            "timeout": 5
           }
         ]
       },
@@ -151,16 +104,6 @@
             "timeout": 5
           }
         ]
-      },
-      {
-        "matcher": "Write|Edit",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "bash \"C:/Users/User/.claude/hooks/gsd-phase-boundary.sh\"",
-            "timeout": 5
-          }
-        ]
       }
     ],
     "UserPromptSubmit": [
@@ -175,6 +118,7 @@
       }
     ]
   },
+  "enableWorkflows": true,
   "statusLine": {
     "type": "command",
     "command": "\"C:/Program Files/nodejs/node.exe\" \"C:/Users/User/.claude/hooks/gsd-statusline.js\""
@@ -184,7 +128,6 @@
     "context7@claude-plugins-official": true
   },
   "autoUpdatesChannel": "latest",
-  "enableWorkflows": true,
   "skipWorkflowUsageWarning": true,
   "theme": "dark"
 }
