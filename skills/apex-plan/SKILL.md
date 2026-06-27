@@ -1,8 +1,8 @@
 ---
 skill: apex-plan
 backend: claude
-version: 1.28.0
-last_updated: 2026-06-25
+version: 1.29.0
+last_updated: 2026-06-27
 sources:
   - APEX Design Specification 2026-05-24
   - GSD (Get Shit Done) — github.com/gsd-build/get-shit-done
@@ -411,8 +411,8 @@ If any item fails: surface what is unresolved, revise in-place, re-run gate from
 `coder_models` from status.md (default `[codex]`; ADR-027): **Codex builds every task; Opus is the
 manual fallback at quota-out** (a build-time event handled by apex-code, not a planning route). So emit
 the normal **untagged `## Wave plan`** (every task → Codex; don't tag `▸opus` proactively); a spec's
-optional `coder_model: opus` frontmatter pins the whole spec to Opus up front. Full rubric (family-aware
-review, fallback mechanic, archived DeepSeek mapping) → `references/model-routing.md`.
+optional `coder_model: opus` frontmatter pins the whole spec to Opus up front; the one real per-spec lever is **reasoning effort** — `coder_effort: {low|medium|high|xhigh}` (default `medium`; `high` for risk:high/auth/security/data/hard, `low` for trivial; ADR-030).
+Full rubric (effort dial, family-aware review, fallback mechanic, archived DeepSeek mapping) → `references/model-routing.md`.
 
 ## Confirmation digest — how the user signs off
 

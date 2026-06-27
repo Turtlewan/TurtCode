@@ -18,6 +18,22 @@ not in the active menu). If an old project still carries `coder_tier_policy`, tr
 - A whole-spec `coder_model: opus` frontmatter can pin a spec to Opus up front (e.g. when you already
   know Codex quota is gone) — bypasses Codex entirely.
 
+## Reasoning-effort dial — the one real per-task lever (ADR-030)
+Model choice collapsed, but Codex's **reasoning-effort dial** is a genuine per-spec cost/quality lever on
+the *same* `gpt-5.5`. Set it with spec frontmatter `coder_effort: {low|medium|high|xhigh}` (apex-code
+passes `-c model_reasoning_effort=<v>` to every `codex exec`). Default `medium` — leave it absent unless
+the spec is clearly off-default.
+- `low` — trivial mechanical specs (rename, config, boilerplate, docstrings): cheaper + faster.
+- `medium` — default; most specs.
+- `high` — `risk: high`, auth / security / data / concurrency, or algorithmically hard specs.
+- `xhigh` — explicit opt-in for the hardest async / eval-like work only.
+
+Cheap to dial up: under config-A the build runs on Codex's **separate pool**, so `high` on a hard spec
+barely touches the scarce Opus pool. Don't blanket-`high` everything — it burns Codex quota faster (→
+earlier Opus fallback). Effort is per-spec; apex-code additionally bumps it one notch on a Codex
+verify-fail retry before any model fallback (build-time, not a planning choice). The `gpt-5.4-mini` cheap
+model is **deferred** (ADR-030) — do not route tasks to a second model; the dial is the cost lever.
+
 ## Family-aware review routing (when `cross_model_review: true`)
 Reviewer family ≠ builder family:
 - Codex-built task (the default) → **Opus** (Claude) reviews.
