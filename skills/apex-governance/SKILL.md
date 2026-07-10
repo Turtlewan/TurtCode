@@ -1,8 +1,8 @@
 ---
 skill: apex-governance
 backend: claude
-version: 1.14.0
-last_updated: 2026-06-23
+version: 1.15.0
+last_updated: 2026-07-10
 sources:
   - APEX Design Specification 2026-05-24
   - Superpowers (obra) — github.com/obra/superpowers
@@ -10,6 +10,7 @@ sources:
   - Claude Code Action — github.com/anthropics/claude-code-action
   - Odysseus analysis (PewDiePie) — docs/research/odysseus-analysis.md
   - donor-analysis (Superpowers receiving-code-review) — docs/research/donor-analysis/
+  - docs/technical/adr/ADR-032-gpt56-role-split.md
 staleness_threshold: 30d
 description: >
   Defines the APEX autonomy model — operating modes (Build/AFK vs Edit), autonomy levels L0–L5,
@@ -74,13 +75,23 @@ per-task routing collapses to **"codex unless its quota is exhausted, then Opus.
 authority applies — the model that codes never widens an autonomy gate, critical-file confirmation, or
 hard block.
 
-**Opus is the manual fallback coder** (mechanic A): the build runs in an Opus `APEX_MODE=coding` host
-that dispatches Codex per task; when Codex quota runs out the **same host builds the task inline as
-Opus** (no restart, no backend swap). Operator-driven, not auto-escalation. See apex-code § Model
+**Opus is the manual fallback coder** (mechanic A): the build runs in a Claude `APEX_MODE=coding` host
+(Sonnet 5 default — below) that dispatches Codex per task; when Codex quota runs out the task is
+built by **Opus** — a fresh `model: opus` code-worker dispatch, or the operator switches the session
+(`/model opus`) for a fallback-heavy build (no restart, no backend swap). Operator-driven, not auto-escalation. See apex-code § Model
 escalation on verify-fail.
 
+**The build host runs Sonnet 5 by default (ADR-032).** The `APEX_MODE=coding` session that
+orchestrates dispatch — and **runs the verify loop; never the coder subprocess judging itself**
+(evaluator independence at task level) — is Sonnet 5 (`/model sonnet` / `ANTHROPIC_MODEL`),
+drawing its own separate weekly bucket. Opus in coding mode is a deliberate choice, not the
+default: the per-spec **coder** pin (`coder_model: opus` — selects who codes, a different axis
+from who hosts), an Opus **host** as an operator choice for `risk: high` supervision or
+GRAY-fork-heavy work, and the Opus fallback coder at Codex quota-out (dispatched as above).
+The first real Sonnet-hosted build is the flip's proving run.
+
 **Soft pool guard — RE-INSTATED, scoped to the fallback.** Steady-state coding spends the separate
-OpenAI pool; the only Max-pool draw is light (host orchestration + Opus reviewing Codex-built tasks).
+OpenAI pool; the light Anthropic-pool draw lands mostly on the Sonnet bucket (host orchestration + routine Claude reviews); Opus draws only for high-risk dual-pass reviews and the fallback below.
 **But when the build falls back to Opus, Opus builds draw the same scarce Max weekly pool as planning**
 → treat the fallback as a budgeted exception: surface remaining planning headroom at the switch, and
 prefer parking or splitting the build over draining the shared pool. Warn, don't block.
@@ -178,8 +189,10 @@ Add `scope: directory/path` to Permissions to activate freeze for that build.
 A second, **independent review by a different model family than the builder** before shipping a
 high-stakes build (auth / security / data migrations). Opt-in, not default. **Invariant: reviewer
 family ≠ builder family** (family-aware routing, ADR-027):
-- **Codex-built** task (the default coder) → **Opus** (Claude) reviews (`apex-reviewer`, Claude family).
-  This is the common path.
+- **Codex-built** task (the default coder) → **Claude** reviews (`apex-reviewer`, always a **fresh
+  context** — never the orchestrating host reviewing its own build): the host family (Sonnet)
+  routinely; **Opus** reviewers for the high-risk dual-pass set (auth / security / data,
+  `risk: high`). This is the common path (ADR-032).
 - **Opus-built** task (the fallback coder) → **Codex** (`gpt-5.6-terra`) reviews, via headless `codex exec`
   (read-only, schema'd — apex-code § Cross-model review + `references/codex-review.md`). **Advisory** —
   never auto-blocks, never auto-fixes. Note: Opus builds only *because* Codex quota is exhausted, so this

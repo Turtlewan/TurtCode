@@ -1,7 +1,8 @@
 # AGENTS.md — {project-name} (Codex build instructions)
 
 Standing instructions for the **Codex CLI** (and any AGENTS.md-aware agent) when working in this
-repo. Codex reads this before acting; the nearest-directory AGENTS.md wins. Keep it well under 32 KiB.
+repo. Codex reads this before acting; the nearest-directory AGENTS.md wins. Keep the root file
+≤ ~200 lines — overflow goes to nested per-directory AGENTS.md files, never a fatter root.
 
 ## What this repo is
 {one line from PROJECT.md — what this builds + its top-level shape}
@@ -30,7 +31,7 @@ On **"build specs"** (or "build the queue" / "build docs/changes"): work through
 stack is TBD at init, leave this marker as the stub; planning fills it when stack_skills binds.}
 
 ## Hard rules (APEX hard-blocks — never violate)
-- **Never `git commit`, never `git push`.** Commits are owner-controlled; pushing to the default branch is a permanent hard block. Build + verify only; leave the working tree dirty for owner review.
+- **Never `git commit`, never `git push`, never create or switch branches.** The host owns integration — worktrees, checkouts, and commits are owner-controlled; pushing to the default branch is a permanent hard block. Build + verify only, in the tree you are given; leave it dirty for owner review.
 - **Building uses `--sandbox workspace-write`;** read-only/review tasks use `--sandbox read-only`.
 - **Baseline before building:** run the **full** verify recipe once first — **including its install/setup step** (e.g. `uv sync`, `npm ci`); never run the check-only commands against an unprepared env, since a missing project install reads as a **false red**. If the baseline is genuinely **red**, stop and report — never build on a broken base. **Do NOT stop merely because the working tree has uncommitted changes** — that is the owner's normal state by design (this file forbids committing, so the tree is *expected* to be dirty). Note what is already modified, then proceed.
 

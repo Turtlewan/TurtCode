@@ -120,11 +120,11 @@ APEX is active in every session in every project. The orchestrator runs first, b
 
 3. Detect mode (precedence order — first match wins; ADR-027)
    - `ANTHROPIC_BASE_URL` contains "deepseek" → **DeepSeek coding mode** (ARCHIVED — ADR-027, recovery-only) → route to `apex-code`
-   - Else `APEX_MODE=coding` (Anthropic backend + explicit signal) → **Claude coding mode** = the build host: **Codex (`gpt-5.6-terra`) is the primary coder** (dispatched per task as a `codex exec` subprocess), **Opus is the inline fallback** when Codex quota runs out; write-guard relaxed → route to `apex-code`
+   - Else `APEX_MODE=coding` (Anthropic backend + explicit signal) → **Claude coding mode** = the build host (Sonnet 5 default — ADR-032): **Codex (`gpt-5.6-terra`) is the primary coder** (dispatched per task as a `codex exec` subprocess), **Opus is the fallback** (fresh `model: opus` worker) when Codex quota runs out; write-guard relaxed → route to `apex-code`
    - Else (unset / api.anthropic.com, no flag) → **planning mode** → route to `apex-plan`
 
 4. State active context
-   - Always output: "Running at L{n} | Profile: {profile} | Mode: {planning / claude-coding (Codex-primary, Opus fallback) / deepseek-coding (archived)}"
+   - Always output: "Running at L{n} | Profile: {profile} | Mode: {planning / claude-coding (Sonnet host; Codex-primary, Opus fallback) / deepseek-coding (archived)}"
 
 ### Skill locations
 
@@ -146,7 +146,7 @@ On resume: read docs/status.md In-Flight table, surface what was in progress, co
 
 This machine runs Claude Code against two backends, switched via `ANTHROPIC_BASE_URL`. Each backend has a distinct role. A SessionStart hook surfaces the active backend and routes the session through `apex-orchestrate` (each session opens with an `[APEX] Using APEX system` banner); a PreToolUse hook gates planning-mode code edits behind an approval prompt — the APEX project itself and `~/.claude/` system files are exempt (APEX is self-hosting).
 
-**Coder model (ADR-027 — supersedes ADR-024/025).** The build host is **Claude coding mode** (`APEX_MODE=coding` on the Anthropic backend; write-guard relaxed). In it, **Codex (`gpt-5.6-terra`) is the primary coder** — dispatched per task as a `codex exec` subprocess — and **Opus is the inline fallback** when Codex quota is exhausted. **DeepSeek (the `deepseek` URL path below) is archived** (recovery-only). The soft pool guard (scoped to the Opus fallback) is in `apex-governance`. See ADR-027.
+**Coder model (ADR-027 — supersedes ADR-024/025).** The build host is **Claude coding mode** (`APEX_MODE=coding` on the Anthropic backend; **Sonnet 5 default host — ADR-032**; write-guard relaxed). In it, **Codex (`gpt-5.6-terra`) is the primary coder** — dispatched per task as a `codex exec` subprocess — and **Opus is the fallback** (fresh `model: opus` worker) when Codex quota is exhausted. **DeepSeek (the `deepseek` URL path below) is archived** (recovery-only). The soft pool guard (scoped to the Opus fallback) is in `apex-governance`. See ADR-027.
 
 ### The Loop
 
@@ -213,7 +213,7 @@ If the session ends without a handoff doc, the next planning session has no cont
 
 **Anthropic backend → PLANNING mode**
 - `ANTHROPIC_BASE_URL` is unset or points to `api.anthropic.com`
-- `Write`/`Edit` on non-`.md`/`.markdown`/`.txt` files is gated by the harness behind an approval prompt — default guidance is to defer code edits to a DeepSeek coding session (exception: the APEX project itself and `~/.claude/` system files pass without prompting, since APEX is self-hosting)
+- `Write`/`Edit` on non-`.md`/`.markdown`/`.txt` files is gated by the harness behind an approval prompt — default guidance is to defer code edits to a coding session (`APEX_MODE=coding`, Codex-primary) (exception: the APEX project itself and `~/.claude/` system files pass without prompting, since APEX is self-hosting)
 
 **At the start of a planning session:**
 1. Read `docs/status.md` to understand the current project state — completed work, current state, pending specs, and open questions. If `docs/status.md` does not exist, fall back to reading the latest `docs/handoff/*.md` and scanning `docs/changes/*.md`.

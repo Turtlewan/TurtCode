@@ -1,0 +1,25 @@
+{
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "status": { "type": "string", "enum": ["done", "done_with_concerns", "blocked"] },
+    "changed_files": { "type": "array", "items": { "type": "string" } },
+    "commands_run": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "command": { "type": "string" },
+          "result": { "type": "string", "enum": ["pass", "fail", "not_run"] },
+          "detail": { "type": ["string", "null"] }
+        },
+        "required": ["command", "result", "detail"]
+      }
+    },
+    "deviations": { "type": "array", "items": { "type": "string" } },
+    "unresolved": { "type": "array", "items": { "type": "string" } },
+    "blocker": { "type": ["string", "null"] }
+  },
+  "required": ["status", "changed_files", "commands_run", "deviations", "unresolved", "blocker"]
+}

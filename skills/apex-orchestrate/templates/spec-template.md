@@ -37,6 +37,15 @@ autonomy_level: L2
 
 <!-- Split rule: if this spec touches >3 files OR has >2 logical phases, split it into separate specs. -->
 
+## Intent
+<!-- Optional for single-task specs, recommended otherwise. ≤10 lines, what-bearing — the ONE
+     sanctioned home for load-bearing intent; it travels to the coder in the dispatch pack
+     (ADR-031) so mismatches resolve against stated invariants instead of guesses.
+     Never an ADR essay — rationale lives in the ADR. -->
+- **Intent:** {1-2 lines — the outcome this spec exists to produce}
+- **Invariants:** {properties that must hold when done — behavioural/structural, testable where possible}
+- **Non-goals:** {adjacent work this spec deliberately does NOT do}
+
 ## Assumptions
 <!-- Planning mode fills this. Coding mode verifies each item before executing. -->
 <!-- Format: assumption → impact if wrong (Stop | Caution | Low) -->

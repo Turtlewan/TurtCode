@@ -1,11 +1,12 @@
 ---
 skill: apex-skill-author
 backend: claude
-version: 1.7.0
-last_updated: 2026-06-23
+version: 1.8.0
+last_updated: 2026-07-10
 sources:
   - agentskills.io — skill spec & authoring best practices
   - superpowers:writing-skills — TDD-for-skills methodology
+  - docs/technical/adr/ADR-031-codex-context-propagation.md
   - docs/research/skill-authoring-best-practices.md
   - docs/research/model-specific-skill-authoring.md
   - docs/technical/adr/ADR-005-stack-best-practice-skills.md
@@ -226,6 +227,26 @@ most-skipped judgment in `impl.md` authoring.
 
 Evidence and the full model matrix: `docs/research/model-specific-skill-authoring.md`.
 
+## `.agents/skills/` projection — Codex-facing cards (ADR-031)
+
+APEX skills are read by Claude hosts; the Codex coder reads a **repo-local `.agents/skills/`**
+directory instead (headless pickup proven). Cards are **projected from APEX skills — generated,
+never hand-maintained twice** — and **selective**: bound-stack cards, debug/testing cards, domain
+hazard cards. Never mirror the full skill set: most APEX content is planning judgment or hygiene
+native to GPT-5.6 — unselective projection is noise that degrades output.
+
+Every card passes three gates before it ships:
+1. **Terra RED baseline (the Iron Law, extended to the Codex consumer):** run the card's target
+   task with *bare Terra* (`codex exec`, no card) in an isolated probe repo. The card earns its
+   place only where bare Terra fails.
+2. **Trigger-eval CSV:** should-trigger / should-NOT-trigger prompts (negative controls included)
+   run via `codex exec --json` — the dominant failure mode is cards firing too eagerly.
+3. **Validation checklist:** frontmatter parses, the shared ~8k-char description-index budget
+   fits, no conflicts with AGENTS.md text, `allow_implicit_invocation` set deliberately per card.
+
+> Card anatomy, projection sources, CSV format, generation/refresh workflow: read
+> `references/agents-skills-projection.md` when projecting or editing a card.
+
 ## impl.md loading tiers — author for what coding mode loads per run
 
 `impl.md` is consumed by coding mode (`apex-code`) on **every build run**, so structure **every
@@ -309,6 +330,7 @@ governed by the two-tier core/references convention — see § impl.md loading t
 - Never ship a new skill without the triple-write.
 - Never write a `description` that summarizes the workflow instead of triggering on the task.
 - Never create `impl.md` that just duplicates SKILL.md.
+- Never hand-edit a projected `.agents/skills/` card — edit the source APEX skill and regenerate (one home per fact).
 - Never leave a *build-changing* judgment call in `impl.md` — resolve it in the spec or planning; `impl.md` states defaults, not open choices.
 - Never exceed 500 lines / 5k tokens in a SKILL.md.
 - Never author a domain skill from training memory when best practices are stale — research first.
@@ -329,5 +351,6 @@ governed by the two-tier core/references convention — see § impl.md loading t
 - [ ] Under 500 lines / 5k tokens
 - [ ] Triple-write done (registry + SKILLS.md + SKILL-HISTORY.md)
 - [ ] Stack skill (if any): distinct-family conventions applied — SKILL+impl, runnable `## Verification Recipe` present and empirically run (not doc-sourced), `apex-research` triggered
+- [ ] Projection (if the edited skill sources a `.agents/skills/` card): card regenerated + the three gates re-run (references/agents-skills-projection.md)
 - [ ] Execution gate asked (Claude direct vs coding mode)
 - [ ] GREEN verified by reading output; loopholes refactored

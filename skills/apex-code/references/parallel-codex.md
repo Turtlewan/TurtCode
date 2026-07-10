@@ -41,7 +41,7 @@ sandbox-SID-owned cache dirs, clear them with the codex-exec cleanup trick (SKIL
 artifact ownership) before retrying.
 
 ## Failure / fallback (ADR-027 unchanged)
-A subprocess that exits non-zero / rate-limited → that task falls back to Opus (host builds it inline). A
+A subprocess that exits non-zero / rate-limited → that task falls back to Opus (fresh `model: opus` worker — ADR-032; quota-out skips the Sol rung). A
 quota-out on **any** concurrent subprocess means the pool is dead → stop launching further Codex and fall
 back the remaining sub-wave tasks to Opus (sequential). A task that won't converge after honest recovery
 → fork (capture-at-halt).

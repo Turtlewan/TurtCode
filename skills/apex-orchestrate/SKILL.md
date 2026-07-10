@@ -1,8 +1,8 @@
 ---
 skill: apex-orchestrate
 backend: claude
-version: 1.6.0
-last_updated: 2026-06-22
+version: 1.7.0
+last_updated: 2026-07-10
 sources:
   - APEX Design Specification 2026-05-24
   - GSD (Get Shit Done) — github.com/gsd-build/get-shit-done
@@ -87,7 +87,7 @@ The SessionStart hook has already detected the mode; confirm it and route accord
 Detection precedence (first match wins):
 
 1. `ANTHROPIC_BASE_URL` contains `deepseek` → **DeepSeek coding** (ARCHIVED — ADR-027, recovery-only) → route to apex-code.
-2. Else `APEX_MODE=coding` → **Claude coding** = the build host: **Codex (`gpt-5.6-terra`) is the primary coder** (dispatched per task as a `codex exec` subprocess); **Opus is the inline fallback** when Codex quota runs out. Write-guard relaxed → route to apex-code.
+2. Else `APEX_MODE=coding` → **Claude coding** = the build host (**Sonnet 5 default host — ADR-032**): **Codex (`gpt-5.6-terra`) is the primary coder** (dispatched per task as a `codex exec` subprocess); **Opus is the fallback** (fresh `model: opus` worker / `/model opus`) when Codex quota runs out. Write-guard relaxed → route to apex-code.
 3. Else → **planning** → route to apex-plan.
 
 Claude coding mode is a real build session, not a planning detour — read specs from docs/changes/,
@@ -145,7 +145,7 @@ Rules:
 ## Step 6: State active context
 
 After routing, always output one line:
-"Running at L{n} | Profile: {profile} | Stack: {stack_skills or 'none'} | Mode: {planning / claude-coding (Codex-primary, Opus fallback) / deepseek-coding (archived)}"
+"Running at L{n} | Profile: {profile} | Stack: {stack_skills or 'none'} | Mode: {planning / claude-coding (Sonnet host; Codex-primary, Opus fallback) / deepseek-coding (archived)}"
 
 ---
 
@@ -204,7 +204,7 @@ No manual state tracking needed. The In-Flight table is the checkpoint.
 ## Governance rules
 
 At every session start, state the active level:
-"Running at L{n} | Profile: {profile} | Stack: {stack_skills or 'none'} | Mode: {planning / claude-coding (Codex-primary, Opus fallback) / deepseek-coding (archived)}"
+"Running at L{n} | Profile: {profile} | Stack: {stack_skills or 'none'} | Mode: {planning / claude-coding (Sonnet host; Codex-primary, Opus fallback) / deepseek-coding (archived)}"
 
 If user says "set level L{n}" or "run at L{n}" or "drop to L{n}":
 1. Update the autonomy_level in docs/status.md

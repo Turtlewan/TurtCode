@@ -28,8 +28,9 @@ absent unless the spec is clearly off-default.
 - `high` — `risk: high`, auth / security / data / concurrency, or algorithmically hard specs.
 - `xhigh` — explicit opt-in for the hardest async / eval-like work only.
 - `max` — reserve for the single hardest tasks a spec can carry: state migrations, IAM/auth-critical
-  work, gnarly concurrency. Sits above `xhigh`; also the top rung of apex-code's verify-fail recovery
-  ladder before falling back to Opus.
+  work, gnarly concurrency. Sits above `xhigh`; also the top *effort* rung of apex-code's verify-fail
+  recovery ladder — above it sits one Sol re-dispatch (`gpt-5.6-sol`, effort max — ADR-032), then Opus
+  (quota-out + Claude-judgment cases skip Sol, straight to Opus).
 - `ultra` — RARE, per-task escalation above `max`. Spawns in-model subagents, so it counts **double**
   against `max_parallel_codex` (ADR-028) — or keep `ultra` tasks sequential/foreground instead of folding
   them into a parallel wave. Gated on a pending head-to-head eval against `max` that hasn't run yet — do
@@ -38,12 +39,12 @@ absent unless the spec is clearly off-default.
 Cheap to dial up: under config-A the build runs on Codex's **separate pool**, so `high` on a hard spec
 barely touches the scarce Opus pool. Don't blanket-`high` everything — it burns Codex quota faster (→
 earlier Opus fallback). Effort is per-spec; apex-code additionally bumps it one notch on a Codex
-verify-fail retry before any model fallback (build-time, not a planning choice). The `gpt-5.4-mini` cheap
+verify-fail retry, then one Sol re-dispatch (ADR-032), before any Opus fallback (build-time, not a planning choice). The `gpt-5.4-mini` cheap
 model is **deferred** (ADR-030) — do not route tasks to a second model; the dial is the cost lever.
 
 ## Family-aware review routing (when `cross_model_review: true`)
 Reviewer family ≠ builder family:
-- Codex-built task (the default) → **Opus** (Claude) reviews.
+- Codex-built task (the default) → **Claude** reviews — Sonnet routine, `model: opus` for the high-risk dual-pass set (ADR-032).
 - Opus-built task (the fallback) → **Codex** reviews (`codex exec`) — but Opus builds only because Codex
   quota is out, so this usually degrades to single-model + human flag (apex-governance § Cross-model review).
 

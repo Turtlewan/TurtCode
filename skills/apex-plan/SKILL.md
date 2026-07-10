@@ -1,12 +1,14 @@
 ---
 skill: apex-plan
 backend: claude
-version: 1.30.0
-last_updated: 2026-07-09
+version: 1.32.1
+last_updated: 2026-07-10
 sources:
   - APEX Design Specification 2026-05-24
   - GSD (Get Shit Done) — github.com/gsd-build/get-shit-done
   - docs/technical/adr/ADR-010-multi-pass-review.md
+  - docs/technical/adr/ADR-031-codex-context-propagation.md
+  - docs/technical/adr/ADR-032-gpt56-role-split.md
   - docs/technical/adr/ADR-011-instinct-loop-no-engine.md
   - docs/technical/adr/ADR-013-app-flow-artifact.md
   - docs/technical/adr/ADR-014-living-capability-overview.md
@@ -58,19 +60,13 @@ Compute three signals and report them in one line (say "clean" if none fire):
 3. **Overview staleness** — overview.md older than the newest ADR, **or not updated since the last
    spec archived to docs/changes/done/** (a change shipped but the capability list wasn't merged —
    ADR-014) → flag "overview may be stale vs ADR-NNN / vs last archive."
-4. **Conceptual data model still a stub** (data-bearing projects only) — does
-   `docs/technical/architecture/data-model.md` exist and still carry the `<!-- apex:data-model:stub -->`
-   marker while a spec touches data/schema? → flag "data model is still a stub." Skip for stateless
-   projects (no such file by design — ADR-008).
-5. **App-flow still a stub** (UI-bearing projects only) — does
-   `docs/technical/architecture/app-flow.md` exist and still carry the `<!-- apex:app-flow:stub -->`
-   marker while a UI/screen spec is in play? → flag "app-flow is still a stub." Skip for headless
-   projects (no such file by design — ADR-013).
-6. **Design-brief still a stub** (UI-bearing projects only) — does
-   `docs/technical/architecture/design-brief.md` exist and still carry the
-   `<!-- apex:design-brief:stub -->` marker while a UI spec is in play? → flag "design-brief is still
-   a stub" (the image-less coder has no tokens/forbidden-patterns to honour). Skip for headless
-   projects (no such file by design — ADR-017).
+4. **Architecture artifact still a stub** (scope-gated) — `data-model.md` (data-bearing, ADR-008) ·
+   `app-flow.md` (UI-bearing, ADR-013) · `design-brief.md` (UI-bearing, ADR-017), all under
+   `docs/technical/architecture/`: the file exists, still carries its `<!-- apex:…:stub -->` marker,
+   and a spec in its scope is in play (data/schema spec · UI/screen spec) → flag "{artifact} is
+   still a stub." Headless/stateless projects skip by design (no such file).
+5. **AGENTS.md still stubbed** — the repo-root `AGENTS.md` carries an `<!-- apex:agents:stub -->` /
+   `<!-- apex:agents:verify -->` marker while ≥1 spec sits in docs/changes/ → flag it (Codex builds read AGENTS.md, not the skills — ADR-031).
 
 Example: "Doc coverage: overview is still a stub; 1 decision not yet ADR'd."
 
@@ -223,6 +219,8 @@ As you build the spec, enforce these rules inline:
   + a single ADR/discussion link. Not a rationale paragraph.
 - **No *why* inline.** Litmus when tempted: does it change what gets built? **No** → cut it
   (home = ADR / planning discussion). **Yes** → don't add the why, make the *what* explicit.
+  One sanctioned exception: the template's `## Intent` block (intent / invariants / non-goals, ≤10
+  lines) — load-bearing intent that travels to the coder in the dispatch pack (ADR-031); ADR-essay rationale still cut.
 - **Cross-cutting conventions live in the skill's `impl.md`, never copied into the spec** —
   the spec is the task-specific delta; the skill is the shared baseline.
 
@@ -235,14 +233,16 @@ As you build the spec, enforce these rules inline:
 dependency analysis here so coding mode executes the grouping verbatim with zero inference.
 Tasks whose independence you can't establish go in sequential waves.
 
-**Cross-model review — set the flag for high-stakes builds.** For an auth / security /
-data-migration spec, set `cross_model_review: true` in the spec frontmatter so coding mode runs
-an independent second review on the *other* model family before shipping (apex-governance
-§ Cross-model review). It spends Claude-side capped-pool tokens and needs a second backend
-(Mac), so set it deliberately for the builds that earn it — never as a default.
+**Cross-model review — set the flag for high-stakes builds.** For an auth / security / data-migration
+spec, set `cross_model_review: true` in the frontmatter — coding mode runs an independent second review
+by the *other* model family before shipping (apex-governance § Cross-model review). Deliberate, never a default.
 
 Then dispatch domain review (below), resolve its findings, and run the Readiness Gate (below).
-Only move to docs/changes/ when the gate passes.
+After the gate passes, run the **Sol plan-check gate** (ADR-032): dispatch a cold `gpt-5.6-sol`
+read of the spec (read-only, schema'd, effort max) per `references/sol-plan-check.md` — advisory
+by default, **blocking for `risk: high`**; Sol never edits the spec; skip only trivial
+single-domain specs. For high-risk specs you may *offer* (never auto-run) the ≤2-round
+cross-model deliberation in the same reference. Only move to docs/changes/ when gate + plan-check are resolved.
 
 ### Dispatched domain review — Deep Details only
 
@@ -402,6 +402,9 @@ Documentation
       still a stub. Shaping decisions link to their ADRs.
   [ ] App-flow currency: every UI/screen spec names which app-flow screen(s)/journey it implements,
       and app-flow.md is de-stubbed if it was still a stub (UI-bearing projects — ADR-013)
+  [ ] AGENTS.md currency: at first spec-ready — and whenever this spec changes repo layout,
+      conventions, or the stack binding — the root AGENTS.md stub sections are populated per
+      references/agents-md-population.md (ADR-031)
 ```
 
 If any item fails: surface what is unresolved, revise in-place, re-run gate from top. Repeat until clean.
@@ -409,17 +412,14 @@ If any item fails: surface what is unresolved, revise in-place, re-run gate from
 ## Model-routing build planning — coders {codex (default), opus (fallback)}
 
 `coder_models` from status.md (default `[codex]`; ADR-027): **Codex builds every task; Opus is the
-manual fallback at quota-out** (a build-time event handled by apex-code, not a planning route). So emit
-the normal **untagged `## Wave plan`** (every task → Codex; don't tag `▸opus` proactively); a spec's
-optional `coder_model: opus` frontmatter pins the whole spec to Opus up front; the one real per-spec lever is **reasoning effort** — `coder_effort: {low|medium|high|xhigh|max|ultra}` (default `medium`; `high` for risk:high/auth/security/data/hard, `low` for trivial, `max`/`ultra` rare escalation rungs — see references/model-routing.md § Reasoning-effort dial; ADR-030).
+manual fallback at quota-out** (a build-time event handled by apex-code, not a planning route). Emit the
+normal **untagged `## Wave plan`**; `coder_model: opus` pins a whole spec; the one real per-spec lever is **reasoning effort** — `coder_effort: {low|medium|high|xhigh|max|ultra}` (default `medium`; `high` for risk:high/auth/security/data/hard, `low` for trivial, `max`/`ultra` rare rungs — references/model-routing.md; ADR-030).
 Full rubric (effort dial, family-aware review, fallback mechanic, archived DeepSeek mapping) → `references/model-routing.md`.
 
 ## Confirmation digest — how the user signs off
 
-At spec-confirm time, do **not** tell the user to "go read the file." They lived the
-discussion; sending them to re-read a stripped-down restatement is the redundant step.
-Instead surface a **digest** in chat — only the fields where the written spec could have
-drifted from what you discussed — and let them verify *that*. Depth is mode-gated.
+At spec-confirm time, do **not** tell the user to "go read the file." Surface a **digest** in chat —
+only the fields where the written spec could have drifted from the discussion — and let them verify *that*. Depth is mode-gated.
 
 **Digest = the load-bearing, high-drift fields only:**
 - **Files** — every path + operation (create / modify / delete)

@@ -8,9 +8,11 @@ makes a long Codex build watchable instead of blind, at ~zero host-context cost.
 Run the dispatch **backgrounded** (Bash `run_in_background`), splitting Codex's output two ways:
 
 ```
-printf '%s' "<prompt>" | codex exec -p apex-coder --sandbox workspace-write -m gpt-5.6-terra \
+printf '%s' "<dispatch pack>" | codex exec -p apex-coder --sandbox workspace-write -m gpt-5.6-terra \
   -c model_reasoning_effort="<effort>" \
-  -C <repo-or-worktree> --json -o <scratch>/codex-<task>.final --color never \
+  -C <repo-or-worktree> --json \
+  --output-schema ~/.claude/skills/apex-code/references/codex-completion-schema.json \
+  -o <scratch>/codex-<task>.final --color never \
   > docs/progress/codex-<task>.log 2>&1
 ```
 
@@ -23,8 +25,9 @@ printf '%s' "<prompt>" | codex exec -p apex-coder --sandbox workspace-write -m g
 `max` and `ultra` are server-validated-accepted; a bogus value is rejected). Semantics above `xhigh`:
 
 - **`max`** — reserve for the hardest *single* tasks: state migrations, IAM/auth-critical work, gnarly
-  concurrency. This is the top rung of the verify-fail recovery ladder (`medium→high→xhigh→max`) before
-  falling back to Opus — see § Model-routing dispatch in SKILL.md.
+  concurrency. This is the top *effort* rung of the verify-fail recovery ladder (`medium→high→xhigh→max`); above it
+  sits the Sol model rung (`-m gpt-5.6-sol`, once, effort max — ADR-032) and only then the Opus fallback
+  (quota-out and Claude-judgment cases skip Sol — see § Model-routing dispatch in SKILL.md).
 - **`ultra`** — a RARE per-task escalation rung *above* `max`. `ultra` spawns in-model subagents, so
   token usage multiplies — codex 0.144 warns about concurrency at ultra effort. Because of that
   multiplier, an `ultra` task counts **double** against `max_parallel_codex` (ADR-028) — or run `ultra`
@@ -35,9 +38,11 @@ printf '%s' "<prompt>" | codex exec -p apex-coder --sandbox workspace-write -m g
   counts) as JSONL to `docs/progress/codex-<task>.log`. **This is the live feed** — both the user's
   deep-inspection file and the host's pulse source (below). The `usage` events make the log a live
   Codex-cost/quota meter.
-- `-o <…>.final` → only Codex's final message. **The host reads this** (small) on completion, plus the
-  exit code and `git diff --stat`. Codex's own tokens are unchanged: the events already exist; `--json`
-  only emits them.
+- `-o <…>.final` → the schema-constrained completion JSON (ADR-031: status / changed_files /
+  commands_run / deviations / unresolved / blocker). **The host reads this** (small) on completion,
+  plus the exit code and `git diff --stat`, and routes `status` per
+  `references/dispatch-pack.md` § Completion routing. Codex's own tokens are unchanged: the events
+  already exist; `--json` only emits them.
 - `--color never` keeps the JSONL clean for tailing/parsing.
 
 ## Progress pulses to chat — DEFAULT ON (the visibility fix)

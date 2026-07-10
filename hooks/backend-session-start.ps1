@@ -26,15 +26,15 @@ You SHOULD: look for technical change specs in docs/changes/*.md (or wherever th
     # `codex exec` subprocess from this host; Opus builds inline only when Codex quota is out.
     $coderTier = ''
     $mode = 'CODING'
-    $backend = 'Anthropic (Claude coding mode -- Opus fallback coder)'
+    $backend = 'Anthropic (Claude coding mode -- Codex primary coder)'
     $model = $env:ANTHROPIC_MODEL
-    $coderModel = if ($model) { $model } else { 'Opus (fallback coder for this mode)' }
+    $coderModel = if ($model) { $model } else { 'Sonnet 5 (default host -- ADR-032; set via /model or ANTHROPIC_MODEL)' }
     $policy = @"
 Mode: CODING (Claude coding mode -- Anthropic backend + APEX_MODE=coding)
-Coder model: $coderModel. This is the Codex-quota FALLBACK build path (ADR-027): Codex (gpt-5.6-terra) is the primary coder, dispatched per task via `codex exec`; when Codex quota is exhausted this Opus host builds the task inline itself. No backend swap.
+Host model: $coderModel. The host orchestrates dispatch and runs the verify loop (ADR-032). Codex (gpt-5.6-terra) is the primary coder, dispatched per task via `codex exec`; verify-fail escalation and the Opus quota-out fallback are handled per apex-code section Model fallback. No backend swap.
 You MAY: edit source code, run build/test/lint commands, complete implementation tasks. The planning write-guard is relaxed in this mode.
 You SHOULD: look for technical change specs in docs/changes/*.md and execute them, same as any coding session. After completing each spec, update its status (mark Done at top, or move it to docs/changes/done/).
-SOFT POOL GUARD (ADR-027, scoped to fallback): Opus building draws the SAME scarce Max weekly pool as planning, with NO programmatic cap. Treat an Opus-fallback build as a budgeted exception -- prefer parking or splitting the build over draining the shared pool, surface remaining planning headroom before a large fallback build, and track usage via /status. Mode discipline, not a hard block.
+SOFT POOL GUARD (ADR-027, scoped to the Opus fallback only -- Sonnet hosting draws a separate bucket): Opus building draws the SAME scarce Max weekly pool as planning, with NO programmatic cap. Treat an Opus-fallback build as a budgeted exception -- prefer parking or splitting the build over draining the shared pool, surface remaining planning headroom before a large fallback build, and track usage via /status. Mode discipline, not a hard block.
 "@
 } else {
     $coderTier = ''
@@ -42,7 +42,7 @@ SOFT POOL GUARD (ADR-027, scoped to fallback): Opus building draws the SAME scar
     $backend = 'Anthropic (Opus or other Claude model)'
     $policy = @"
 Mode: PLANNING (Anthropic backend)
-You SHOULD NOT routinely edit source code files. The PreToolUse hook gates Write/Edit on non-.md files behind an APPROVAL PROMPT (permissionDecision 'ask' -- not a hard block); the APEX project + ~/.claude pass silently. Default: defer code edits to a DeepSeek coding session. One sanctioned exception -- capability-routed UI escalation (ADR-020): you MAY approve the prompt for a bounded, view-layer-only UI fix when an inherently-visual divergence can't be resolved by prose to the image-blind coder. See apex-governance.
+You SHOULD NOT routinely edit source code files. The PreToolUse hook gates Write/Edit on non-.md files behind an APPROVAL PROMPT (permissionDecision 'ask' -- not a hard block); the APEX project + ~/.claude pass silently. Default: defer code edits to a coding session (APEX_MODE=coding; Codex-primary -- ADR-027).
 You SHOULD: produce technical change specs as Markdown files under docs/changes/<short-name>.md. A spec is an execution script, not a design doc â€” rich on the *what*, stripped of the *why*. Each spec must include:
   1. Identity: one line â€” what this builds (+ optional ADR/discussion link). No rationale paragraph; no *why* inline.
   2. Files to change: full paths; every task names its exact files.
@@ -50,7 +50,7 @@ You SHOULD: produce technical change specs as Markdown files under docs/changes/
   4. Acceptance criteria: step -> verify, one runnable check per task.
   5. Commands to run: build, test, lint.
 Resolve all risks/open questions before the spec is ready -- do not include a Risks section.
-A later DeepSeek session will execute these specs.
+A later coding session (Codex-primary) will execute these specs.
 
 (apex-orchestrate -> apex-plan will summarise the latest handoff doc, injected below, and list any pending specs in docs/changes/. Let the skill drive this -- do not pre-empt it.)
 "@

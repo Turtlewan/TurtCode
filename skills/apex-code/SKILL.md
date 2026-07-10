@@ -1,8 +1,8 @@
 ---
 skill: apex-code
 backend: claude
-version: 1.27.0
-last_updated: 2026-06-27
+version: 1.29.0
+last_updated: 2026-07-10
 sources:
   - APEX Design Specification 2026-05-24
   - GSD (Get Shit Done) — github.com/gsd-build/get-shit-done
@@ -15,6 +15,8 @@ sources:
   - docs/technical/adr/ADR-030-codex-reasoning-effort-dial.md
   - docs/technical/adr/ADR-027-codex-primary-opus-fallback-deepseek-archived.md
   - docs/technical/adr/ADR-028-parallel-codex-dispatch.md
+  - docs/technical/adr/ADR-031-codex-context-propagation.md
+  - docs/technical/adr/ADR-032-gpt56-role-split.md
   - donor-analysis (Superpowers 4-status worker contract) — docs/research/donor-analysis/
   - Agent Skills (addyosmani) — github.com/addyosmani/agent-skills
 staleness_threshold: 30d
@@ -42,8 +44,7 @@ is out of scope here; do not invoke it. (See ADR-018.)
 3. List docs/changes/*.md — these are ready specs
 4. Report: "Stack: {stack_skills or 'none'}. Ready specs: {list or 'none'}. In-progress: {spec name and progress, or 'none'}."
 
-**Context discipline:** When executing a spec, read only that spec and the files it explicitly lists.
-Never load docs/handoff/, other pending specs, or ambient project documentation.
+**Context discipline:** when executing a spec, read only that spec and the files it explicitly lists — never docs/handoff/, other pending specs, or ambient project documentation.
 
 If no ready specs: "No specs in docs/changes/. Switch to planning mode to create one."
 
@@ -163,16 +164,16 @@ Pre-flight:
    | `▸` tag | Builder / agent | Model string | Dispatch channel |
    |---------|-----------------|--------------|------------------|
    | `codex` (default) | OpenAI Codex (external CLI) | `gpt-5.6-terra` | **`codex exec -p apex-coder` subprocess — NOT a subagent**, sequential |
-   | `opus` (fallback) | the Opus `APEX_MODE=coding` host, inline | `opus` | built inline in the host session (no subagent, no subprocess) |
+   | `opus` (fallback) | Opus on the Claude host | `opus` | fresh `model: opus` code-worker dispatch (or session `/model opus`) — no subprocess (ADR-032) |
 
-   - **Host = an Opus `APEX_MODE=coding` session (mechanic A).** It dispatches Codex per task and, on quota-out, builds the task itself inline as Opus. DeepSeek (`flash`/`pro`) is archived — ADR-027.
+   - **Host = a Claude `APEX_MODE=coding` session (mechanic A; Sonnet 5 default host — ADR-032).** It dispatches Codex per task; on quota-out the task falls back to Opus (§ Model fallback below). DeepSeek (`flash`/`pro`) is archived — ADR-027.
    - **`codex` dispatch (ADR-026) — runs in THIS session, not the workflow.** `agent()` spawns Claude-Code subagents, so it cannot dispatch the external Codex CLI. apex-code executes each `▸codex` task itself, **sequentially**, via Bash. Codex runs under the **`apex-coder` profile** (`~/.codex/apex-coder.config.toml`: `approval_policy=never` + `workspace-write` network-on; canonical tracked source `apex:docs/technical/setup/codex-apex-coder-profile.toml` — copy it to `~/.codex/` on a new host) so it behaves like a first-class in-session worker — writes, verifies, fixes, iterates; **never halts to escalate** (in non-interactive `exec`, any policy but `never` turns the first sandbox/command failure into a dead-stop). **Pipe the prompt via stdin — never pass it as a positional arg** (a bare-arg `codex exec` hangs in a non-interactive shell waiting on stdin; proven 2026-06-22 pilot):
-     `printf '%s' "<task text + Files for this task + acceptance criterion + the autonomy clause below>" | codex exec -p apex-coder --sandbox workspace-write -m gpt-5.6-terra -c model_reasoning_effort="<coder_effort>" -C <repo-root> --json -o <scratch>/codex-<task>.final --color never > docs/progress/codex-<task>.log 2>&1` — **run it backgrounded** (`run_in_background`). `-c model_reasoning_effort` = the spec's `coder_effort` frontmatter (`{low|medium|high|xhigh|max|ultra}`, default `medium` — omit the flag at medium; ADR-030. `max`/`ultra` are rare escalation rungs above `xhigh` — semantics in `references/codex-observability.md` § Effort ladder). `--json` streams Codex's events to a tailable log; **while it runs the host posts a one-line progress pulse to chat per check-in** (tail-in/one-line-out — a backgrounded Codex otherwise shows nothing in chat until it exits). `-o` captures the final message the host reads on completion. Recipe + effort dial + pulse mechanism + teardown → `references/codex-observability.md`.
-     **Autonomy clause** (append to every coder prompt — config kills halt-to-escalate, this kills report-and-stop-by-disposition): *"Follow AGENTS.md. Surgical scope — touch only the listed files. Work autonomously to completion: run the verify recipe, and if a test fails / lint errors / you hit a problem, fix it and re-run — do not stop to ask. Only end when the acceptance criterion passes, or you are genuinely blocked (missing credential, ambiguous spec) — then state exactly what blocked you."*
+     `printf '%s' "<the dispatch pack — assemble per references/dispatch-pack.md>" | codex exec -p apex-coder --sandbox workspace-write -m gpt-5.6-terra -c model_reasoning_effort="<coder_effort>" -C <repo-root> --json --output-schema ~/.claude/skills/apex-code/references/codex-completion-schema.json -o <scratch>/codex-<task>.final --color never > docs/progress/codex-<task>.log 2>&1` — **run it backgrounded** (`run_in_background`). `-c model_reasoning_effort` = the spec's `coder_effort` frontmatter (`{low|medium|high|xhigh|max|ultra}`, default `medium` — omit the flag at medium; ADR-030. `max`/`ultra` are rare escalation rungs above `xhigh` — semantics in `references/codex-observability.md` § Effort ladder). `--json` streams Codex's events to a tailable log; **while it runs the host posts a one-line progress pulse to chat per check-in** (tail-in/one-line-out — a backgrounded Codex otherwise shows nothing in chat until it exits). `-o` captures the final message the host reads on completion. Recipe + effort dial + pulse mechanism + teardown → `references/codex-observability.md`.
+     **Dispatch pack (ADR-031)** — every coder prompt is the four-slot pack **Goal → Context → Constraints → Done-when**, assembled per `references/dispatch-pack.md`: spec `## Intent` block + authorized files + resolved decisions + 3–7 task-relevant hazards from the loaded impl cores + the autonomy clause (verbatim in that reference). The final message is schema-constrained (`references/codex-completion-schema.json`: status / changed_files / commands_run / deviations / unresolved / blocker) — route `status` per `references/dispatch-pack.md` § Completion routing; `blocked` = spec defect → Forks, never model-fallback.
      Codex returns its own diff; apex-code then runs the spec's Verification Recipe on it like any task. **Blast radius:** the Codex subprocess does NOT ride Claude Code's `permissions.deny` floor — `workspace-write` is its only guardrail, so keep it repo-confined (never `danger-full-access`). Codex tasks default to **sequential**; for a wave with 2+ independent `▸codex` tasks the host fans them out concurrently — see § Parallel Codex dispatch (ADR-028) below.
    - **Windows sandbox artifact ownership (`▸codex`).** The Windows restricted-token sandbox tags files written by Codex's *shell commands* with the sandbox SID — the interactive user can't delete them without elevation. Codex's *source-file edits* are unaffected (normal-user-owned). Two rules keep this from biting: (1) the `apex-coder` profile suppresses the common in-tree caches (`PYTHONDONTWRITEBYTECODE`, `PYTEST_ADDOPTS=-p no:cacheprovider`); (2) **install dependencies as the normal user in the apex-code session** (`npm install` / `uv sync` etc. before or as part of the verify step) — never let the Codex subprocess create `node_modules`/`.venv`, or the verify (run as your user) hits a locked tree. To clear any locked residue **without elevation**, run a cleanup `codex exec -p apex-coder --sandbox workspace-write -C <repo> "delete <dir>"` — Codex runs under the same sandbox SID that owns the files, so it can remove them (proven 2026-06-22); an elevated `Remove-Item -Recurse -Force` is the fallback (normal-user `takeown` reclaims source files but not deep-locked cache dirs).
-   - **No backend swap.** Codex runs as a subprocess (its own auth); the Opus fallback builds inline in the same `APEX_MODE=coding` host. No `ANTHROPIC_BASE_URL` change, no restart.
-   - **Fallback (codex → opus):** if `codex --version` fails, or Codex quota is exhausted mid-run (non-zero exit / rate-limit error from `codex exec`), the task **falls back to Opus** — the host builds it inline + logs it (never silent). Whole-spec `coder_model: <m>` frontmatter (`{codex|opus}`) pins every task (no routing).
+   - **No backend swap.** Codex runs as a subprocess (its own auth); the Opus fallback runs as a fresh `model: opus` worker in the same `APEX_MODE=coding` host (ADR-032). No `ANTHROPIC_BASE_URL` change, no restart.
+   - **Fallback (codex → opus):** if `codex --version` fails, or Codex quota is exhausted mid-run (non-zero exit / rate-limit error from `codex exec`), the task **falls back to Opus** — a fresh `model: opus` worker, logged (never silent). Whole-spec `coder_model: <m>` frontmatter (`{codex|opus}`) pins every task (no routing).
 
    #### Parallel Codex dispatch (ADR-028)
 
@@ -196,8 +197,7 @@ Pre-flight:
 tasks during Wave Analysis. If a task appears too coarse to verify atomically after
 completion, treat it as a GRAY fork and route back to planning.
 
-Context note: each worker agent starts with a fresh ~200k context scoped to its assigned tasks.
-The main window stays lean. All shared state flows through spec files and git history — not handoff docs or conversation memory.
+Context note: each worker starts with a fresh ~200k context scoped to its tasks; the main window stays lean — shared state flows through spec files and git history only.
 
 During execution:
 - Execute waves in the order produced by Wave Analysis
@@ -265,14 +265,16 @@ a visual direction).
 **Model fallback on verify-fail or quota-out (ADR-027; one fallback per task, ADR-015):**
 The default coder is Codex. Fall back to Opus when a Codex task won't converge after honest recovery, **or**
 Codex quota is exhausted (non-zero exit / rate-limit from `codex exec`):
-- **Effort bump first (ADR-030):** on a Codex *verify-fail* (not a quota-out), re-dispatch the same task at one notch higher `model_reasoning_effort` (`medium→high→xhigh→max`) before any model fallback — more thinking on the same Codex pool is the cheaper retry. Exhausted the dial (already `max`) or quota-out → fall back:
-- **codex → opus (manual fallback):** capture-at-halt, recommend the switch; on operator confirmation the
-  Opus `APEX_MODE=coding` host builds the task **inline itself** (no subprocess, no session swap — the
-  write-guard is already relaxed under `APEX_MODE=coding`) and re-runs the recipe. Opus draws the shared Max
+- **Completion-contract routing first (ADR-031):** a schema-valid `status: blocked` is a *spec* defect — Forks (capture-at-halt), never a model fallback. A process-level death (non-zero exit / no valid `.final`) with a rate-limit/quota signature in the log tail is **paused, not failed** — park + checkpoint In-Flight, then operator choice: wait for quota reset (re-dispatch Codex) vs Opus now. Only a genuine verify-fail enters the effort ladder below.
+- **Effort bump first (ADR-030):** on a Codex *verify-fail* (not a quota-out), re-dispatch the same task one notch higher on `model_reasoning_effort` — from the task's current `coder_effort` toward `max` (`low→medium→high→xhigh→max`; a task already at `ultra` goes straight to the Sol rung) — logging each rung in the decisions table (a resumed build reads it; never repeat a rung).
+- **Sol rung next (ADR-032):** dial exhausted (at `max`) → re-dispatch the task once on `-m gpt-5.6-sol` (same subprocess mechanics, profile, and ChatGPT quota; keep effort `max`). Opus comes only after Sol fails, or at quota-out (Sol shares the dead pool — skip straight to Opus). A GRAY fork is NOT an escalation trigger — it routes to the user per § Forks, never silently to Opus → fall back:
+- **codex → opus (manual fallback):** capture-at-halt, recommend the switch; on operator confirmation the task is
+  built by **Opus** — a fresh `model: opus` code-worker dispatch from the host, or switch the session
+  (`/model opus`) for a fallback-heavy build (no backend swap; write-guard already relaxed) — then re-run the recipe. Opus draws the shared Max
   pool, so gate it (apex-governance § soft pool guard). Under parallel dispatch (ADR-028) a quota-out on
   any concurrent subprocess fails the whole Codex pool → fall back the remaining sub-wave tasks to Opus
   (sequential).
-- One fallback is the retry; if Opus still fails, fork (capture-at-halt).
+- Each rung runs once — never loop a rung; if Opus still fails, fork (capture-at-halt).
 
 **context7 at the write step:** before writing non-trivial code against the active stack/
 framework, consult **context7** for its current API/syntax — getting it right first means fewer
@@ -298,7 +300,7 @@ If no file matches any row → skip. Proceed to next wave.
 **Step 2 — dispatch (santa-method dual-pass, in parallel — ADR-010):**
 
 The matched domains (auth/security/data) are the critical subset, reviewed by independent
-`apex-wave-reviewer` instances — **two** (dual-pass) where a missed violation is shipped-code
+`apex-wave-reviewer` instances (fresh-context, host family; dispatch with `model: opus` for auth/security/data and any `risk: high` spec — ADR-032) — **two** (dual-pass) where a missed violation is shipped-code
 defect-grade, **one** otherwise, per the **pass-count rule** below. For each domain resolving to
 dual-pass dispatch two reviewers in parallel (one for single-pass), each with identical inputs:
 - `changed_files`: list of file paths written in this wave
@@ -373,8 +375,7 @@ differently).
 This is what makes re-engagement cheap — without it, planning must re-read the whole spec to
 reconstruct the problem.
 
-**A blocked spec stays in `docs/changes/` marked `blocked`** — do NOT move it to `drafts/`.
-That relocation (patch-in-place vs full re-draft) is planning's judgment, not coding's.
+**A blocked spec stays in `docs/changes/` marked `blocked`** — do NOT move it to `drafts/`; that relocation (patch-in-place vs re-draft) is planning's judgment, not coding's.
 
 ### Edit Mode
 
@@ -406,14 +407,14 @@ Execute in this order:
    **Cross-model review — only if the spec frontmatter has `cross_model_review: true`**
    (apex-governance § Cross-model review). After apex-reviewer returns, run an independent review by a
    **different model family than the builder** (family-aware, ADR-026):
-   - **Per task, derive the reviewer from the builder:** Codex-built (the default) → **Opus** reviews;
-     Opus-built (the fallback) → **Codex** reviews. (Default whole-build path: Codex built → Opus reviews
-     the diff.)
+   - **Per task, derive the reviewer from the builder (ADR-032):** Codex-built (the default) → **Claude**
+     reviews — host family (Sonnet) routine, `model: opus` for the high-risk dual-pass set (auth/security/
+     data, `risk: high`); Opus-built (the fallback) → **Codex** reviews. (Default: Codex built → Claude reviews the diff.)
    - **Codex review** runs via Bash, read-only, schema'd — full invocation + schema + prompt in
      `references/codex-review.md`. **Pipe the prompt via stdin** (bare-arg hangs):
      `printf '%s' "<review prompt + acceptance criteria + git diff>" | codex exec -c approval_policy="never" --sandbox read-only --output-schema ~/.claude/skills/apex-code/references/codex-review-schema.json -o <out.json> -m gpt-5.6-terra`, then read `<out.json>` (the schema-constrained final message: `{findings[], verdict}`). (`approval_policy=never` so a sandboxed command never stalls the review; read-only keeps zero blast radius — no profile needed here.)
      Give it the spec + changed files only — **never** apex-reviewer's findings (evaluator independence).
-   - **Opus review** (for Codex-built tasks — the common path) → dispatch one `apex-reviewer` on the Claude family, same independence rule.
+   - **Claude review** (for Codex-built tasks — the common path) → dispatch one `apex-reviewer` on the host family (Sonnet); `model: opus` for high-risk. Same independence rule.
    - Combine: a finding **both** raise → high-confidence, resolve before "complete"; **only one** → decisions
      table "cross-model divergence — human adjudication ⚠️." Codex findings are **advisory** (never auto-block, no auto-fix).
    - **Codex unavailable** (`codex --version` fails **or quota exhausted** — the usual case when Opus is the
@@ -475,9 +476,8 @@ These actions are permanently forbidden. Do not attempt them:
 
 ## Autonomy level reference
 
-(Summary for in-build checks — **apex-governance owns the canonical definitions**; on any
-conflict, governance wins. Note: the per-spec commit prompt in global CLAUDE.md applies at
-every level — committing with the user's explicit approval is never blocked by L2/L3.)
+(Summary — **apex-governance owns the canonical definitions**; on conflict governance wins. The per-spec
+commit prompt in global CLAUDE.md applies at every level — user-approved commits are never blocked by L2/L3.)
 
 L0: Read only — no writes, no commands
 L1: Write files with per-file confirmation — no commands
