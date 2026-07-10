@@ -8,7 +8,7 @@ makes a long Codex build watchable instead of blind, at ~zero host-context cost.
 Run the dispatch **backgrounded** (Bash `run_in_background`), splitting Codex's output two ways:
 
 ```
-printf '%s' "<prompt>" | codex exec -p apex-coder --sandbox workspace-write -m gpt-5.5 \
+printf '%s' "<prompt>" | codex exec -p apex-coder --sandbox workspace-write -m gpt-5.6-terra \
   -c model_reasoning_effort="<effort>" \
   -C <repo-or-worktree> --json -o <scratch>/codex-<task>.final --color never \
   > docs/progress/codex-<task>.log 2>&1

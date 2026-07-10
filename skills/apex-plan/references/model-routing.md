@@ -10,7 +10,7 @@ The old DeepSeek Flash/Pro tiers and the `flash < pro < codex` cost-routing are 
 not in the active menu). If an old project still carries `coder_tier_policy`, treat it as `[codex]`.
 
 ## Per-task selection — collapses to a default + manual fallback
-- **Default: `codex`** for every task — text and image alike (gpt-5.5 is sighted, so the old image gate
+- **Default: `codex`** for every task — text and image alike (gpt-5.6-terra is sighted, so the old image gate
   is moot). No cost-tier decision; do not route proactively to Opus.
 - **Fallback: `opus`**, reached only when Codex quota runs out mid-build (operator-confirmed) — apex-code's
   Opus `APEX_MODE=coding` host builds the task inline. This is a build-time event, not a planning-time
@@ -20,7 +20,7 @@ not in the active menu). If an old project still carries `coder_tier_policy`, tr
 
 ## Reasoning-effort dial — the one real per-task lever (ADR-030)
 Model choice collapsed, but Codex's **reasoning-effort dial** is a genuine per-spec cost/quality lever on
-the *same* `gpt-5.5`. Set it with spec frontmatter `coder_effort: {low|medium|high|xhigh}` (apex-code
+the *same* `gpt-5.6-terra`. Set it with spec frontmatter `coder_effort: {low|medium|high|xhigh}` (apex-code
 passes `-c model_reasoning_effort=<v>` to every `codex exec`). Default `medium` — leave it absent unless
 the spec is clearly off-default.
 - `low` — trivial mechanical specs (rename, config, boilerplate, docstrings): cheaper + faster.

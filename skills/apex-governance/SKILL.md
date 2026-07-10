@@ -68,7 +68,7 @@ critical-file confirmation, or hard block because a particular coder is in use.
 
 ## Coding model routing (ADR-027, supersedes ADR-024/026)
 
-APEX coding is **Codex-primary**: `gpt-5.5` (run as a `codex exec -p apex-coder` subprocess from the
+APEX coding is **Codex-primary**: `gpt-5.6-terra` (run as a `codex exec -p apex-coder` subprocess from the
 build session) is the default coder for every task. The `coder_models` menu is `{codex, opus}`;
 per-task routing collapses to **"codex unless its quota is exhausted, then Opus."** Capability-not-
 authority applies — the model that codes never widens an autonomy gate, critical-file confirmation, or
@@ -90,7 +90,7 @@ DeepSeek (Flash/Pro) is **archived/parked** — recoverable, not in the active m
 ## Capability-routed UI escalation (ADR-020) — RETIRED (ADR-027)
 
 **Retired 2026-06-23.** This carve-out let planning (Claude, multimodal) make a bounded view-layer UI
-edit because the coder (DeepSeek) was **image-blind**. Under ADR-027 the coder is **Codex (`gpt-5.5`,
+edit because the coder (DeepSeek) was **image-blind**. Under ADR-027 the coder is **Codex (`gpt-5.6-terra`,
 native vision)** or **Opus (multimodal)** on fallback — it **sees the render**, so a visual divergence
 is fixed as a **normal coding task**, not a planning-mode escalation. No special exception is needed;
 "planning does not write code" stands without it. The live-preview design loop (design lane → build →
@@ -180,7 +180,7 @@ high-stakes build (auth / security / data migrations). Opt-in, not default. **In
 family ≠ builder family** (family-aware routing, ADR-027):
 - **Codex-built** task (the default coder) → **Opus** (Claude) reviews (`apex-reviewer`, Claude family).
   This is the common path.
-- **Opus-built** task (the fallback coder) → **Codex** (`gpt-5.5`) reviews, via headless `codex exec`
+- **Opus-built** task (the fallback coder) → **Codex** (`gpt-5.6-terra`) reviews, via headless `codex exec`
   (read-only, schema'd — apex-code § Cross-model review + `references/codex-review.md`). **Advisory** —
   never auto-blocks, never auto-fixes. Note: Opus builds only *because* Codex quota is exhausted, so this
   Codex review usually can't run either → degrade to single-model + human flag (below).

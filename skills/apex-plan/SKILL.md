@@ -1,8 +1,8 @@
 ---
 skill: apex-plan
 backend: claude
-version: 1.29.0
-last_updated: 2026-06-27
+version: 1.30.0
+last_updated: 2026-07-09
 sources:
   - APEX Design Specification 2026-05-24
   - GSD (Get Shit Done) — github.com/gsd-build/get-shit-done
@@ -84,12 +84,12 @@ and not filed is lost. **Every handoff item must terminate in exactly one of:**
    or a recurring build lesson / user correction written to a `feedback` **memory** so it re-surfaces)
 4. **Discarded** — explicitly judged not actionable
 
-Land each item's disposition **this session** — do not defer it to "later." The latest
-handoff is read once and never auto-read again, so an undrained item is gone.
+Land each item's disposition **this session** — the handoff is never auto-read again; an undrained item is gone.
 
-**The learning loop.** Build lessons fold into `feedback` memories at the drain. A lesson recurring
-across multiple handoffs has earned promotion — route via `apex-refresh --stocktake` or an
-`apex-skill-author` edit (human-gated, Iron Law applies — ADR-011).
+**The learning loop.** Build lessons fold into `feedback` memories at the drain. Don't wait for
+recurrence when the user flags a deliverable they loved: post-mortem it *while it's still in context*
+(what was reasoned about, what proved it worked) and fold the answer into a `feedback` memory. A
+recurring lesson earns promotion — `apex-refresh --stocktake` or an `apex-skill-author` edit (human-gated, Iron Law — ADR-011).
 
 ## Planning mode toggle
 
@@ -108,7 +108,7 @@ change (scale-adaptive routing). Reserve Deep Details for multi-file / architect
 
 ### Elicit intent before drafting — front-load the build-changing decisions
 
-The coder (Codex `gpt-5.5`; Opus on fallback) executes the spec silently against frozen
+The coder (Codex `gpt-5.6-terra`; Opus on fallback) executes the spec silently against frozen
 acceptance criteria — questions belong in planning, which alone holds the conversation +
 research context. So **all build-changing judgment must be resolved before the spec freezes**;
 planning is the only place that can happen. Pull the decisions you need *before* drafting; do

@@ -87,7 +87,7 @@ The SessionStart hook has already detected the mode; confirm it and route accord
 Detection precedence (first match wins):
 
 1. `ANTHROPIC_BASE_URL` contains `deepseek` → **DeepSeek coding** (ARCHIVED — ADR-027, recovery-only) → route to apex-code.
-2. Else `APEX_MODE=coding` → **Claude coding** = the build host: **Codex (`gpt-5.5`) is the primary coder** (dispatched per task as a `codex exec` subprocess); **Opus is the inline fallback** when Codex quota runs out. Write-guard relaxed → route to apex-code.
+2. Else `APEX_MODE=coding` → **Claude coding** = the build host: **Codex (`gpt-5.6-terra`) is the primary coder** (dispatched per task as a `codex exec` subprocess); **Opus is the inline fallback** when Codex quota runs out. Write-guard relaxed → route to apex-code.
 3. Else → **planning** → route to apex-plan.
 
 Claude coding mode is a real build session, not a planning detour — read specs from docs/changes/,

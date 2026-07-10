@@ -19,7 +19,7 @@ For each parallel task: `git worktree add <path> -b codex/<task-id>` from HEAD, 
 + autonomy clause as the sequential path:
 
 ```
-printf '%s' "<task prompt>" | codex exec -p apex-coder --sandbox workspace-write -m gpt-5.5 -C <worktree> \
+printf '%s' "<task prompt>" | codex exec -p apex-coder --sandbox workspace-write -m gpt-5.6-terra -C <worktree> \
   --json -o <scratch>/codex-<task>.final --color never > docs/progress/codex-<task>.log 2>&1
 ```
 

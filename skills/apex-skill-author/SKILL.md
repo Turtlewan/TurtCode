@@ -205,7 +205,7 @@ Each file is read by a *specific* model, not an abstract capable reader. "Write 
 enforcement content" is necessary but not sufficient — tune it to who runs it. This is the
 most-skipped judgment in `impl.md` authoring.
 
-- **`impl.md` → the coder (Codex `gpt-5.5`; Opus on fallback — ADR-027).** Both are
+- **`impl.md` → the coder (Codex `gpt-5.6-terra`; Opus on fallback — ADR-027).** Both are
   frontier-class, so the old DeepSeek-Flash scaffolding (pre-resolve *every* decision, ≤2 tools
   per step, lockstep checkpointing) is **no longer forced by coder weakness**. What still earns
   its lines:

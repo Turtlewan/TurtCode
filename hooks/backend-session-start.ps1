@@ -22,7 +22,7 @@ You SHOULD: look for technical change specs in docs/changes/*.md (or wherever th
 "@
 } elseif ($isClaudeCoding) {
     # Claude coding mode (ADR-025/027) — the OPUS FALLBACK coder path. Anthropic backend +
-    # APEX_MODE=coding. Codex (gpt-5.5) is the PRIMARY coder, dispatched per task as a
+    # APEX_MODE=coding. Codex (gpt-5.6-terra) is the PRIMARY coder, dispatched per task as a
     # `codex exec` subprocess from this host; Opus builds inline only when Codex quota is out.
     $coderTier = ''
     $mode = 'CODING'
@@ -31,7 +31,7 @@ You SHOULD: look for technical change specs in docs/changes/*.md (or wherever th
     $coderModel = if ($model) { $model } else { 'Opus (fallback coder for this mode)' }
     $policy = @"
 Mode: CODING (Claude coding mode -- Anthropic backend + APEX_MODE=coding)
-Coder model: $coderModel. This is the Codex-quota FALLBACK build path (ADR-027): Codex (gpt-5.5) is the primary coder, dispatched per task via `codex exec`; when Codex quota is exhausted this Opus host builds the task inline itself. No backend swap.
+Coder model: $coderModel. This is the Codex-quota FALLBACK build path (ADR-027): Codex (gpt-5.6-terra) is the primary coder, dispatched per task via `codex exec`; when Codex quota is exhausted this Opus host builds the task inline itself. No backend swap.
 You MAY: edit source code, run build/test/lint commands, complete implementation tasks. The planning write-guard is relaxed in this mode.
 You SHOULD: look for technical change specs in docs/changes/*.md and execute them, same as any coding session. After completing each spec, update its status (mark Done at top, or move it to docs/changes/done/).
 SOFT POOL GUARD (ADR-027, scoped to fallback): Opus building draws the SAME scarce Max weekly pool as planning, with NO programmatic cap. Treat an Opus-fallback build as a budgeted exception -- prefer parking or splitting the build over draining the shared pool, surface remaining planning headroom before a large fallback build, and track usage via /status. Mode discipline, not a hard block.

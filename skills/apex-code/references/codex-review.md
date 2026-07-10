@@ -1,7 +1,7 @@
 # Codex independent review recipe (ADR-026)
 
 Loaded on demand when apex-code runs the family-aware cross-model review (§ Cross-model review). Codex
-(`gpt-5.5`) is the **independent reviewer for Opus-built (fallback) code** (ADR-027 — Codex is the
+(`gpt-5.6-terra`) is the **independent reviewer for Opus-built (fallback) code** (ADR-027 — Codex is the
 default *builder*, so this review path fires only on the Opus fallback); it is **advisory** — it never
 blocks the pipeline and never edits code. Note: Opus builds only when Codex quota is exhausted, so this
 Codex review usually can't run either → apex-code degrades to single-model + human flag.
@@ -14,7 +14,7 @@ From the repo root, after the build. **Pipe the prompt via stdin — never pass 
 printf '%s' "<review prompt below, placeholders filled>" | \
   codex exec -c approval_policy="never" --sandbox read-only \
     --output-schema ~/.claude/skills/apex-code/references/codex-review-schema.json \
-    -o <out.json> -m gpt-5.5 -C <repo-root>
+    -o <out.json> -m gpt-5.6-terra -C <repo-root>
 ```
 Then read `<out.json>` — the schema-constrained final message `{ findings[], verdict }`.
 
@@ -26,7 +26,7 @@ Then read `<out.json>` — the schema-constrained final message `{ findings[], v
 - `--output-schema <file>` → forces the final message into the findings schema. **Strict mode: every
   property must be in `required`; keep `line`/`criterion` nullable** (omitting them → HTTP 400). `-o <file>`
   writes that final message (cleaner than parsing `--json` JSONL).
-- `-m gpt-5.5` → pin the model (Codex churns IDs — re-check after a Codex upgrade).
+- `-m gpt-5.6-terra` → pin the model (Codex churns IDs — re-check after a Codex upgrade).
 - Guard first: if `codex --version` fails, do **not** silently skip — apex-code records the flag
   (§ Cross-model review graceful-degrade).
 

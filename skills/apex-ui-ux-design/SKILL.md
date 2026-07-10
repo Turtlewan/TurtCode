@@ -326,7 +326,7 @@ The brief's art-direction + APEX anti-slop rules outrank any tool's house aesthe
 ## Live preview during build — ADR-020 escalation retired (ADR-027)
 
 The middle of the UI loop, between the design lane (before) and the visual gate (after). The coder
-(Codex `gpt-5.5`, native vision; Opus on fallback) **sees the render** — so a visual divergence is
+(Codex `gpt-5.6-terra`, native vision; Opus on fallback) **sees the render** — so a visual divergence is
 fixed in the build like any other task, and the old Claude-escalation scalpel (ADR-020, built for an
 image-blind DeepSeek coder) is **retired**. The live window is still the **human's** eyes-on loop
 during the build.
