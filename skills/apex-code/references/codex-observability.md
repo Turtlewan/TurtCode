@@ -14,8 +14,23 @@ printf '%s' "<prompt>" | codex exec -p apex-coder --sandbox workspace-write -m g
   > docs/progress/codex-<task>.log 2>&1
 ```
 
-- `-c model_reasoning_effort="<effort>"` → the spec's `coder_effort` frontmatter (`{low|medium|high|xhigh}`,
+- `-c model_reasoning_effort="<effort>"` → the spec's `coder_effort` frontmatter (`{low|medium|high|xhigh|max|ultra}`,
   default `medium`; ADR-030). Omit the flag when the spec is at `medium` to keep the default behaviour.
+
+## Effort ladder — max / ultra (ADR-030, codex-cli 0.144.1+, gpt-5.6 family)
+
+`-c model_reasoning_effort` accepts `low|medium|high|xhigh|max|ultra` on gpt-5.6-family models (both
+`max` and `ultra` are server-validated-accepted; a bogus value is rejected). Semantics above `xhigh`:
+
+- **`max`** — reserve for the hardest *single* tasks: state migrations, IAM/auth-critical work, gnarly
+  concurrency. This is the top rung of the verify-fail recovery ladder (`medium→high→xhigh→max`) before
+  falling back to Opus — see § Model-routing dispatch in SKILL.md.
+- **`ultra`** — a RARE per-task escalation rung *above* `max`. `ultra` spawns in-model subagents, so
+  token usage multiplies — codex 0.144 warns about concurrency at ultra effort. Because of that
+  multiplier, an `ultra` task counts **double** against `max_parallel_codex` (ADR-028) — or run `ultra`
+  tasks sequential/foreground instead of folding them into a parallel wave. Do not reach for `ultra`
+  routinely: it is gated on a pending head-to-head eval against `max` that has not yet run. Use it only
+  as a deliberate, logged escalation, never as a default or an automatic rung in the verify-fail ladder.
 - `--json` → Codex's event stream (reasoning, every shell command it runs, and per-turn `usage` token
   counts) as JSONL to `docs/progress/codex-<task>.log`. **This is the live feed** — both the user's
   deep-inspection file and the host's pulse source (below). The `usage` events make the log a live

@@ -96,10 +96,11 @@ research? (apex-research if domain unknown) → RED (baseline) → GREEN (write)
 2. **RED** — baseline-test per the type table. Sandbox writes to a scratch dir.
 3. **Execution gate — ASK THE USER who writes the files:**
    - **Claude direct** (planning) — recommended for judgment-heavy skills; no round-trip.
-   - **DeepSeek** — write a `docs/changes/` spec; coding mode executes. Use when the skill
-     also needs non-`.md` tooling/code changes.
-   - Skills are pure `.md`, so planning *can* author directly — DeepSeek is a choice, not a
-     requirement. Do not default to DeepSeek.
+   - **Coding mode** — write a `docs/changes/` spec; coding mode (Codex `gpt-5.6-terra`
+     primary; Opus on fallback — ADR-027) executes. Use when the skill also needs
+     non-`.md` tooling/code changes.
+   - Skills are pure `.md`, so planning *can* author directly — coding mode is a choice,
+     not a requirement. Do not default to coding mode.
 4. **GREEN** — write the skill; re-test; verify by reading output.
 5. **REFACTOR** — close loopholes.
 6. **Register** — the triple-write (below).
@@ -111,7 +112,7 @@ Every skill file starts with:
 ```yaml
 ---
 skill: apex-<name>
-backend: claude | deepseek
+backend: planning | coding
 version: 1.0.0
 last_updated: YYYY-MM-DD
 sources:
@@ -130,6 +131,7 @@ description: >
 - **Why APEX diverges from agentskills.io** (which needs only `name`+`description`):
   `version`/`last_updated`/`sources`/`staleness_threshold` drive the staleness-refresh
   system; `backend` drives mode routing; `skill:` is the APEX id. Deliberate, not drift.
+- Legacy values map forward: `claude` → `planning`, `deepseek` → `coding` (ADR-027).
 
 ## The triple-write (mandatory — never skip)
 
@@ -327,5 +329,5 @@ governed by the two-tier core/references convention — see § impl.md loading t
 - [ ] Under 500 lines / 5k tokens
 - [ ] Triple-write done (registry + SKILLS.md + SKILL-HISTORY.md)
 - [ ] Stack skill (if any): distinct-family conventions applied — SKILL+impl, runnable `## Verification Recipe` present and empirically run (not doc-sourced), `apex-research` triggered
-- [ ] Execution gate asked (Claude direct vs DeepSeek)
+- [ ] Execution gate asked (Claude direct vs coding mode)
 - [ ] GREEN verified by reading output; loopholes refactored

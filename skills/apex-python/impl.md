@@ -1,6 +1,6 @@
 ---
 skill: apex-python
-backend: deepseek
+backend: coding
 version: 1.0.0
 last_updated: 2026-05-31
 sources:

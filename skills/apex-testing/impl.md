@@ -1,6 +1,6 @@
 ---
 skill: apex-testing
-backend: deepseek
+backend: coding
 version: 1.3.0
 last_updated: 2026-06-10
 sources:

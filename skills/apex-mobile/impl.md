@@ -1,6 +1,6 @@
 ---
 skill: apex-mobile
-backend: deepseek
+backend: coding
 version: 1.2.0
 last_updated: 2026-06-10
 sources:
@@ -154,7 +154,7 @@ npx eslint .          # lint
 - [ ] `SafeAreaView` / `useSafeAreaInsets` on every screen
 - [ ] `KeyboardAvoidingView` with platform-specific `behavior`
 - [ ] Push notification permissions requested with explanation before prompt
-- [ ] **Device testing (iOS simulator AND Android emulator)**: needs a human with simulators/emulators, which the DeepSeek coding backend **does not have**. **DeepSeek must SKIP this step and flag it for planning-mode (Claude) / human review before any production push** — do not guess or mark it done.
+- [ ] **Device testing (iOS simulator AND Android emulator)**: detect available simulators/emulators on the host and run what's feasible; for each platform that can't be run, report it as not-run with the reason and flag it for planning-mode / human review before any production push — do not guess or mark it done.
 - [ ] `app.json` `scheme` set for deep links
 - [ ] Bundle identifier (iOS) and package name (Android) set before first EAS build
 - [ ] EAS project configured: dev / preview / production profiles in `eas.json`

@@ -166,7 +166,7 @@ Informational, never blocks — it surfaces stack-skill coverage and binds it to
 
 ## Gotchas / edge cases
 
-- **Package name drift**: Package names change (e.g. `next-auth` → `@auth/core` + `next-auth` v5 — status: see § Note on Auth.js v5). The impl.md warns DeepSeek to verify current npm names.
+- **Package name drift**: Package names change (e.g. `next-auth` → `@auth/core` + `next-auth` v5 — status: see § Note on Auth.js v5). The impl.md warns the coder to verify current npm names.
 - **Supabase dual role**: Supabase appears in both the real-time preset (as a realtime provider) and as a hosted auth option. These are separate choices — you can use Supabase realtime without Supabase Auth.
 - **tRPC scope restriction**: tRPC only works if both client and server are TypeScript in the same repo. If the mobile preset (Expo) is in a separate repo from the API, tRPC doesn't apply.
 - **Deployment ≠ hosting**: Vercel provides features beyond hosting (edge middleware, image optimization). Factor this into lock-in analysis when self-hosting is a future option.

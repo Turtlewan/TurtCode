@@ -1,8 +1,8 @@
 ---
 skill: apex-ui-testing
-backend: deepseek
-version: 1.5.1
-last_updated: 2026-06-22
+backend: coding
+version: 1.6.0
+last_updated: 2026-07-10
 sources:
   - Playwright Docs — playwright.dev
   - Storybook (Vitest addon) — storybook.js.org/docs/writing-tests
@@ -12,6 +12,7 @@ sources:
   - docs/technical/adr/ADR-022-deterministic-design-lint-reference.md
   - Impeccable — github.com/pbakaus/impeccable
   - docs/research/design-capability/ (WS-1/WS-4 — text-proxy visual checks)
+  - ADR-027 (sighted coder — Codex gpt-5.6-terra native vision, Opus fallback)
 staleness_threshold: 14d
 description: >
   Use when implementing UI tests — Storybook stories, Playwright E2E, @axe-core/playwright
@@ -37,7 +38,7 @@ apex-mobile; backend/API tests → apex-testing.
 - Import Playwright test utilities outside of test files
 - Use `axe-playwright` / `checkA11y` (legacy community pkg) — use `@axe-core/playwright` `AxeBuilder`
 - Start a new project on Cypress — Playwright is the default; keep Cypress only if already in use
-- Pull a screenshot into context to "check" a UI (`browser_take_screenshot`) — the DeepSeek backend has no image support, so it is a wasted turn; observe via `browser_snapshot` (text a11y tree) instead
+- Pull a screenshot into context for a routine/structural check the a11y tree already answers — `browser_snapshot` is cheaper; reserve `browser_take_screenshot` for genuine visual comparison (design fidelity vs a reference image or brief)
 - Reflexively render/screenshot a UI just because it changed — only the visual-by-nature cases below justify pixels
 
 ## ALWAYS do
@@ -47,10 +48,10 @@ apex-mobile; backend/API tests → apex-testing.
 - Use Playwright locators over CSS selectors (prefer `getByRole`, `getByLabel`)
 - Approve Chromatic baseline before merging a PR with visual changes
 - Test the critical user flow for every new page
-- Observe a running UI agentically via `browser_snapshot` (accessibility tree), never `browser_take_screenshot`
+- Prefer `browser_snapshot` (accessibility tree) for structural/logic checks — cheaper than a screenshot; use `browser_take_screenshot` when the task is a genuine visual comparison (design fidelity vs a reference image or brief)
 - For a human to *see* the UI, surface the running dev-server URL (e.g. `http://localhost:3000`) for them to open — do not render it into context
-- Keep visual-by-nature judgment headless or deferred: layout/CSS regression → Chromatic (automated); design fidelity → flag to planning-mode (Claude), the only backend that can see pixels
-- Verify visual decisions **numerically** against the design brief — `toHaveCSS` token assertions + forbidden-pattern gates (below) — never eyeball them; the coder can't see
+- Layout/CSS regression → Chromatic (automated); design **sign-off** (does it look good, does it match the brief?) stays a planning-mode review gate for evaluator-independence (apex-ui-ux-design § Visual review gate) — a builder shouldn't be sole judge of its own output, sighted or not
+- Verify visual decisions **numerically** against the design brief — `toHaveCSS` token assertions + forbidden-pattern gates (below) — these are cheap, deterministic, and complement (not replace) a visual comparison
 - Prefer the Playwright **CLI** (`npx playwright test`) over the Playwright **MCP** for routine coding-mode verification — the MCP's snapshots cost ~4× the tokens; reserve the MCP for planning-mode review
 
 ## Storybook story pattern
@@ -98,10 +99,11 @@ test('contact page has no a11y violations', async ({ page }) => {
 })
 ```
 
-## Design-brief compliance checks (text-proxy — for the image-less coder)
+## Design-brief compliance checks (deterministic — cheap, run every build)
 
-The coder can't see the UI, so verify visual decisions **numerically** against
-`docs/technical/architecture/design-brief.md` (ADR-017). Deterministic — no vision needed.
+These are fast and mechanical, so run them on every build regardless of any screenshot
+comparison — they catch numeric drift a visual pass can miss and cost far fewer tokens.
+Verify visual decisions against `docs/technical/architecture/design-brief.md` (ADR-017).
 
 ### Token compliance (computed style)
 
@@ -133,14 +135,14 @@ test('no forbidden fonts or gradient backgrounds', async ({ page }) => {
 Generate one token-compliance test per primary component and one forbidden-pattern gate per project,
 seeded from the brief's `## Forbidden patterns` list. These catch the slop defaults the coder reaches
 for; design *fidelity* (does it look good?) still needs the planning-mode visual review gate
-(apex-ui-ux-design § Visual review gate).
+(apex-ui-ux-design § Visual review gate) — an evaluator-independence gate, not a vision workaround.
 
 ### Deterministic design-lint (optional, web-UI only)
 
 `impeccable` is a zero-dependency, LLM-free linter — 44 DOM/CSS anti-pattern rules (low contrast,
 gradient text, cream/AI-default palette, nested cards, layout-property transitions, em-dash overuse,
-…). It mechanically catches slop tells the image-less coder can't see — the maintained version of the
-hand-written forbidden-pattern gate above. **Opt-in per project** — wire it only when the spec or
+…). It mechanically catches slop tells without needing a screenshot pass — the maintained version of
+the hand-written forbidden-pattern gate above. **Opt-in per project** — wire it only when the spec or
 `design-brief.md` calls for it; never add it unprompted.
 
 - On demand:  `npx impeccable@latest detect <file|dir|url>`
@@ -168,4 +170,4 @@ github.com/pbakaus/impeccable (ADR-022).
 - Visual regression baseline unclear — first run always needs human approval in Chromatic
 - E2E tests failing due to auth — flag to apex-backend for session fixture setup
 - axe-core reports contrast violations — flag to apex-accessibility
-- Visual judgment needed (design fidelity, a layout/CSS regression Chromatic can't adjudicate) — flag to planning-mode (Claude); DeepSeek cannot see pixels
+- Design **sign-off** needed (fidelity vs brief, a layout/CSS regression Chromatic can't adjudicate) — flag to planning-mode for the independent review gate (apex-ui-ux-design § Visual review gate)

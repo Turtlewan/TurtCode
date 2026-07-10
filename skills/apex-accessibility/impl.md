@@ -1,6 +1,6 @@
 ---
 skill: apex-accessibility
-backend: deepseek
+backend: coding
 version: 1.3.0
 last_updated: 2026-06-10
 sources:
@@ -103,4 +103,4 @@ only the API changes. Never hand-roll ARIA roles when a native a11y API exists.
   ```
 
   Then run: `npx playwright test a11y.spec.ts` — must pass (0 critical violations)
-- [ ] **Manual screen-reader pass** (VoiceOver / NVDA / TalkBack): needs a human at a real device/screen reader, which the DeepSeek coding backend **does not have**. **DeepSeek must SKIP this step and flag it for planning-mode (Claude) / human review** — do not guess or mark it done. Automation only catches ~30–40%.
+- [ ] **Manual screen-reader pass** (VoiceOver / NVDA / TalkBack): manual screen-reader verification requires a human — the coder runs the automated checks above and reports this step as not-run, flagging it for planning-mode / human review. Do not guess or mark it done. Automation only catches ~30–40%.

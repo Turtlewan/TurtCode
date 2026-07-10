@@ -1,6 +1,6 @@
 ---
 skill: apex-tauri
-backend: claude
+backend: coding
 version: 1.0.0
 last_updated: 2026-06-24
 staleness_threshold: 30d

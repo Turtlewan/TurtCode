@@ -1,6 +1,6 @@
 ---
 skill: apex-system-design
-backend: deepseek
+backend: coding
 version: 1.1.0
 last_updated: 2026-06-01
 sources:
@@ -26,7 +26,6 @@ without evidence. The SQL idempotency-key pattern works in any RDBMS (Postgres/S
 
 ## NEVER do
 
-- Return a different error for "user not found" vs "wrong password" (user enumeration)
 - Use wall-clock time for distributed ordering — use logical clocks or monotonic sequences
 - Share a database connection pool across Lambda invocations without RDS Proxy
 - Assume a message queue delivers exactly once — always design for at-least-once

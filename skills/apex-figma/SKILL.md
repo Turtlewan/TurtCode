@@ -1,13 +1,14 @@
 ---
 skill: apex-figma
-backend: claude
-version: 1.1.0
-last_updated: 2026-06-01
+backend: planning
+version: 1.2.0
+last_updated: 2026-07-10
 sources:
   - Figma MCP Server — developers.figma.com/docs/figma-mcp-server
   - Figma MCP (remote vs desktop) — help.figma.com/hc/en-us/articles/35281385065751
   - Figma Context MCP (GLips/Framelink) — github.com/GLips/Figma-Context-MCP
   - Code Connect — developers.figma.com/docs/code-connect
+  - ADR-027 (sighted coder — Codex gpt-5.6-terra native vision, Opus fallback)
 staleness_threshold: 30d
 description: >
   Use when a spec references a Figma file, design-to-code work is needed, or design tokens
@@ -63,8 +64,9 @@ Install (Claude Code): `claude mcp add --transport http figma https://mcp.figma.
 3. Read existing project components via Code Connect references — reuse before creating new
 4. Translate Figma output into project conventions (per § Stack assumptions — token sink,
    layout primitive, component base)
-5. Validate implementation against original design (screenshot comparison — planning/Claude
-   only; the coding backend skips this, see impl.md)
+5. Validate implementation against original design (screenshot comparison — the coder does this
+   itself during the build, see impl.md § Visual comparison; final sign-off stays a host/planning
+   review gate)
 
 **Key principle**: use existing project components first. Figma output is the spec — not
 literal code.

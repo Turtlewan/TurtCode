@@ -1,6 +1,6 @@
 ---
 name: apex-figma-agent
-description: Fetches Figma design context via MCP and translates it to project component code following design tokens and existing component conventions. DeepSeek only.
+description: Fetches Figma design context via MCP and translates it to project component code following design tokens and existing component conventions.
 tools: Read, Glob, Grep, Edit, Write, Bash
 model: sonnet
 ---

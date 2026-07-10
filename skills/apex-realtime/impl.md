@@ -1,6 +1,6 @@
 ---
 skill: apex-realtime
-backend: deepseek
+backend: coding
 version: 1.2.0
 last_updated: 2026-06-08
 sources:

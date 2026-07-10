@@ -10,9 +10,13 @@ autonomy_level: L2
 # coder_model: codex         # optional — pin this WHOLE spec to one coder. Value from status.md
 #                              coder_models {codex|opus}. Absent → Codex (the default); opus pins the
 #                              whole spec to the Opus fallback coder (ADR-027).
-# coder_effort: medium       # optional — Codex reasoning effort {low|medium|high|xhigh}. Absent →
-#                              medium (default). low = trivial/mechanical; high = risk:high / auth /
-#                              security / data / hard; xhigh = hardest async/eval work only (ADR-030).
+# coder_effort: medium       # optional — Codex reasoning effort {low|medium|high|xhigh|max|ultra}.
+#                              Absent → medium (default). low = trivial/mechanical; high = risk:high /
+#                              auth / security / data / hard; xhigh = hardest async/eval work only;
+#                              max = hardest single tasks (state migrations, IAM/auth-critical, gnarly
+#                              concurrency); ultra = RARE per-task escalation above max — spawns
+#                              in-model subagents, counts DOUBLE against max_parallel_codex, not for
+#                              routine use pending head-to-head eval vs max (ADR-030).
 # max_parallel_codex: 3      # optional — cap on concurrent `codex exec` subprocesses per wave
 #                              (ADR-028). 1 = sequential. Absent → status.md default (auto-sized
 #                              min(4, floor(cores/2)−1), fallback 3). Machine-protection, not a quota cap.

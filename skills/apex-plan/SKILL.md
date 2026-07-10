@@ -411,7 +411,7 @@ If any item fails: surface what is unresolved, revise in-place, re-run gate from
 `coder_models` from status.md (default `[codex]`; ADR-027): **Codex builds every task; Opus is the
 manual fallback at quota-out** (a build-time event handled by apex-code, not a planning route). So emit
 the normal **untagged `## Wave plan`** (every task → Codex; don't tag `▸opus` proactively); a spec's
-optional `coder_model: opus` frontmatter pins the whole spec to Opus up front; the one real per-spec lever is **reasoning effort** — `coder_effort: {low|medium|high|xhigh}` (default `medium`; `high` for risk:high/auth/security/data/hard, `low` for trivial; ADR-030).
+optional `coder_model: opus` frontmatter pins the whole spec to Opus up front; the one real per-spec lever is **reasoning effort** — `coder_effort: {low|medium|high|xhigh|max|ultra}` (default `medium`; `high` for risk:high/auth/security/data/hard, `low` for trivial, `max`/`ultra` rare escalation rungs — see references/model-routing.md § Reasoning-effort dial; ADR-030).
 Full rubric (effort dial, family-aware review, fallback mechanic, archived DeepSeek mapping) → `references/model-routing.md`.
 
 ## Confirmation digest — how the user signs off

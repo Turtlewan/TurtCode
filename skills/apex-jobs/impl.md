@@ -1,6 +1,6 @@
 ---
 skill: apex-jobs
-backend: deepseek
+backend: coding
 version: 1.1.0
 last_updated: 2026-05-31
 sources:

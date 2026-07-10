@@ -1,6 +1,6 @@
 ---
 skill: apex-swift
-backend: deepseek
+backend: coding
 version: 0.2.0
 last_updated: 2026-06-12
 sources:

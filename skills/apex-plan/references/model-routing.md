@@ -20,13 +20,20 @@ not in the active menu). If an old project still carries `coder_tier_policy`, tr
 
 ## Reasoning-effort dial — the one real per-task lever (ADR-030)
 Model choice collapsed, but Codex's **reasoning-effort dial** is a genuine per-spec cost/quality lever on
-the *same* `gpt-5.6-terra`. Set it with spec frontmatter `coder_effort: {low|medium|high|xhigh}` (apex-code
-passes `-c model_reasoning_effort=<v>` to every `codex exec`). Default `medium` — leave it absent unless
-the spec is clearly off-default.
+the *same* `gpt-5.6-terra`. Set it with spec frontmatter `coder_effort: {low|medium|high|xhigh|max|ultra}`
+(apex-code passes `-c model_reasoning_effort=<v>` to every `codex exec`). Default `medium` — leave it
+absent unless the spec is clearly off-default.
 - `low` — trivial mechanical specs (rename, config, boilerplate, docstrings): cheaper + faster.
 - `medium` — default; most specs.
 - `high` — `risk: high`, auth / security / data / concurrency, or algorithmically hard specs.
 - `xhigh` — explicit opt-in for the hardest async / eval-like work only.
+- `max` — reserve for the single hardest tasks a spec can carry: state migrations, IAM/auth-critical
+  work, gnarly concurrency. Sits above `xhigh`; also the top rung of apex-code's verify-fail recovery
+  ladder before falling back to Opus.
+- `ultra` — RARE, per-task escalation above `max`. Spawns in-model subagents, so it counts **double**
+  against `max_parallel_codex` (ADR-028) — or keep `ultra` tasks sequential/foreground instead of folding
+  them into a parallel wave. Gated on a pending head-to-head eval against `max` that hasn't run yet — do
+  not select it routinely at spec-authoring time; treat as a deliberate, logged escalation only.
 
 Cheap to dial up: under config-A the build runs on Codex's **separate pool**, so `high` on a hard spec
 barely touches the scarce Opus pool. Don't blanket-`high` everything — it burns Codex quota faster (→

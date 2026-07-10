@@ -49,7 +49,7 @@ Called by apex-code at the end of every session.
    - **Decisions Made** — autonomous decisions + rationale; mark "review needed" if planning should revisit.
      Tag any *build-time architectural decision* with `[arch]` (a choice that shaped structure —
      a data model, a boundary, a protocol, a dependency). Coding only **tags** it; planning writes
-     the ADR during the drain. Do not author the ADR in coding mode (DeepSeek) — the rationale is
+     the ADR during the drain. Do not author the ADR in coding mode — the rationale is
      judgment-heavy and is planning's job.
    - **Specialist Flags** — the non-obvious gotcha a specialist surfaced that git diff won't show
    - **Blocked Actions** — permissions/architecture calls coding couldn't make; what planning must resolve

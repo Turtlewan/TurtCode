@@ -39,18 +39,26 @@ Concepts here are **provider- and framework-neutral**. The wiring differs by sta
 Provider choice is also swappable — the prompting, agent-loop, structured-output, and eval
 **patterns are identical** across Claude / GPT / Gemini; only model id + client change.
 
-## Current model landscape — June 2026 (⚠ staleness 7d — re-verify, this moves weekly)
+## Current model landscape — verified 2026-07-10 (⚠ staleness 7d — re-verify, this moves weekly)
 
 Pick by task, not by reflex-reaching for the biggest model:
 
 | Tier | Current (Claude family) | Use for |
 |------|-------------------------|---------|
-| Flagship reasoning | **Claude Fable 5** (`claude-fable-5`) | hardest reasoning, critical judgement |
-| Frontier | **Claude Opus 4.8** (`claude-opus-4-8`) | agentic coding, long-horizon autonomous work |
-| **Balanced default** | **Claude Sonnet 4.6** (`claude-sonnet-4-6`, ≈1M context, strong caching) | most production traffic — near-frontier at a fraction of cost |
-| Cheap/fast | **Claude Haiku 4.5** (`claude-haiku-4-5-20251001`) | classification, extraction, routing, high-volume simple tasks |
+| Flagship reasoning | **Claude Fable 5** (`claude-fable-5`, $10/$50 per Mtok, 1M context) — bundled-subscription access reportedly ending 2026-07-12 (API access remains; requires 30-day retention, no ZDR) | hardest reasoning, critical judgement |
+| Frontier | **Claude Opus 4.8** (`claude-opus-4-8`, $5/$25, 1M context) — top Opus tier | agentic coding, long-horizon autonomous work |
+| **Balanced default** | **Claude Sonnet 5** (`claude-sonnet-5`, $3/$15 — intro $2/$10 through 2026-08-31, 1M context) — near-Opus agentic quality; beats Opus 4.8 on Terminal-Bench 2.1 (80.4 vs 74.6) | most production traffic — near-frontier at a fraction of cost |
+| Cheap/fast | **Claude Haiku 4.5** (`claude-haiku-4-5`, $1/$5, 200K context) | classification, extraction, routing, high-volume simple tasks |
 
-Cross-provider peers: GPT-5.x, Gemini 3.x (often cheaper input). **Default to Sonnet-tier**
+**OpenAI peer — GPT-5.6 family (GA 2026-07-09), ~1M context (reported), reasoning effort low..max + ultra (in-model subagents):**
+
+| Tier | Model | Notes |
+|------|-------|-------|
+| Flagship | **Sol** ($5/$30) | Artificial Analysis intelligence index 59 (vs Fable 60); leads AA's Coding-Agent index in the Codex harness |
+| Balanced | **Terra** ($2.50/$15) | ≈ gpt-5.5 quality at half cost |
+| Cheap/fast | **Luna** ($1/$6) | economical tier |
+
+Cross-provider peers also include Gemini 3.x (often cheaper input). **Default to Sonnet-tier**
 for production; reserve Opus/Fable-tier for tasks that measurably need it; route trivial work to Haiku-tier.
 
 ## Patterns — pick the simplest that fits
