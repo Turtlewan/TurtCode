@@ -1,7 +1,7 @@
 ---
 skill: apex-handoff
 backend: claude
-version: 1.4.0
+version: 1.5.0
 last_updated: 2026-06-10
 sources:
   - APEX Design Specification 2026-05-24
@@ -52,6 +52,15 @@ Called by apex-code at the end of every session.
      the ADR during the drain. Do not author the ADR in coding mode — the rationale is
      judgment-heavy and is planning's job.
    - **Specialist Flags** — the non-obvious gotcha a specialist surfaced that git diff won't show
+     - **AFK-only — Sol-pass findings:** for an unattended Build Mode run, docs-technical-agent
+       records one row per P2 or note finding from the standing end-of-run Sol adversarial pass:
+
+       | Severity | Issue | File | Why |
+       |----------|-------|------|-----|
+
+       P1 findings are fixed before the handoff is written and never appear here. If no P2/note
+       findings remain, write `Sol pass: clean` instead of an empty table. Omit this element from
+       Edit Mode handoffs; Edit Mode has no run-wide Sol pass.
    - **Blocked Actions** — permissions/architecture calls coding couldn't make; what planning must resolve
    - **What's Next (discoveries)** — only what the build *learned* (surprises, follow-ups) — NOT a
      restatement of remaining tasks (those live in the spec + In-Flight)

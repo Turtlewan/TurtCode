@@ -1,7 +1,7 @@
 ---
 skill: apex-code
 backend: claude
-version: 1.30.0
+version: 1.31.0
 last_updated: 2026-07-10
 sources:
   - APEX Design Specification 2026-05-24
@@ -55,7 +55,7 @@ If no ready specs: "No specs in docs/changes/. Switch to planning mode to create
 Triggered by: "start build", "start build {spec-name}", "build {spec-name}", "run {spec-name}"
 
 Pre-flight:
-1. Read the full spec — every section
+1. Read the full spec — every section. For an AFK build, capture `run_base_sha = git rev-parse HEAD` now (or reuse the A4 ledger's `base_sha` if dispatch has already begun) for the end-of-run Sol pass (ADR-033 A1, § Post-build steps).
 2. Read token_profile and autonomy_level from spec metadata
    (falls back to docs/status.md, then registry defaults)
 3. Read ## Permissions section — this is the complete list of permitted actions
@@ -415,21 +415,20 @@ Execute in this order:
      `printf '%s' "<review prompt + acceptance criteria + git diff>" | codex exec -c approval_policy="never" --sandbox read-only --output-schema ~/.claude/skills/apex-code/references/codex-review-schema.json -o <out.json> -m gpt-5.6-terra`, then read `<out.json>` (the schema-constrained final message: `{findings[], verdict}`). (`approval_policy=never` so a sandboxed command never stalls the review; read-only keeps zero blast radius — no profile needed here.)
      Give it the spec + changed files only — **never** apex-reviewer's findings (evaluator independence).
    - **Claude review** (for Codex-built tasks — the common path) → dispatch one `apex-reviewer` on the host family (Sonnet); `model: opus` for high-risk. Same independence rule.
-   - Combine: a finding **both** raise → high-confidence, resolve before "complete"; **only one** → decisions
-     table "cross-model divergence — human adjudication ⚠️." Codex findings are **advisory** (never auto-block, no auto-fix).
-   - **Codex unavailable** (`codex --version` fails **or quota exhausted** — the usual case when Opus is the
-     fallback builder, since Codex can't review on a dead pool) → do NOT skip silently: record
-     "cross_model_review requested but codex unavailable — single-model review only ⚠️" and continue.
+   - Combine: a finding **both** raise → high-confidence, resolve before "complete"; **only one** → decisions table "cross-model divergence — human adjudication ⚠️." Codex findings are **advisory** (never auto-block, no auto-fix).
+   - **Codex unavailable** (`codex --version` fails **or quota exhausted** — the usual case when Opus is the fallback builder, since Codex can't review on a dead pool) → do NOT skip silently: record "cross_model_review requested but codex unavailable — single-model review only ⚠️" and continue.
 
-2. Spawn apex-docs-technical-agent:
-   Inputs: spec_path, coder_summary, reviewer_findings, docs_summary, today's date
+2. **AFK only (skip for Edit Mode):** run the standing end-of-run Sol adversarial pass (`references/afk-sol-endgate.md`) over `run_base_sha..HEAD` — the whole run, not one task; read-only, effort max, advisory-only (never auto-edits); triage P1 (fix + reverify before continuing) inline, pass P2/note findings through to the handoff's Sol-pass findings table (ADR-033 A1).
+
+3. Spawn apex-docs-technical-agent:
+   Inputs: spec_path, coder_summary, reviewer_findings, docs_summary, today's date, sol_pass_findings (AFK only)
    It writes the handoff and archives the spec to docs/changes/done/. **On archive it also folds the
    spec's shipped capability into docs/technical/architecture/overview.md → Capabilities (current
    truth) as one terse line — added / modified / removed (merge-on-archive, ADR-014).** A one-liner,
    never a scenario dump.
    Wait for completion.
 
-3. Report to user:
+4. Report to user:
    "Build complete. Handoff at docs/handoff/{date}.md.
    Reviewer: {clean | N findings — see handoff}.
    Decisions made: {count} — review in next planning session."
