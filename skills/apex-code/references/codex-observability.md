@@ -75,3 +75,38 @@ for every spec; the gate's real reason is host *supervision/intervention*, not r
 ## Teardown
 The log is a transient build artifact — remove `docs/progress/codex-<task>.log` at worktree/spec
 teardown, or add `docs/progress/*.log` to the project `.gitignore` once. Never commit it.
+
+## Durable dispatcher (ADR-033 A4)
+
+For AFK/unattended builds, `scripts/codex-dispatch.ps1` replaces the raw `codex exec` invocation
+above — same flags, same dispatch pack, same `--json` log and `-o` `.final` schema output — but
+adds three things a long unattended run needs that a one-shot foreground/backgrounded call does
+not: a guaranteed stdin close, a durable run record, and crash recovery.
+
+**Why:** ad-hoc `codex exec` launches without an explicit stdin-close can wedge for 40+ minutes
+waiting on an inherited stdin in some launch paths — a real recurring incident this wrapper exists
+to make structurally impossible, not just documented against.
+
+**Params:** `-Spec -Task -Worktree -BaseSha -Phase -Prompt [-Effort medium] [-NoOutputTimeoutMin 8]
+[-Adopt]`. `-Prompt` is the assembled dispatch pack text (same four-slot pack as any `▸codex`
+dispatch — `references/dispatch-pack.md`).
+
+**Mechanics:**
+- Launches Codex via `System.Diagnostics.Process` (not `Start-Process`), writes the dispatch pack
+  to the child's redirected stdin, then **immediately closes it** — this is the load-bearing fix.
+- Appends a row to `docs/progress/codex-run-ledger.jsonl` (JSONL, one object per line) **before**
+  launch: `{run_id, pid, worktree, spec, task, base_sha, phase, started, log_path, status:
+  "running"}`. On exit, the same row is rewritten in place (temp-file + atomic replace, mutex-
+  serialized across concurrent wrappers) with `status: "done"|"failed"` + `ended`.
+- **Watchdog:** polls the `--json` log's last-write time every ~15s. No new bytes for
+  `-NoOutputTimeoutMin` minutes (default 8) → the ledger row flips to `status: "stalled"` and the
+  wrapper exits `124`. It does **not** kill the child process — process ownership stays with the
+  caller, who decides whether to terminate a stalled run.
+- **`-Adopt -Spec <X> -Phase <Y>`:** reads the ledger, finds the newest row matching that spec+phase,
+  prints its `worktree` and `git -C <worktree> diff <base_sha>..HEAD` — recovers an orphaned run's
+  work after a session crash without re-dispatching.
+- Windows npm-shim note: `codex` resolves to a `.ps1`/`.cmd` shim that `UseShellExecute=$false`
+  cannot execute directly; the wrapper resolves the real `node.exe` + `codex.js` entry point and
+  invokes that instead.
+- The ledger is runtime state, not source — do not hand-edit it; `docs/progress/` already holds
+  the per-task `--json` logs the ledger's `log_path` field points at.
