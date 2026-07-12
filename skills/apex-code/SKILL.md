@@ -1,7 +1,7 @@
 ---
 skill: apex-code
 backend: claude
-version: 1.31.0
+version: 1.32.0
 last_updated: 2026-07-10
 sources:
   - APEX Design Specification 2026-05-24
@@ -101,6 +101,7 @@ Pre-flight:
    If "done when:" is missing from the task: derive it from the acceptance criteria.
    After completing the task: verify the criterion before checking it off. No exceptions.
    "The task is done when it's verified, not when the code is written."
+   **e. Invariant freshness (A3 — ADR-033):** if the spec predates a program/ADR shift, verify its `## Intent` invariants still hold against the current program; trace any UX lockout/gating it asserts to the current ADR before building — a contradiction is treated like a wrong `Stop` assumption (halt, flag).
 
 7. **Wave Analysis** — runs after Karpathy Pre-Flight, before the first file is touched:
 

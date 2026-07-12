@@ -46,6 +46,8 @@ Then read `<out.json>` — the schema-constrained final message `{ findings[], v
 > not a blocker. If the change is clean, return one CLEAN finding and `verdict: CLEAN`. Judge the code,
 > not intent. Do not invent issues to seem thorough.
 
+Also apply the four silent-regression lenses (`references/silent-regression-lenses.md`, ADR-033 A2) to every diff under review.
+
 ## Output contract
 Schema returns `{ findings: [{severity, file, line?, criterion?, rationale}], verdict }`. apex-code
 surfaces BLOCK/FLAG findings in the build report as **advisory cross-model findings** and combines them
