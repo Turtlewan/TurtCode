@@ -1,7 +1,7 @@
 ---
 skill: apex-code
 backend: claude
-version: 1.32.0
+version: 1.32.1
 last_updated: 2026-07-10
 sources:
   - APEX Design Specification 2026-05-24

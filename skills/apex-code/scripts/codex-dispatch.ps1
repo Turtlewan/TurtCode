@@ -47,9 +47,13 @@ function ConvertTo-ProcessArgument {
     return '"' + $escaped + '"'
 }
 
+# The ledger is deliberately GLOBAL (lives beside the dispatcher, not the target repo): -Adopt
+# must be able to find a crashed run without knowing in advance which repo it happened in. Each
+# dispatch's own log, by contrast, belongs with the repo it built -- so it lives under the
+# target -Worktree's own docs\progress, consistent with every other apex-code Codex log.
 $dispatcherRoot = Split-Path (Split-Path (Split-Path $PSScriptRoot -Parent) -Parent) -Parent
-$progressDirectory = Join-Path $dispatcherRoot 'docs\progress'
-$ledgerPath = Join-Path $progressDirectory 'codex-run-ledger.jsonl'
+$ledgerDirectory = Join-Path $dispatcherRoot 'docs\progress'
+$ledgerPath = Join-Path $ledgerDirectory 'codex-run-ledger.jsonl'
 $schemaPath = Join-Path $dispatcherRoot 'skills\apex-code\references\codex-completion-schema.json'
 $ledgerMutex = [System.Threading.Mutex]::new($false, 'ApexCodexRunLedger')
 
@@ -74,7 +78,7 @@ function Add-LedgerRow {
     param([Parameter(Mandatory)][hashtable]$Row)
 
     Invoke-WithLedgerLock {
-        [System.IO.Directory]::CreateDirectory($progressDirectory) | Out-Null
+        [System.IO.Directory]::CreateDirectory($ledgerDirectory) | Out-Null
         $json = $Row | ConvertTo-Json -Compress -Depth 8
         [System.IO.File]::AppendAllText(
             $ledgerPath,
@@ -180,11 +184,13 @@ if (-not (Test-Path -LiteralPath $schemaPath -PathType Leaf)) {
     throw "Codex completion schema does not exist: $schemaPath"
 }
 
-[System.IO.Directory]::CreateDirectory($progressDirectory) | Out-Null
+$logDirectory = Join-Path $Worktree 'docs\progress'
+[System.IO.Directory]::CreateDirectory($logDirectory) | Out-Null
+[System.IO.Directory]::CreateDirectory($ledgerDirectory) | Out-Null
 [System.IO.Directory]::CreateDirectory($ScratchDirectory) | Out-Null
 $safeSpec = ConvertTo-SafeFileName $Spec
 $safeTask = ConvertTo-SafeFileName $Task
-$logPath = Join-Path $progressDirectory "codex-$safeSpec-$safeTask.log"
+$logPath = Join-Path $logDirectory "codex-$safeSpec-$safeTask.log"
 $finalPath = Join-Path $ScratchDirectory "codex-$safeSpec-$safeTask.final"
 [System.IO.File]::WriteAllText($logPath, [string]::Empty, [System.Text.UTF8Encoding]::new($false))
 
