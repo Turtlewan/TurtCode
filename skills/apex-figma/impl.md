@@ -6,7 +6,7 @@ last_updated: 2026-07-10
 sources:
   - Figma MCP Server — developers.figma.com/docs/figma-mcp-server
   - Figma Context MCP (Framelink) — github.com/GLips/Figma-Context-MCP
-  - ADR-027 (sighted coder — Codex gpt-5.6-terra native vision, Opus fallback)
+  - ADR-027 (sighted coder — Codex gpt-5.6-sol native vision, Opus fallback)
 staleness_threshold: 30d
 description: >
   Use when implementing components from a Figma spec in coding mode. Triggers: Figma URL in
@@ -25,7 +25,7 @@ reuse components, layout-not-absolute, extract-once).
 
 ## Visual comparison — sighted coder, host-fetched assets
 
-The coder (Codex `gpt-5.6-terra`, native vision; Opus fallback — ADR-027) inspects and compares
+The coder (Codex `gpt-5.6-sol`, native vision; Opus fallback — ADR-027) inspects and compares
 screenshots directly. Caveat: a headless `codex exec` subprocess carries no MCP tools of its own —
 the **host** calls the Figma MCP, exports the reference frame/assets to files, and passes those file
 paths in the dispatch for the coder to compare against. Design **sign-off** still lands with the

@@ -2,7 +2,7 @@
 name: apex-afk
 skill: apex-afk
 backend: coding
-version: 1.0.0
+version: 1.0.1
 description: >
   Use for an explicitly human-armed unattended coding run. Triggers: "afk mode",
   "run afk", "afk off", "run overnight", "run unattended". Not for planning,
@@ -25,8 +25,8 @@ Once armed:
 2. Drain the ready build queue using `apex-code` AFK Build Mode.
 3. Follow each build's declared scope, verification recipe, and normal handoff process.
 
-The end-of-run adversarial review pass (A1) belongs to the later sibling
-`afk-sol-endgate` specification; it is not part of this skill yet.
+The end-of-run adversarial review pass (A1) belongs to the sibling
+`apex-code/references/afk-endgate.md`; it is not part of this skill.
 
 ## Disengage
 

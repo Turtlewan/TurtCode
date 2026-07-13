@@ -61,4 +61,4 @@ authorized set, a missing credential."
 | `status: blocked` (+ `blocker`) | **spec defect** | route through Forks (capture-at-halt). Never model-fallback — a spec defect survives the swap |
 | non-zero exit / no valid `.final`, log tail shows a rate-limit / quota signature | **paused, not failed** | park the task + checkpoint In-Flight; operator choice: wait for quota reset (re-dispatch Codex) vs Opus fallback now |
 | non-zero exit, any other signature | process failure | one re-dispatch; if it repeats, treat as verify-fail (effort ladder → fallback) |
-| verify recipe fails on a `done` diff | verify-fail | effort-bump ladder (ADR-030) → Sol rung (ADR-032) → Opus fallback per SKILL.md § Model fallback |
+| verify recipe fails on a `done` diff | verify-fail | effort-bump ladder (ADR-030) → `ultra` rung (ADR-034) → Opus fallback per SKILL.md § Model fallback |

@@ -1,7 +1,7 @@
 ---
 skill: apex-ui-testing
 backend: claude
-version: 1.1.0
+version: 1.1.1
 last_updated: 2026-06-01
 sources:
   - Playwright MCP — github.com/microsoft/playwright-mcp

@@ -12,7 +12,7 @@ sources:
   - docs/technical/adr/ADR-022-deterministic-design-lint-reference.md
   - Impeccable — github.com/pbakaus/impeccable
   - docs/research/design-capability/ (WS-1/WS-4 — text-proxy visual checks)
-  - ADR-027 (sighted coder — Codex gpt-5.6-terra native vision, Opus fallback)
+  - ADR-027 (sighted coder — Codex gpt-5.6-sol native vision, Opus fallback)
 staleness_threshold: 14d
 description: >
   Use when implementing UI tests — Storybook stories, Playwright E2E, @axe-core/playwright

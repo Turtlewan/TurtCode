@@ -1,6 +1,6 @@
 # Silent-regression review lenses (ADR-033 A2)
 
-A2 is a fixed checklist applied at every Codex-diff integration/review, independent of host vigilance. It complements A1's fresh adversarial read in `afk-sol-endgate.md`, but is not a model call.
+A2 is a fixed checklist applied at every Codex-diff integration/review, independent of host vigilance. It complements A1's fresh adversarial read in `afk-endgate.md`, but is not a model call.
 
 1. **Await-before-first-yield in an SSE/async generator** — Detect: an async generator `await`s before its first `yield`. Why: live streaming can silently delay or break because the consumer waits for the first chunk; buffered/non-streaming tests only assert eventual output, not timing.
 

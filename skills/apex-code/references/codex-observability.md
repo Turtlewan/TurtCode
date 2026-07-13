@@ -8,7 +8,7 @@ makes a long Codex build watchable instead of blind, at ~zero host-context cost.
 Run the dispatch **backgrounded** (Bash `run_in_background`), splitting Codex's output two ways:
 
 ```
-printf '%s' "<dispatch pack>" | codex exec -p apex-coder --sandbox workspace-write -m gpt-5.6-terra \
+printf '%s' "<dispatch pack>" | codex exec -p apex-coder --sandbox workspace-write -m gpt-5.6-sol \
   -c model_reasoning_effort="<effort>" \
   -C <repo-or-worktree> --json \
   --output-schema ~/.claude/skills/apex-code/references/codex-completion-schema.json \
@@ -25,15 +25,20 @@ printf '%s' "<dispatch pack>" | codex exec -p apex-coder --sandbox workspace-wri
 `max` and `ultra` are server-validated-accepted; a bogus value is rejected). Semantics above `xhigh`:
 
 - **`max`** — reserve for the hardest *single* tasks: state migrations, IAM/auth-critical work, gnarly
-  concurrency. This is the top *effort* rung of the verify-fail recovery ladder (`medium→high→xhigh→max`); above it
-  sits the Sol model rung (`-m gpt-5.6-sol`, once, effort max — ADR-032) and only then the Opus fallback
-  (quota-out and Claude-judgment cases skip Sol — see § Model-routing dispatch in SKILL.md).
-- **`ultra`** — a RARE per-task escalation rung *above* `max`. `ultra` spawns in-model subagents, so
-  token usage multiplies — codex 0.144 warns about concurrency at ultra effort. Because of that
-  multiplier, an `ultra` task counts **double** against `max_parallel_codex` (ADR-028) — or run `ultra`
-  tasks sequential/foreground instead of folding them into a parallel wave. Do not reach for `ultra`
-  routinely: it is gated on a pending head-to-head eval against `max` that has not yet run. Use it only
-  as a deliberate, logged escalation, never as a default or an automatic rung in the verify-fail ladder.
+  concurrency. The second-highest rung of the verify-fail recovery ladder (`medium→high→xhigh→max`).
+- **`ultra`** — the **final** rung of the verify-fail ladder, above `max` (ADR-034). Reached only when
+  `max` has already failed verification; then the Opus fallback (quota-out cases skip straight to Opus —
+  the Codex pool is dead — see § Model-routing dispatch in SKILL.md).
+  `ultra` spawns in-model subagents, so token usage multiplies — codex 0.144 warns about concurrency at
+  ultra effort. Because of that multiplier, an `ultra` task counts **double** against `max_parallel_codex`
+  (ADR-028) — or run `ultra` tasks sequential/foreground instead of folding them into a parallel wave.
+  **Never a default `coder_effort`, and never reached except as that last automatic rung** — a spec that
+  *starts* a task at `ultra` is a deliberate, logged escalation, not routine. Its worth against `max` is
+  still gated on a head-to-head eval that has not yet run: ADR-034 promoted it on structural grounds (it is
+  the only rung between `max` and the scarce Opus pool), so if the eval disappoints, cut this rung first.
+
+The old Sol model rung (ADR-032) is **gone**: `gpt-5.6-sol` *is* the coder now (ADR-034), so there is no
+higher Codex model to escalate to — the dial is the whole ladder.
 - `--json` → Codex's event stream (reasoning, every shell command it runs, and per-turn `usage` token
   counts) as JSONL to `docs/progress/codex-<task>.log`. **This is the live feed** — both the user's
   deep-inspection file and the host's pulse source (below). The `usage` events make the log a live

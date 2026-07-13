@@ -120,7 +120,7 @@ APEX is active in every session in every project. The orchestrator runs first, b
 
 3. Detect mode (precedence order — first match wins; ADR-027)
    - `ANTHROPIC_BASE_URL` contains "deepseek" → **DeepSeek coding mode** (ARCHIVED — ADR-027, recovery-only) → route to `apex-code`
-   - Else `APEX_MODE=coding` (Anthropic backend + explicit signal) → **Claude coding mode** = the build host (Sonnet 5 default — ADR-032): **Codex (`gpt-5.6-terra`) is the primary coder** (dispatched per task as a `codex exec` subprocess), **Opus is the fallback** (fresh `model: opus` worker) when Codex quota runs out; write-guard relaxed → route to `apex-code`
+   - Else `APEX_MODE=coding` (Anthropic backend + explicit signal) → **Claude coding mode** = the build host (Sonnet 5 default — ADR-032): **Codex (`gpt-5.6-sol`) is the primary coder** (dispatched per task as a `codex exec` subprocess), **Opus is the fallback** (fresh `model: opus` worker) when Codex quota runs out; write-guard relaxed → route to `apex-code`
    - Else (unset / api.anthropic.com, no flag) → **planning mode** → route to `apex-plan`
 
 4. State active context
@@ -146,7 +146,7 @@ On resume: read docs/status.md In-Flight table, surface what was in progress, co
 
 This machine runs Claude Code against two backends, switched via `ANTHROPIC_BASE_URL`. Each backend has a distinct role. A SessionStart hook surfaces the active backend and routes the session through `apex-orchestrate` (each session opens with an `[APEX] Using APEX system` banner); a PreToolUse hook gates planning-mode code edits behind an approval prompt — the APEX project itself and `~/.claude/` system files are exempt (APEX is self-hosting).
 
-**Coder model (ADR-027 — supersedes ADR-024/025).** The build host is **Claude coding mode** (`APEX_MODE=coding` on the Anthropic backend; **Sonnet 5 default host — ADR-032**; write-guard relaxed). In it, **Codex (`gpt-5.6-terra`) is the primary coder** — dispatched per task as a `codex exec` subprocess — and **Opus is the fallback** (fresh `model: opus` worker) when Codex quota is exhausted. **DeepSeek (the `deepseek` URL path below) is archived** (recovery-only). The soft pool guard (scoped to the Opus fallback) is in `apex-governance`. See ADR-027.
+**Coder model (ADR-027 — supersedes ADR-024/025).** The build host is **Claude coding mode** (`APEX_MODE=coding` on the Anthropic backend; **Sonnet 5 default host — ADR-032**; write-guard relaxed). In it, **Codex (`gpt-5.6-sol`) is the primary coder** — dispatched per task as a `codex exec` subprocess — and **Opus is the fallback** (fresh `model: opus` worker) when Codex quota is exhausted. **DeepSeek (the `deepseek` URL path below) is archived** (recovery-only). The soft pool guard (scoped to the Opus fallback) is in `apex-governance`. See ADR-027.
 
 ### The Loop
 

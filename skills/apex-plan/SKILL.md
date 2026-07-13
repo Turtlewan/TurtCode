@@ -1,7 +1,7 @@
 ---
 skill: apex-plan
 backend: claude
-version: 1.32.1
+version: 1.33.0
 last_updated: 2026-07-10
 sources:
   - APEX Design Specification 2026-05-24
@@ -104,7 +104,7 @@ change (scale-adaptive routing). Reserve Deep Details for multi-file / architect
 
 ### Elicit intent before drafting — front-load the build-changing decisions
 
-The coder (Codex `gpt-5.6-terra`; Opus on fallback) executes the spec silently against frozen
+The coder (Codex `gpt-5.6-sol`; Opus on fallback) executes the spec silently against frozen
 acceptance criteria — questions belong in planning, which alone holds the conversation +
 research context. So **all build-changing judgment must be resolved before the spec freezes**;
 planning is the only place that can happen. Pull the decisions you need *before* drafting; do

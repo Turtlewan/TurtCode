@@ -1,7 +1,7 @@
 ---
 skill: apex-governance
 backend: claude
-version: 1.16.0
+version: 1.17.0
 last_updated: 2026-07-10
 sources:
   - APEX Design Specification 2026-05-24
@@ -31,7 +31,7 @@ Referenced by apex-orchestrate and apex-code.
 Full discussion and spec creation in planning. Readiness gate passed.
 Coding runs silently — no questions, no gates, no approvals during execution.
 Unlisted actions blocked and logged. Review decisions in next planning session.
-Every AFK build ends with the mandatory standing end-of-run Sol adversarial pass (owner-ratified spend, ADR-033 A1) before the handoff is written; it is read-only, advisory-only, and never auto-edits.
+Every AFK build ends with the mandatory standing end-of-run **Opus** adversarial pass (owner-ratified spend, ADR-033 A1; model per ADR-034 — cross-family, since Sol is the coder) before the handoff is written; it is read-only, advisory-only, and never auto-edits.
 The one class to capture-and-surface (never block on, never silently decide): a choice that
 **opens the project to the internet or an external service** — log it and raise it at session end.
 
@@ -70,8 +70,8 @@ critical-file confirmation, or hard block because a particular coder is in use.
 
 ## Coding model routing (ADR-027, supersedes ADR-024/026)
 
-APEX coding is **Codex-primary**: `gpt-5.6-terra` (run as a `codex exec -p apex-coder` subprocess from the
-build session) is the default coder for every task. The `coder_models` menu is `{codex, opus}`;
+APEX coding is **Codex-primary**: `gpt-5.6-sol` (run as a `codex exec -p apex-coder` subprocess from the
+build session) is the default coder for every task (ADR-034 — supersedes Terra in this slot). The `coder_models` menu is `{codex, opus}`;
 per-task routing collapses to **"codex unless its quota is exhausted, then Opus."** Capability-not-
 authority applies — the model that codes never widens an autonomy gate, critical-file confirmation, or
 hard block.
@@ -102,7 +102,7 @@ DeepSeek (Flash/Pro) is **archived/parked** — recoverable, not in the active m
 ## Capability-routed UI escalation (ADR-020) — RETIRED (ADR-027)
 
 **Retired 2026-06-23.** This carve-out let planning (Claude, multimodal) make a bounded view-layer UI
-edit because the coder (DeepSeek) was **image-blind**. Under ADR-027 the coder is **Codex (`gpt-5.6-terra`,
+edit because the coder (DeepSeek) was **image-blind**. Under ADR-027/034 the coder is **Codex (`gpt-5.6-sol`,
 native vision)** or **Opus (multimodal)** on fallback — it **sees the render**, so a visual divergence
 is fixed as a **normal coding task**, not a planning-mode escalation. No special exception is needed;
 "planning does not write code" stands without it. The live-preview design loop (design lane → build →
@@ -194,7 +194,7 @@ family ≠ builder family** (family-aware routing, ADR-027):
   context** — never the orchestrating host reviewing its own build): the host family (Sonnet)
   routinely; **Opus** reviewers for the high-risk dual-pass set (auth / security / data,
   `risk: high`). This is the common path (ADR-032).
-- **Opus-built** task (the fallback coder) → **Codex** (`gpt-5.6-terra`) reviews, via headless `codex exec`
+- **Opus-built** task (the fallback coder) → **Codex** (`gpt-5.6-sol`) reviews, via headless `codex exec`
   (read-only, schema'd — apex-code § Cross-model review + `references/codex-review.md`). **Advisory** —
   never auto-blocks, never auto-fixes. Note: Opus builds only *because* Codex quota is exhausted, so this
   Codex review usually can't run either → degrade to single-model + human flag (below).

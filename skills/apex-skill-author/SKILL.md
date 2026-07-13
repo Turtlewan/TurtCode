@@ -1,7 +1,7 @@
 ---
 skill: apex-skill-author
 backend: claude
-version: 1.8.0
+version: 1.8.1
 last_updated: 2026-07-10
 sources:
   - agentskills.io — skill spec & authoring best practices
@@ -97,7 +97,7 @@ research? (apex-research if domain unknown) → RED (baseline) → GREEN (write)
 2. **RED** — baseline-test per the type table. Sandbox writes to a scratch dir.
 3. **Execution gate — ASK THE USER who writes the files:**
    - **Claude direct** (planning) — recommended for judgment-heavy skills; no round-trip.
-   - **Coding mode** — write a `docs/changes/` spec; coding mode (Codex `gpt-5.6-terra`
+   - **Coding mode** — write a `docs/changes/` spec; coding mode (Codex `gpt-5.6-sol`
      primary; Opus on fallback — ADR-027) executes. Use when the skill also needs
      non-`.md` tooling/code changes.
    - Skills are pure `.md`, so planning *can* author directly — coding mode is a choice,
@@ -208,7 +208,7 @@ Each file is read by a *specific* model, not an abstract capable reader. "Write 
 enforcement content" is necessary but not sufficient — tune it to who runs it. This is the
 most-skipped judgment in `impl.md` authoring.
 
-- **`impl.md` → the coder (Codex `gpt-5.6-terra`; Opus on fallback — ADR-027).** Both are
+- **`impl.md` → the coder (Codex `gpt-5.6-sol`; Opus on fallback — ADR-027).** Both are
   frontier-class, so the old DeepSeek-Flash scaffolding (pre-resolve *every* decision, ≤2 tools
   per step, lockstep checkpointing) is **no longer forced by coder weakness**. What still earns
   its lines:

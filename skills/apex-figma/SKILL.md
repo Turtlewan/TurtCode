@@ -1,14 +1,14 @@
 ---
 skill: apex-figma
 backend: planning
-version: 1.2.0
+version: 1.2.1
 last_updated: 2026-07-10
 sources:
   - Figma MCP Server — developers.figma.com/docs/figma-mcp-server
   - Figma MCP (remote vs desktop) — help.figma.com/hc/en-us/articles/35281385065751
   - Figma Context MCP (GLips/Framelink) — github.com/GLips/Figma-Context-MCP
   - Code Connect — developers.figma.com/docs/code-connect
-  - ADR-027 (sighted coder — Codex gpt-5.6-terra native vision, Opus fallback)
+  - ADR-027 (sighted coder — Codex gpt-5.6-sol native vision, Opus fallback)
 staleness_threshold: 30d
 description: >
   Use when a spec references a Figma file, design-to-code work is needed, or design tokens

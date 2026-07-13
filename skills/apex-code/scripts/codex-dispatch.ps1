@@ -211,7 +211,7 @@ $ledgerRow = [ordered]@{
 Add-LedgerRow $ledgerRow
 
 $arguments = @(
-    'exec', '-p', 'apex-coder', '--sandbox', 'workspace-write', '-m', 'gpt-5.6-terra',
+    'exec', '-p', 'apex-coder', '--sandbox', 'workspace-write', '-m', 'gpt-5.6-sol',
     '-c', "model_reasoning_effort=$Effort", '-C', $Worktree, '--json', '--output-schema',
     $schemaPath, '-o', $finalPath, '--color', 'never'
 ) | ForEach-Object { ConvertTo-ProcessArgument ([string]$_) }

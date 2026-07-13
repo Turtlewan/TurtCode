@@ -10,7 +10,7 @@ The old DeepSeek Flash/Pro tiers and the `flash < pro < codex` cost-routing are 
 not in the active menu). If an old project still carries `coder_tier_policy`, treat it as `[codex]`.
 
 ## Per-task selection — collapses to a default + manual fallback
-- **Default: `codex`** for every task — text and image alike (gpt-5.6-terra is sighted, so the old image gate
+- **Default: `codex`** for every task — text and image alike (gpt-5.6-sol is sighted, so the old image gate
   is moot). No cost-tier decision; do not route proactively to Opus.
 - **Fallback: `opus`**, reached only when Codex quota runs out mid-build (operator-confirmed) — apex-code's
   Opus `APEX_MODE=coding` host builds the task inline. This is a build-time event, not a planning-time
@@ -20,7 +20,7 @@ not in the active menu). If an old project still carries `coder_tier_policy`, tr
 
 ## Reasoning-effort dial — the one real per-task lever (ADR-030)
 Model choice collapsed, but Codex's **reasoning-effort dial** is a genuine per-spec cost/quality lever on
-the *same* `gpt-5.6-terra`. Set it with spec frontmatter `coder_effort: {low|medium|high|xhigh|max|ultra}`
+the *same* `gpt-5.6-sol`. Set it with spec frontmatter `coder_effort: {low|medium|high|xhigh|max|ultra}`
 (apex-code passes `-c model_reasoning_effort=<v>` to every `codex exec`). Default `medium` — leave it
 absent unless the spec is clearly off-default.
 - `low` — trivial mechanical specs (rename, config, boilerplate, docstrings): cheaper + faster.
@@ -28,18 +28,19 @@ absent unless the spec is clearly off-default.
 - `high` — `risk: high`, auth / security / data / concurrency, or algorithmically hard specs.
 - `xhigh` — explicit opt-in for the hardest async / eval-like work only.
 - `max` — reserve for the single hardest tasks a spec can carry: state migrations, IAM/auth-critical
-  work, gnarly concurrency. Sits above `xhigh`; also the top *effort* rung of apex-code's verify-fail
-  recovery ladder — above it sits one Sol re-dispatch (`gpt-5.6-sol`, effort max — ADR-032), then Opus
-  (quota-out + Claude-judgment cases skip Sol, straight to Opus).
-- `ultra` — RARE, per-task escalation above `max`. Spawns in-model subagents, so it counts **double**
-  against `max_parallel_codex` (ADR-028) — or keep `ultra` tasks sequential/foreground instead of folding
-  them into a parallel wave. Gated on a pending head-to-head eval against `max` that hasn't run yet — do
-  not select it routinely at spec-authoring time; treat as a deliberate, logged escalation only.
+  work, gnarly concurrency. Sits above `xhigh`; also the second-highest rung of apex-code's verify-fail
+  recovery ladder.
+- `ultra` — above `max`, and the **final** rung of that ladder before the Opus fallback (ADR-034; there is
+  no higher Codex model to escalate to now that `gpt-5.6-sol` is the coder). Spawns in-model subagents, so
+  it counts **double** against `max_parallel_codex` (ADR-028) — or keep `ultra` tasks sequential/foreground
+  instead of folding them into a parallel wave. Gated on a pending head-to-head eval against `max` that
+  hasn't run yet — **do not select it at spec-authoring time**; let the ladder reach it, or treat a
+  deliberate opt-in as a logged escalation.
 
 Cheap to dial up: under config-A the build runs on Codex's **separate pool**, so `high` on a hard spec
 barely touches the scarce Opus pool. Don't blanket-`high` everything — it burns Codex quota faster (→
 earlier Opus fallback). Effort is per-spec; apex-code additionally bumps it one notch on a Codex
-verify-fail retry, then one Sol re-dispatch (ADR-032), before any Opus fallback (build-time, not a planning choice). The `gpt-5.4-mini` cheap
+verify-fail retry, up through the final `ultra` rung (ADR-034), before any Opus fallback (build-time, not a planning choice). The `gpt-5.4-mini` cheap
 model is **deferred** (ADR-030) — do not route tasks to a second model; the dial is the cost lever.
 
 ## Family-aware review routing (when `cross_model_review: true`)
