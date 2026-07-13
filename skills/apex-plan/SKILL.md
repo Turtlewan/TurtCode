@@ -1,8 +1,8 @@
 ---
 skill: apex-plan
 backend: claude
-version: 1.33.0
-last_updated: 2026-07-10
+version: 1.34.0
+last_updated: 2026-07-13
 sources:
   - APEX Design Specification 2026-05-24
   - GSD (Get Shit Done) — github.com/gsd-build/get-shit-done

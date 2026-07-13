@@ -9,6 +9,40 @@ routing — both coders are frontier-class and Opus is not a proactive choice.
 The old DeepSeek Flash/Pro tiers and the `flash < pro < codex` cost-routing are archived (recoverable,
 not in the active menu). If an old project still carries `coder_tier_policy`, treat it as `[codex]`.
 
+## Host-direct build — when the planning host builds the queue itself (ADR-035)
+
+The host may build a spec queue **itself** (own `Write`/`Edit`, in sequence) instead of dispatching
+`codex exec`. Legal, but **narrow: it must win on a structural argument, never on convenience — when
+both paths are viable, the tie goes to dispatch.** Requires ALL of:
+
+- **Not dispatchable as one `codex exec`.** `codex exec -C <root>` takes a **single root**, so a task
+  spanning `~/.claude` **and** `~/apex` cannot be one dispatch. This is the strongest — often the only
+  honest — reason to build host-direct.
+- **No verification recipe for a coder to iterate against** (APEX is markdown; "verify" is a grep + line
+  count). Dispatch's value is the coder self-verifying to green *without host tokens*; with nothing to
+  iterate on you pay the overhead and still verify yourself.
+- **Judgment-dense, not mechanical.** Formulaic edits ("apply convention X across N files") are exactly
+  what the plentiful pool is for — dispatch them even inside APEX.
+- **Under the ceiling: ~2–3 specs / ~10–20 *substantial* writes.** Count substantial writes, not files —
+  a 24-file run of one-line pin swaps is well inside it. **Re-check at the halfway point**; over the
+  ceiling → commit what's done and fork the remainder to Codex.
+
+Fail any one → **dispatch**.
+
+**Two gotchas the reasoning won't supply:**
+- The planning write-guard **exempts APEX + `~/.claude` only**. Every other repo prompts per non-`.md`
+  edit. AFK arming (ADR-033) removes that prompt anywhere — but fixes neither the pool economics nor the
+  ceiling, so it makes host-direct *possible* elsewhere, never *advisable*.
+- **The B1 scope hole is live** (`apex:docs/findings/artemis-13-7-issues.md`): a dispatched Codex can
+  write outside its authorized file list with nothing stopping it. Until the post-dispatch diff check
+  lands, dispatch carries a risk host-direct does not. Expected to expire.
+
+**Distrust the preference.** The host feels dispatch's costs (handoff, supervision, integration) and is
+blind to host-direct's (pool depletion, context decay — never experienced). Host-direct also spends the
+*scarce* pool to save the *plentiful* one, and collapses author and reviewer into one context. Any
+host-direct argument that reduces to "it's smoother" is that bias, and is rejected. Degradation is
+**silent** — "it feels fine" and "it worked last time" are not evidence.
+
 ## Per-task selection — collapses to a default + manual fallback
 - **Default: `codex`** for every task — text and image alike (gpt-5.6-sol is sighted, so the old image gate
   is moot). No cost-tier decision; do not route proactively to Opus.
