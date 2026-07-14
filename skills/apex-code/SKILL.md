@@ -102,8 +102,22 @@ printf '%s' "<the dispatch pack>" | codex exec -p apex-coder --sandbox workspace
 - **Windows sandbox:** install dependencies **as the normal user** in this session (`npm install` /
   `uv sync`) *before* dispatch. Never let the subprocess create `node_modules`/`.venv` — the sandbox
   SID owns them and your verify (running as you) then hits a locked tree.
-- **Scope check after every task** (open — see status.md): `git diff --name-only` vs the authorized
-  set. Extra paths = scope violation → revert **only the offending paths**, never the file wholesale.
+**Scope check — wrap every `▸codex` task.** The dispatch brief already says "touch nothing else" and
+Codex has written outside its scope anyway. A louder prohibition is not a mechanism, and a PreToolUse
+hook **cannot see these writes at all** (the subprocess doesn't ride Claude Code's permission floor).
+The host enforces it, after the fact:
+
+```
+scripts/codex-scope-check.ps1 -Snapshot -Worktree <repo> -Task <name>     # BEFORE dispatch
+<codex exec ...>
+scripts/codex-scope-check.ps1 -Check -Worktree <repo> -Task <name> -Authorized 'a.py','b.py'
+```
+
+Exit 1 = violation. It reverts **only paths that were clean at snapshot time** — anything the host
+had already dirtied is reported as **contested** and never touched (a blanket revert once destroyed
+the host's concurrent ADRs and produced a false "Codex fabricated files" finding). A violation is a
+**spec defect** — the task needed a file its spec didn't authorize. Log it, surface it to planning;
+don't just re-run.
 
 **Parallel Codex** (2+ independent `▸codex` tasks) → `references/parallel-codex.md`.
 
