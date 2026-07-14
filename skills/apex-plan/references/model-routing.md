@@ -47,7 +47,7 @@ host-direct argument that reduces to "it's smoother" is that bias, and is reject
 - **Default: `codex`** for every task — text and image alike (gpt-5.6-sol is sighted, so the old image gate
   is moot). No cost-tier decision; do not route proactively to Opus.
 - **Fallback: `opus`**, reached only when Codex quota runs out mid-build (operator-confirmed) — apex-code's
-  Opus `APEX_MODE=coding` host builds the task inline. This is a build-time event, not a planning-time
+  Opus builds the task inline as a fresh worker in this session. This is a build-time event, not a planning-time
   per-task route. See apex-code § Model fallback on verify-fail or quota-out.
 - A whole-spec `coder_model: opus` frontmatter can pin a spec to Opus up front (e.g. when you already
   know Codex quota is gone) — bypasses Codex entirely.

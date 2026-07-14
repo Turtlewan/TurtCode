@@ -56,8 +56,7 @@ Triggered by: "start build", "start build {spec-name}", "build {spec-name}", "ru
 
 Pre-flight:
 1. Read the full spec — every section. For an AFK build, capture `run_base_sha = git rev-parse HEAD` now (or reuse the A4 ledger's `base_sha` if dispatch has already begun) for the end-of-run adversarial pass (ADR-033 A1 / ADR-034, § Post-build steps).
-2. Read token_profile and autonomy_level from spec metadata
-   (falls back to docs/status.md, then registry defaults)
+2. Read autonomy_level from spec metadata (falls back to docs/status.md, then L2)
 3. Read ## Permissions section — this is the complete list of permitted actions
 4. Set permission mode: run the build path (interactive AFK, headless `-p`, workflow waves)
    in **`dontAsk`**, NOT `auto` — see § Permissions 1a for the allowlist and rationale. Launch
@@ -398,7 +397,7 @@ Execute in this order:
 
 1. Spawn in parallel (neither depends on the other):
    - apex-docs-product-agent — inputs: files_changed, spec_path, today's date
-   - apex-reviewer (skip if token_profile is "lean") — inputs: spec_path, files_changed
+   - apex-reviewer — inputs: spec_path, files_changed. **Always runs.** It is the evaluator-independence gate; skipping it to save tokens trades away the one thing that catches what the coder cannot see in its own output.
    Wait for both to complete. Collect docs_summary and reviewer_findings.
 
    **Cross-model review — only if the spec frontmatter has `cross_model_review: true`**

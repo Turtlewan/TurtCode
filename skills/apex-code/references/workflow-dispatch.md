@@ -12,7 +12,6 @@ Per 2+-task (sub-)wave:
    ```
    {
      "spec_path": "<full path to the spec being built>",
-     "token_profile": "<active token profile>",
      "wave_label": "Wave <N>",
      "isolate": <true if this wave's workers run an artifact-producing recipe, or headless/AFK; else false>,
      "tasks": [

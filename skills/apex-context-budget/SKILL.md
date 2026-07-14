@@ -73,7 +73,6 @@ Two consequences a flat byte-count misses:
 Walk the APEX surface and record bytes → tokens per the heuristics, tagged by loading-tier:
 - **Skills** `~/.claude/skills/apex-*/SKILL.md` (+ `impl.md` **core** if it has one). Flag SKILL.md > 500 lines (the cap), impl.md core that's bloated.
 - **Agents** `~/.claude/agents/apex-*.md` — count the **description** (always-on) separately from the body (latent). Flag description > 30 words; body > 200 lines.
-- **Registry** `~/.claude/registry/*.md` — on-demand (orchestrator reads it); usually small.
 - **CLAUDE.md chain** — global + project. Flag combined > 300 lines (always-on, every turn — highest-value line to cut).
 - **MCP** — list servers + tool counts; separate deferred (name-only) from live (~500/tool).
 

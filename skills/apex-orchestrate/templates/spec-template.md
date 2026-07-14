@@ -1,7 +1,6 @@
 ---
 spec: {short-name}
 status: draft
-token_profile: balanced
 autonomy_level: L2
 # cross_model_review: true   # optional — high-stakes builds (auth / security / data). Runs an
 #                              independent 2nd review by a DIFFERENT model family than the builder

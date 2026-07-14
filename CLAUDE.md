@@ -22,11 +22,11 @@ you cannot drive its tabs or windows.
 ## APEX
 
 APEX is the default build system in every project. A SessionStart hook routes each session through
-`apex-orchestrate`, which reads `docs/status.md`, surfaces in-flight work, detects the mode, and
-routes to `apex-plan` or `apex-code`. **Do not do the orchestrator's job for it.**
+`apex-orchestrate`, which reads `docs/status.md`, surfaces in-flight work, and routes the task to
+`apex-plan` / `apex-code` / `apex-debug`. **Do not do the orchestrator's job for it.**
 
-Skills: `~/.claude/skills/apex-*/SKILL.md` · Registry: `~/.claude/registry/` ·
-Templates: `~/.claude/skills/apex-orchestrate/templates/`
+Skills: `~/.claude/skills/apex-*/SKILL.md` · Templates: `~/.claude/skills/apex-orchestrate/templates/`
+Index: `~/apex/SKILLS.md` (there is no registry — it duplicated this index and routed nothing)
 
 **APEX carries workflow, state, and gates — not knowledge.** The 36 domain skills (security,
 frontend, k8s, auth, …) were deleted in ADR-036: they encoded what a frontier model already knows,
@@ -46,17 +46,18 @@ History belongs to `git log` (what changed), `docs/handoff/` (what the build lea
 
 ## Model routing
 
-| Session | Signal | Host | Coder |
-|---------|--------|------|-------|
-| **Planning** | Anthropic, no flag | Opus | — (`.md` only; non-`.md` writes prompt) |
-| **Coding** | `APEX_MODE=coding` | Sonnet 5 (`apex-build`) | **Codex `gpt-5.6-sol`** (primary, `codex exec` subprocess) → **Opus** (fallback on quota-out) |
+**One session — it plans, builds, and verifies (ADR-038).** No `APEX_MODE`, no launchers, no backend
+swap, no write-guard. Just run `claude`.
 
-DeepSeek is archived (ADR-027, recovery-only). Reviews are **cross-family**: Codex builds → Claude
-reviews (ADR-032/034). At any shift to building, name the coder path and confirm it.
+| Role | Who |
+|------|-----|
+| **Host** (plans, dispatches, runs the verify loop) | this session |
+| **Coder** | **Codex `gpt-5.6-sol`** — dispatched per task as a `codex exec` subprocess (own auth, own quota; spends none of the Anthropic pool) |
+| **Coder fallback** | **Opus** — a fresh `model: opus` worker in this session, on Codex quota-out |
+| **Reviewer** | **cross-family, always** — Codex builds → Claude reviews; Opus builds → Codex reviews. An agent never reviews its own output. |
 
-In planning mode the non-`.md` write-guard is an approval prompt, not a block — the APEX project
-itself, `~/.claude/`, and any `docs/research/mockups/` pass silently (APEX is self-hosting).
-Default: defer code edits to a coding session rather than approving the prompt.
+DeepSeek is archived (ADR-027, recovery-only). At any shift to building, name the coder path and
+confirm it.
 
 ## Git
 

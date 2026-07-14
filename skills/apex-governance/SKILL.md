@@ -251,7 +251,7 @@ Written to docs/audit/YYYY-MM-DD.log at end of L4+ sessions.
 
 Format:
 ```
-[YYYY-MM-DD HH:MM:SS] SESSION START — Level: L{n} | Profile: {profile}
+[YYYY-MM-DD HH:MM:SS] SESSION START — Level: L{n}
 [YYYY-MM-DD HH:MM:SS] SPECIALIST LOADED — {domain} (trigger: {keyword/path})
 [YYYY-MM-DD HH:MM:SS] FILE WRITE — {path} (auto-approved L{n})
 [YYYY-MM-DD HH:MM:SS] GATE TRIGGERED — {action} (approval required)

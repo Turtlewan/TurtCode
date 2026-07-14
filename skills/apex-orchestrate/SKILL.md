@@ -59,7 +59,6 @@ If not found:
 → Invoke apex-init first. Then return here after bootstrap completes.
 
 Extract from docs/status.md:
-- token_profile (default: balanced if missing)
 - autonomy_level (default: L2 if missing)
 - In-Flight table (any interrupted sessions)
 

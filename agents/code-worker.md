@@ -13,7 +13,6 @@ You receive:
 - task: the exact task text and acceptance criterion
 - files: the file paths relevant to this task
 - spec_path: path to the full spec (for context only)
-- token_profile: lean | balanced | thorough | custom
 
 ## Step 1: Read before writing
 

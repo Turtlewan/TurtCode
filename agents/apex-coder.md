@@ -12,7 +12,6 @@ You do NOT write code directly — only code-worker agents write files.
 
 You receive:
 - spec_path: full path to the spec file in docs/changes/
-- token_profile: lean | balanced | thorough | custom
 - worker_cap: max parallel workers (null = unlimited)
 
 ## Step 1: Parse the spec

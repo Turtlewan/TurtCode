@@ -39,6 +39,6 @@ At L4+, append every action to `docs/audit/YYYY-MM-DD.log`:
 ```
 Session bookends (every session):
 ```
-[timestamp] SESSION START — Level: L{n} | Profile: {profile} | Spec: {spec-name}
+[timestamp] SESSION START — Level: L{n} | Spec: {spec-name}
 [timestamp] SESSION END — {n} files written, {n} commands run, {n} blocked actions
 ```
