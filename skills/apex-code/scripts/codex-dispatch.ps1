@@ -18,6 +18,18 @@ param(
     [int]$NoOutputTimeoutMin = 8,
     [switch]$Adopt,
     [string]$Prompt,
+    # Selects the --output-schema codex is constrained to. A review/end-gate pass returns
+    # findings, not a build completion; constraining it to the build schema (whose
+    # additionalProperties is false and which has no `findings` property) makes its entire
+    # result structurally inexpressible and silently drops it.
+    [ValidateSet('completion', 'endgate', 'review')]
+    [string]$Schema = 'completion',
+    # A review/end-gate pass must not be able to edit the tree it is judging. The wrapper was
+    # built for build dispatches, so it hardcoded workspace-write; the standing Sol end-gate
+    # inherited it and has been running with repo write access despite the runbook's
+    # "never auto-edits anything" guarantee.
+    [ValidateSet('workspace-write', 'read-only')]
+    [string]$Sandbox = 'workspace-write',
     [string]$ScratchDirectory = $env:TEMP,
     [string]$CodexExecutable = 'codex',
     [string[]]$CodexExecutableArgumentPrefix = @()
@@ -54,7 +66,12 @@ function ConvertTo-ProcessArgument {
 $dispatcherRoot = Split-Path (Split-Path (Split-Path $PSScriptRoot -Parent) -Parent) -Parent
 $ledgerDirectory = Join-Path $dispatcherRoot 'docs\progress'
 $ledgerPath = Join-Path $ledgerDirectory 'codex-run-ledger.jsonl'
-$schemaPath = Join-Path $dispatcherRoot 'skills\apex-code\references\codex-completion-schema.json'
+$schemaFile = switch ($Schema) {
+    'endgate' { 'afk-endgate-schema.json' }
+    'review' { 'codex-review-schema.json' }
+    default { 'codex-completion-schema.json' }
+}
+$schemaPath = Join-Path $dispatcherRoot "skills\apex-code\references\$schemaFile"
 $ledgerMutex = [System.Threading.Mutex]::new($false, 'ApexCodexRunLedger')
 
 function Invoke-WithLedgerLock {
@@ -194,6 +211,25 @@ $logPath = Join-Path $logDirectory "codex-$safeSpec-$safeTask.log"
 $finalPath = Join-Path $ScratchDirectory "codex-$safeSpec-$safeTask.final"
 [System.IO.File]::WriteAllText($logPath, [string]::Empty, [System.Text.UTF8Encoding]::new($false))
 
+# Standing scope lock, appended to EVERY dispatch so it cannot be forgotten at 3am.
+# A planning host commonly edits docs/status.md in the same working tree while a build runs; Codex
+# has repeatedly rewritten it out of scope-lock, and a blanket revert of it has already destroyed
+# concurrent owner planning work once. Enforcing this in the wrapper -- rather than trusting each
+# prompt author to remember -- is the whole point.
+$scopeLock = @'
+
+---
+STANDING SCOPE LOCK (applies to every dispatch; overrides anything above that conflicts):
+- Do NOT read, write, edit, or create docs/status.md. It is owned by the planning host, who is very
+  likely editing it RIGHT NOW in this same working tree. Any write you make to it destroys their
+  work. If you believe it needs updating, say so in your final report instead.
+- Do NOT edit any file outside the scope this dispatch named. That includes other specs under
+  docs/changes/, other runbooks, and any doc you were not explicitly asked to change.
+- Do NOT run `git commit`, `git add`, `git push`, `git checkout --`, `git reset`, or `git stash`.
+  The host integrates and commits; you only leave changes in the working tree.
+'@
+$Prompt = $Prompt + $scopeLock
+
 $runId = [guid]::NewGuid().ToString('N')
 $started = Get-UtcTimestamp
 $ledgerRow = [ordered]@{
@@ -206,12 +242,15 @@ $ledgerRow = [ordered]@{
     phase = $Phase
     started = $started
     log_path = $logPath
+    final_path = $finalPath
+    schema = $schemaFile
+    sandbox = $Sandbox
     status = 'running'
 }
 Add-LedgerRow $ledgerRow
 
 $arguments = @(
-    'exec', '-p', 'apex-coder', '--sandbox', 'workspace-write', '-m', 'gpt-5.6-sol',
+    'exec', '-p', 'apex-coder', '--sandbox', $Sandbox, '-m', 'gpt-5.6-sol',
     '-c', "model_reasoning_effort=$Effort", '-C', $Worktree, '--json', '--output-schema',
     $schemaPath, '-o', $finalPath, '--color', 'never'
 ) | ForEach-Object { ConvertTo-ProcessArgument ([string]$_) }
