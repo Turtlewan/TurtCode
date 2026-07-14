@@ -48,12 +48,13 @@ Ask all three together — do not drip them one at a time:
 stack selection belongs to apex-stack.**
 
 After the answers:
-- User already has a firm stack → record it; still run apex-stack's **coverage gate** so
-  `stack_skills` gets bound (it records "no skill — proceeding on base knowledge" for gaps).
+- User already has a firm stack → record it, and write its **verify commands into `AGENTS.md`**
+  (`## Verify commands`) — that is the recipe's only home (ADR-037).
 - User wants a recommendation (or is unsure) → **invoke `apex-stack`** before scaffolding;
-  it selects merit-based across ecosystems and writes the `stack_skills` binding.
-- User explicitly defers the decision → scaffold with stack "TBD", `stack_skills: []`, and add
-  "Stack selection (apex-stack)" to ROADMAP.md phase 1 — it must run before the first build spec.
+  it selects merit-based across ecosystems, then writes the verify commands into AGENTS.md.
+- User explicitly defers the decision → scaffold with stack "TBD", leave the
+  `<!-- apex:agents:verify -->` stub in AGENTS.md, and add "Stack selection (apex-stack)" to
+  ROADMAP.md phase 1 — it must run before the first build spec.
 
 ## Step 2: Create directory structure
 
@@ -111,14 +112,15 @@ Leave it as a stub — planning maps screens/journeys early; do not design flows
 project with a screen surface. It carries the `<!-- apex:design-brief:stub -->` marker for the
 coverage check. Same scope-gate as app-flow (skip for headless / CLI). Leave it a stub — planning
 fills tokens + art-direction + forbidden-patterns once a visual direction is chosen, using the full
-template at `~/.claude/skills/apex-ui-ux-design/references/design-brief-template.md`; do not design
+template at `~/.claude/skills/apex-plan/references/design-brief-template.md`; do not design
 during bootstrap.
 
 **AGENTS.md — Codex build instructions (ADR-026).** Seed `AGENTS.md` in the project root from
 `~/.claude/skills/apex-orchestrate/templates/AGENTS-template.md`. The universal sections (the
 build-a-spec workflow + hard rules) are verbatim. Fill **What this repo is** from PROJECT.md, and the
-**Verify commands** from the bound `stack_skills` `## Verification Recipe` (leave the
-`<!-- apex:agents:verify -->` stub if the stack is TBD). Leave **Project layout** + **Conventions** as
+**Verify commands** from the chosen stack's real commands — install, lint, typecheck, test, build
+(leave the `<!-- apex:agents:verify -->` stub if the stack is TBD). **AGENTS.md is the recipe's only
+home (ADR-037)** — Codex reads it natively and never sees status.md. Leave **Project layout** + **Conventions** as
 `<!-- apex:agents:stub -->` blocks — planning fills them as code takes shape. AGENTS.md is the
 Codex-facing projection of the project's build context (commands + hard-blocks + structure); it tracks
 the stack recipe and hard-blocks, it is not hand-maintained in parallel with CLAUDE.md.
@@ -131,8 +133,6 @@ Fill in:
 - Project name: from answer to Question 1 (first 3-4 words)
 - Description: full answer to Question 1
 - Stack: the confirmed stack (from Step 1 / apex-stack), or "TBD" if deferred
-- specialists_default: [] (empty to start — user adds as needed)
-- stack_skills: as bound by apex-stack's coverage gate ([] only if stack selection was deferred)
 
 ## Step 4: Confirm to user
 
@@ -261,7 +261,7 @@ _The handful of decisions that define the architecture. Each links to its ADR._
 Seed this **only for data-bearing projects** (substitute `{project-name}`). The
 `<!-- apex:data-model:stub -->` marker stays until planning writes the real model — it is what the
 doc-coverage check greps for. Conceptual only — do **not** add physical schema (tables/columns/
-types/indexes); that is designed per-feature in specs via `apex-data` and reconciled against this.
+types/indexes); that is designed per-feature in specs and reconciled against this.
 
 ```markdown
 # {project-name} — Data Model (conceptual)
@@ -270,7 +270,7 @@ types/indexes); that is designed per-feature in specs via `apex-data` and reconc
 > **STATUS: STUB.** The conceptual domain model — the entities this system holds and how they
 > relate. Planning fills this in early, before per-phase schema. Conceptual only: entities,
 > relationships, invariants. **Not** physical schema — tables/columns/types/indexes/migrations are
-> designed per-feature in specs via apex-data, and must reconcile with this model.
+> designed per-feature in specs, and must reconcile with this model.
 
 ## Entities
 _Each: what it represents · key attributes (conceptual, not columns) · owning subsystem._
@@ -326,7 +326,7 @@ Seed this **only for UI-bearing projects** (substitute `{project-name}`). The
 `<!-- apex:design-brief:stub -->` marker stays until planning fills the brief — it is what the
 doc-coverage check greps for. Tokens + art-direction + forbidden-patterns ONLY — per-screen visuals
 stay judgment (app-flow.md owns screens). Full authoring template:
-`~/.claude/skills/apex-ui-ux-design/references/design-brief-template.md`.
+`~/.claude/skills/apex-plan/references/design-brief-template.md`.
 
 ```markdown
 # {project-name} — Design Brief

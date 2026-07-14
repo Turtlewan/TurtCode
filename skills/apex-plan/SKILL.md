@@ -114,9 +114,9 @@ name — can be left to the coder's conservative-choice protocol in apex-code; i
 
 - **Resolve yourself — don't ask:** codebase facts (read the files), clear technical defaults
   (defaults-not-menus), anything derivable from patterns or research. Asking these wastes the
-  user's attention. **Brownfield:** if planning touches an existing codebase you haven't mapped, run a
-  codebase-mapping pass first (reuse `gsd-map-codebase` if installed) — gate it to onboarding; it's a
-  HIGH-token whole-repo scan, so do it once and persist to overview/data-model, not every session.
+  user's attention. **Brownfield:** if planning touches an existing codebase you haven't mapped, map
+  it first — dispatch `Explore` agents in parallel over the subsystems in play. Gate it to onboarding:
+  it's a HIGH-token scan, so do it once and persist the result to overview/data-model, never per session.
 - **Ask the user — before drafting:** product intent, preferences among technically-valid
   options (taste/business), edge-case priorities, "what does good look like." Judgment, not facts.
 - **Bound the ask:** surface only decisions that (a) planning cannot resolve itself **and**
@@ -146,12 +146,11 @@ For **data-bearing projects**, capture the conceptual data model (entities + rel
 `docs/technical/architecture/data-model.md` **early — before per-phase schema specs** — so per-phase
 schema stays coherent against one anchor (ADR-008) — **Deep Details only**.
 For **UI-bearing projects**, likewise capture the app-flow (screens + journeys) in
-`docs/technical/architecture/app-flow.md` **early — before per-screen specs** — so screens stay coherent
-against one navigation anchor (ADR-013; technique owned by apex-ui-ux-design) — **Deep Details only**.
-Also fill the **design-brief** (tokens + art-direction + forbidden-patterns) in
-`docs/technical/architecture/design-brief.md` **once a visual direction is chosen** — it is what the
-image-less coder reads for visual decisions; a UI spec should reference its tokens (ADR-017; owned by
-apex-ui-ux-design) — **Deep Details only**.
+`docs/technical/architecture/app-flow.md` **early — before per-screen specs**, and fill the
+**design-brief** (tokens + art-direction + forbidden-patterns) in
+`docs/technical/architecture/design-brief.md` once a visual direction is chosen — a UI spec should
+reference its tokens. Both artifacts, the ask-first aesthetic gate, and the design loop →
+`references/design-workflow.md` (ADR-013/017) — **Deep Details only**.
 
 ### Widen the options — research gate
 
@@ -483,9 +482,8 @@ _Last updated by planning mode:_ date. **Bug Fix:** no status.md update (ephemer
 
 Domain knowledge reaches a spec two ways — keep them distinct (ADR-007):
 
-- **Inline (drafting advice).** The orchestrator loads a matched domain's SKILL.md into this window
-  (keyword detection + specialists_default) so you draft with its concerns in mind. Its guidance
-  shapes the spec's Specialist Context section.
+- **Inline (drafting advice).** You apply domain expertise directly — there is no domain skill to
+  load (ADR-036). It shapes the spec's Specialist Context section.
 - **Dispatched (review).** The gate-bearing check is the dispatched `apex-spec-reviewer` pass
   (§ Dispatched domain review) — fresh context, severity-tagged, gate-ready. This is what produces
   the BLOCK/FLAG flags the readiness gate resolves. **Do not rely on inline self-review for that** —

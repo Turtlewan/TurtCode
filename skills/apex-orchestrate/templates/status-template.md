@@ -2,19 +2,22 @@
 _{description}_
 
 stack: {stack}
-token_profile: balanced
 autonomy_level: L2
-specialists_default: []   # domains always active for routing regardless of keywords
-stack_skills: []          # bound stack skills (apex-<framework>); coding reads their ## Verification Recipe (ADR-005/006)
-coder_models: [codex]     # allowed coding models, subset of {codex, opus} (ADR-027). codex = OpenAI Codex (gpt-5.6-sol), the PRIMARY coder, dispatched per task via `codex exec` subprocess (covers text + image); opus = the MANUAL fallback coder (Claude coding mode, APEX_MODE=coding) when Codex quota is exhausted. Default [codex]. DeepSeek flash/pro are ARCHIVED (ADR-027, recovery-only); a legacy coder_tier_policy maps to [codex]. Build host = Sonnet 5 default (ADR-032); an Opus host is a deliberate escalation.
-max_parallel_codex: 3     # project default cap on concurrent `codex exec` subprocesses per wave (ADR-028); machine-protection rate dial, not a quota cap. Auto-sized min(4, floor(cores/2)−1); 1 = sequential.
 
-_Last updated by planning mode:_ {YYYY-MM-DD}
+> **This file is LIVE STATE ONLY. It is rewritten, never appended to. Hard cap: 100 lines.**
+> History does not live here: what changed → `git log` · what the build learned → `docs/handoff/` ·
+> why a decision was made → `docs/technical/adr/` · durable user/project facts → memory.
+> A row whose work is done gets **deleted**, not marked done — git already has it.
+> Build/execution contract → `AGENTS.md`. Model routing → `~/.claude/CLAUDE.md`. See ADR-037.
+
+_Last updated:_ {YYYY-MM-DD}
 
 <!-- CODING:START -->
 ## In-Flight
-| What | Mode | State | File | Stopped at | Uncommitted |
-|------|------|-------|------|------------|-------------|
+_Only work that is genuinely mid-flight. Delete a row the moment it lands._
+
+| What | State | File | Next |
+|------|-------|------|------|
 
 _(empty — nothing in progress)_
 <!-- CODING:END -->
@@ -27,5 +30,7 @@ _(empty — nothing in progress)_
 _(empty — no specs ready yet)_
 
 ## Open Questions
+_Genuinely unresolved and still actionable. A resolved question is deleted, not annotated._
+
 _(none)_
 <!-- PLANNING:END -->

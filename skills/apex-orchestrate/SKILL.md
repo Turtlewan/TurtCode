@@ -9,16 +9,17 @@ sources:
   - ADR-027 — Codex-primary coding, Opus fallback, DeepSeek archived
 staleness_threshold: 30d
 description: >
-  APEX session orchestrator — runs first every session: reads docs/status.md,
-  surfaces in-flight work, detects the operating mode (planning / DeepSeek coding /
-  Claude coding) from ANTHROPIC_BASE_URL + APEX_MODE, sets autonomy level, and routes
-  to apex-plan or apex-code. Also handles pause/resume.
+  APEX session orchestrator — runs first every session: reads docs/status.md, surfaces
+  in-flight work, sets autonomy level, and routes the task to apex-plan / apex-code /
+  apex-debug. One session plans and builds (ADR-038) — there are no modes. Also handles
+  pause/resume.
 ---
 
 # APEX Orchestrator
 
 Run at the start of every session. Orient, route, hand off — nothing else.
-You contain zero domain knowledge. All domain knowledge lives in specialist skills.
+You contain zero domain knowledge, and neither does APEX — it is model-native (ADR-036).
+APEX carries only workflow, state, and gates.
 
 ## Context discipline
 
@@ -60,8 +61,6 @@ If not found:
 Extract from docs/status.md:
 - token_profile (default: balanced if missing)
 - autonomy_level (default: L2 if missing)
-- specialists_default (domains always active for this project)
-- stack_skills (bound stack skills in play; default: [] if missing — coding reads their Verification Recipe per ADR-005/006)
 - In-Flight table (any interrupted sessions)
 
 ## Step 2: Surface in-flight work
@@ -81,18 +80,18 @@ Resume signals: "resuming", "picking up", "continue where we left off", "back", 
 On pause → run pause workflow for current mode (see below).
 On resume → read In-Flight table, surface what was in progress, continue.
 
-## Step 3.5: Confirm operating mode (ADR-027)
+## Step 3.5: (removed — there are no modes)
 
-The SessionStart hook has already detected the mode; confirm it and route accordingly.
-Detection precedence (first match wins):
+APEX used to detect planning vs coding from `ANTHROPIC_BASE_URL` + `APEX_MODE` and route to a
+**separate session**. That existed for one reason: reaching DeepSeek required a session-level
+base-URL swap, so the coder was physically unreachable from a planning session.
 
-1. `ANTHROPIC_BASE_URL` contains `deepseek` → **DeepSeek coding** (ARCHIVED — ADR-027, recovery-only) → route to apex-code.
-2. Else `APEX_MODE=coding` → **Claude coding** = the build host (**Sonnet 5 default host — ADR-032**): **Codex (`gpt-5.6-sol`) is the primary coder** (dispatched per task as a `codex exec` subprocess); **Opus is the fallback** (fresh `model: opus` worker / `/model opus`) when Codex quota runs out. Write-guard relaxed → route to apex-code.
-3. Else → **planning** → route to apex-plan.
+**The coder is Codex, dispatched as a `codex exec` subprocess** — reachable from any session, on its
+own auth and quota. The constraint is gone, so **the mode split is gone with it** (ADR-038). One
+session plans, builds, and verifies. There is no `APEX_MODE`, no backend swap, no relaunch, and no
+write-guard.
 
-Claude coding mode is a real build session, not a planning detour — read specs from docs/changes/,
-execute (apex-code dispatches Codex per task), no spec-authoring, under the **soft pool guard scoped to
-the Opus fallback** (apex-governance owns it). Routes to apex-code regardless of the Step-4 signal.
+Route by **task** (Step 4), not by session.
 
 ## Step 4: Route
 
@@ -121,37 +120,34 @@ When signal matches "next / what's next / what should I work on":
 4. Else if docs/drafts/ has in-progress specs → "You have an unfinished spec: {name}. Finish it?"
 5. Else → "Nothing queued. What do you want to plan next?"
 
-## Step 5: Load domain specialists (alongside primary route)
+## Step 5: (removed — there is no domain-specialist layer)
 
-Scan user message + spec content for domain keywords from ~/.claude/registry/domains.md.
+APEX shipped 36 domain skills (security, frontend, k8s, auth, …) and a keyword registry that
+loaded them. **Both were deleted on 2026-07-14 (ADR-036).** They encoded knowledge a frontier model
+already has, and the keyword table duplicated Claude Code's own description-matching.
 
-For each matched domain:
-- In planning mode: load domain's SKILL.md into context
-- In coding mode: do NOT load whole impl.md files here — apex-code owns coding-side loading
-  (the two-tier *core* of each bound `stack_skills` entry plus matched capability impl cores;
-  see apex-code § Verification). Loading full impl.md files at routing time double-loads and
-  defeats the core/references split.
+Do not scan for domain keywords. Do not look for `~/.claude/registry/domains.md` — it is gone. Do
+not re-create either; if a domain genuinely needs a rule the model lacks, that is a bug report
+against the model's output, and it belongs in the project's own `AGENTS.md` or a spec — not in a
+new global skill (see apex-skill-author § The Iron Law).
 
-Rules:
-- Multiple specialists can be active simultaneously
-- Specialists do not call each other — all coordination routes through you
-- Specialists may flag that another domain should be consulted; you decide whether to act
-- Also activate any domain in specialists_default regardless of keywords
-- **Role split (planning mode):** the inline SKILL.md load above is *drafting advice* (the
-  enforce/advice role). The planning-side **review** pass is dispatched separately by `apex-plan`
-  via the generic `apex-spec-reviewer` (fresh context) — not loaded inline (ADR-007). The
-  per-domain `apex-*-agent` roster is retired; the registry's Agent column routes review there.
+**Domain expertise still happens** — it just isn't loaded from a file:
+- **Drafting:** the model applies it directly.
+- **Review:** `apex-plan` dispatches `apex-spec-reviewer` in a fresh context (optionally with a
+  `lens`, e.g. "security"); `apex-code` dispatches `apex-wave-reviewer` after high-risk waves. The
+  value there is **evaluator-independence**, not a rulebook — a fresh adversarial reader, not a
+  checklist. Cross-family routing holds (Codex builds → Claude reviews; ADR-032/034).
 
 ## Step 6: State active context
 
 After routing, always output one line:
-"Running at L{n} | Profile: {profile} | Stack: {stack_skills or 'none'} | Mode: {planning / claude-coding (Sonnet host; Codex-primary, Opus fallback) / deepseek-coding (archived)}"
+"Running at L{n} | Coder: Codex `gpt-5.6-sol` (Opus fallback)"
 
 ---
 
-## Pause Workflow — Planning Mode
+## Pause Workflow — mid-plan
 
-Triggered when pause signal detected during a planning session.
+Triggered by a pause signal while drafting a spec.
 
 1. Save current draft to docs/drafts/{spec-name}.md
    Add a ## Where I stopped section at the bottom:
@@ -168,9 +164,9 @@ Triggered when pause signal detected during a planning session.
 
 ---
 
-## Pause Workflow — Coding Mode
+## Pause Workflow — mid-build
 
-Triggered when pause signal detected during a coding session.
+Triggered by a pause signal while executing a spec.
 
 1. Complete the current task — never stop mid-task
 2. Update ## Progress checkboxes in the spec (check completed tasks)
@@ -204,7 +200,7 @@ No manual state tracking needed. The In-Flight table is the checkpoint.
 ## Governance rules
 
 At every session start, state the active level:
-"Running at L{n} | Profile: {profile} | Stack: {stack_skills or 'none'} | Mode: {planning / claude-coding (Sonnet host; Codex-primary, Opus fallback) / deepseek-coding (archived)}"
+"Running at L{n} | Coder: Codex `gpt-5.6-sol` (Opus fallback)"
 
 If user says "set level L{n}" or "run at L{n}" or "drop to L{n}":
 1. Update the autonomy_level in docs/status.md

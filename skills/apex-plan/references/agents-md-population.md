@@ -9,7 +9,7 @@ propagation gap.
 ## Per-section instructions
 
 - **`§ Verify commands`** (replace the `<!-- apex:agents:verify -->` stub): the union of every
-  bound `stack_skills` entry's `## Verification Recipe`, verbatim runnable commands **including
+  repo's own verify commands (AGENTS.md IS their home — ADR-037), verbatim runnable commands **including
   the install/setup step** (`uv sync`, `npm ci`, …). If the stack is still TBD, leave the marker.
 - **`§ Project layout`** (replace its `<!-- apex:agents:stub -->`): the module map — each
   top-level package/dir + one line on what it owns — and the architecture shape in one line

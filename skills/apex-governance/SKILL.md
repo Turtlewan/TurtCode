@@ -13,7 +13,8 @@ sources:
   - docs/technical/adr/ADR-032-gpt56-role-split.md
 staleness_threshold: 30d
 description: >
-  Defines the APEX autonomy model — operating modes (Build/AFK vs Edit), autonomy levels L0–L5,
+  Defines the APEX autonomy model — autonomy modes (Build/AFK vs Edit — how much the agent asks,
+  NOT a session type; ADR-038 removed session modes), levels L0–L5,
   approval gates, permanently-forbidden hard blocks, critical-file confirmation, and the L4+
   audit log. Referenced by apex-orchestrate and apex-code. Triggers: "what level am I at",
   "set autonomy to L{n}", "is this action allowed", "run in build/edit mode", reviewing an
@@ -42,7 +43,7 @@ builds then can't collide on artifacts / lockfiles / ports or mutate the live tr
 Interactive Edit Mode stays same-tree (the user is watching).
 
 ### Edit Mode (interactive)
-User present in coding mode. Small changes. Can ask questions.
+User present and watching. Small changes. Can ask questions.
 Confirmation gates active for critical files.
 
 ## Autonomy levels
@@ -76,16 +77,14 @@ per-task routing collapses to **"codex unless its quota is exhausted, then Opus.
 authority applies — the model that codes never widens an autonomy gate, critical-file confirmation, or
 hard block.
 
-**Opus is the manual fallback coder** (mechanic A): the build runs in a Claude `APEX_MODE=coding` host
-(Sonnet 5 default — below) that dispatches Codex per task; when Codex quota runs out the task is
-built by **Opus** — a fresh `model: opus` code-worker dispatch, or the operator switches the session
-(`/model opus`) for a fallback-heavy build (no restart, no backend swap). Operator-driven, not auto-escalation. See apex-code § Model
-escalation on verify-fail.
+**Opus is the manual fallback coder:** the session dispatches Codex per task; when Codex quota runs
+out the task is built by **Opus** — a fresh `model: opus` code-worker, or the operator switches the
+session (`/model opus`) for a fallback-heavy build. Operator-driven, not auto-escalation. See
+apex-code § Model escalation on verify-fail.
 
-**The build host runs Sonnet 5 by default (ADR-032).** The `APEX_MODE=coding` session that
-orchestrates dispatch — and **runs the verify loop; never the coder subprocess judging itself**
-(evaluator independence at task level) — is Sonnet 5 (`/model sonnet` / `ANTHROPIC_MODEL`),
-drawing its own separate weekly bucket. Opus in coding mode is a deliberate choice, not the
+**The host is this session (ADR-038).** There is no separate build host and no `APEX_MODE` — one
+session plans, dispatches, and **runs the verify loop; never the coder subprocess judging itself**
+(evaluator independence at task level). Opus as the coder is a deliberate choice, not the
 default: the per-spec **coder** pin (`coder_model: opus` — selects who codes, a different axis
 from who hosts), an Opus **host** as an operator choice for `risk: high` supervision or
 GRAY-fork-heavy work, and the Opus fallback coder at Codex quota-out (dispatched as above).
@@ -104,9 +103,9 @@ DeepSeek (Flash/Pro) is **archived/parked** — recoverable, not in the active m
 **Retired 2026-06-23.** This carve-out let planning (Claude, multimodal) make a bounded view-layer UI
 edit because the coder (DeepSeek) was **image-blind**. Under ADR-027/034 the coder is **Codex (`gpt-5.6-sol`,
 native vision)** or **Opus (multimodal)** on fallback — it **sees the render**, so a visual divergence
-is fixed as a **normal coding task**, not a planning-mode escalation. No special exception is needed;
-"planning does not write code" stands without it. The live-preview design loop (design lane → build →
-visual gate) survives in apex-ui-ux-design — only the image-blindness escalation is gone.
+is fixed as a **normal build task**. No special exception is needed. (ADR-038 retires the premise
+twice over: there is no planning/coding split left to escalate across.) The live-preview design loop
+(design lane → build → visual gate) survives in `apex-plan/references/design-workflow.md`.
 
 ## Critical files — always require explicit confirmation regardless of level
 

@@ -14,7 +14,7 @@ Read at the start of an AFK build, before executing any task.
 `## Permissions` into `permissions.allow` (`.claude/settings.local.json` or `~/.claude/settings.json`)
 before the build:
 - Each `file_writes` path → `Write(<path>)`/`Edit(<path>)`; each `commands` entry →
-  `Bash(<exact command>)`; plus the bound `stack_skills` Verification Recipe commands.
+  `Bash(<exact command>)`; plus the repo's `AGENTS.md` `## Verify commands` commands.
   **Off-list = silently denied (no prompt)** — the allowlist must be complete for the verify loop.
   `permissions.deny` is the destructive floor (overrides allow in every mode).
 - **`wave_dispatch: workflow`** also needs `Workflow(*)`, `Agent(*)`, `Task(*)`, `Skill(*)` allow-listed

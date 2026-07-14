@@ -8,7 +8,7 @@ sources:
   - Cursor rules best practices 2026
 staleness_threshold: 365d
 description: >
-  Universal coding standards enforced on every coding session via impl.md, which apex-code
+  Universal coding standards enforced on every build via impl.md, which apex-code
   auto-loads at pre-flight before any code is written. Reference this when reviewing whether
   code output meets baseline quality standards, or when updating the principles themselves.
   Covers naming, formatting, error handling, input validation, security, scalability,
@@ -22,10 +22,10 @@ and every project — unless a project's CLAUDE.md explicitly overrides a specif
 
 ## Planning-mode notes
 
-These principles are enforced on the coding backend (DeepSeek) via `impl.md`. apex-code
-loads it automatically at pre-flight before any code is written.
+These principles are enforced via `impl.md`, which apex-code loads automatically at pre-flight
+before any code is written.
 
-When writing specs: do not repeat these principles inline — DeepSeek loads them at session
+When writing specs: do not repeat these principles inline — the coder loads them at session
 start. You may reference them by name when a task is particularly error-prone:
 e.g. "see coding principles §Security" or "Principle 8 applies — validate on backend too."
 

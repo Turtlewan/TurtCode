@@ -14,7 +14,7 @@ description: >
   components. Planning-mode analysis only: inventories what *actually* loads (the
   CLAUDE.md chain, matched skills, impl.md cores, agent descriptions, MCP schemas),
   classifies each as Always/Sometimes/Rarely, and produces ranked token-savings with a
-  forced top-3. Not a coding task; not general latency/perf tuning (that's apex-performance);
+  forced top-3. Not a coding task; not general latency/perf tuning;
   not the act of trimming a skill (that's apex-skill-author).
 ---
 
@@ -41,8 +41,8 @@ Token cost is **per loading-tier**, not per file-on-disk. Counting every `SKILL.
 |---|---|---|
 | **CLAUDE.md chain** (global `~/.claude/CLAUDE.md` + project `CLAUDE.md`) | every turn, every session | full body — **always-on** |
 | **Skill name + `description`** (the system-reminder list) | every session | one line per skill, **always-on** — the body is *not* loaded |
-| **Skill `SKILL.md` body** | only when that skill is invoked (planning loads the *matched* specialist via keyword + `specialists_default`) | full body, **on-invocation** |
-| **`impl.md` body** | coding mode (`apex-code`) loads **only the core sections** of each *bound* `stack_skills` entry — frontmatter + `## Stack assumptions` + `## NEVER`/`## ALWAYS` + `## Verification Recipe` + the compact errors table (SP6 two-tier). The rest of `impl.md` does **not** load. | **core sections only**, per build run |
+| **Skill `SKILL.md` body** | only when that skill is invoked (matched natively by its `description` — there is no keyword table) | full body, **on-invocation** |
+| **`impl.md` body** | `apex-code` loads `apex-coding-principles/impl.md` at pre-flight. The repo's verify commands come from its `AGENTS.md`, not a skill (ADR-036/037). | per build run |
 | **`references/*.md` tail** | only when a task matches the inline load-condition at the split point | conditional — usually **zero** |
 | **Agent `description` frontmatter** | whenever the Agent tool is available (any session that can spawn) | one description per agent, folded into the Agent-tool schema — **always-on**. Bodies load only in the agent's *own* fresh context, never the main window. |
 | **MCP tool schema** | always-on **unless deferred** by the harness | see § Heuristics — deferral changes the math |
@@ -98,9 +98,12 @@ Sort **every** inventoried item into one bucket with an action:
 ## Scope discipline — audit APEX, don't prescribe deleting other systems
 
 The APEX surface is `apex-*` skills/agents, the registry, the CLAUDE.md chain, and MCP
-*relevance to the planning/coding workflow*. Co-installed third-party systems (e.g. `gsd-*`,
-`superpowers`, design kits) share `~/.claude` but are **not APEX's to prune**. Report their
-**always-on description weight** as a single informational line and flag it for the user to
+*relevance to the workflow*. **Co-installed third-party systems ARE in scope.** This rule used to
+read "not APEX's to prune" — and that is exactly how 33 `gsd-*` agents survived, costing **14.5 KB of
+always-on description weight, four times APEX's own**, while the skill built to find bloat was
+forbidden from naming them as removable (deleted 2026-07-14). An always-on cost is an always-on cost
+regardless of who installed it. Measure it, name it, and **recommend deletion** — the user decides,
+but the recommendation is yours to make. Report their **always-on description weight** and flag it to
 decide — never recommend removing another system as if it were APEX overhead. Their bodies are
 latent (don't load unless invoked); only their description lines tax every session.
 

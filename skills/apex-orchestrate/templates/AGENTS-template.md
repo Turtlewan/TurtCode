@@ -27,8 +27,17 @@ On **"build specs"** (or "build the queue" / "build docs/changes"): work through
 
 ## Verify commands (run after each spec — green on all = done)
 <!-- apex:agents:verify -->
-{seed verbatim from the bound `stack_skills` ## Verification Recipe — exact runnable commands. If the
-stack is TBD at init, leave this marker as the stub; planning fills it when stack_skills binds.}
+{The exact runnable commands that verify this repo — install, lint, typecheck, test, build.
+
+**This file is THE home of the Verification Recipe (ADR-037).** Codex reads AGENTS.md natively on
+every `codex exec` and **never sees status.md**, so a recipe written anywhere else is invisible to
+the coder that actually runs it.
+
+Write only what the model cannot derive: the real command names, the real flags, and any gotcha that
+would otherwise waste a run — e.g. "plain `uv sync`; there is NO `agentic` dependency group and
+`uv sync --group agentic` errors". Do not restate what any competent coder already knows.
+
+If the stack is TBD at init, leave this marker as the stub.}
 
 ## Hard rules (APEX hard-blocks — never violate)
 - **Never `git commit`, never `git push`, never create or switch branches.** The host owns integration — worktrees, checkouts, and commits are owner-controlled; pushing to the default branch is a permanent hard block. Build + verify only, in the tree you are given; leave it dirty for owner review.

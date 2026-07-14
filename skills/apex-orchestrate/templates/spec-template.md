@@ -121,7 +121,7 @@ Approving this spec approves all of them.
 
 ## Specialist Context
 ### Security
-(none — or findings from apex-security review)
+(none — or findings from the dispatched spec review)
 
 ### Performance
 (none — or constraints/budgets)

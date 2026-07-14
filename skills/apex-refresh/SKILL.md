@@ -28,7 +28,7 @@ Full research pass — not limited to original sources.
 
 ## Invocation
 
-/apex-refresh apex-security              # refresh one skill
+/apex-refresh apex-plan                  # refresh one skill
 /apex-refresh --audit                    # show staleness of all skills (informational only)
 /apex-refresh --all                      # refresh all stale skills, one at a time
 /apex-refresh --stocktake                # quality audit of the skill SET (Quick Scan; folds in rules-distill)
@@ -112,7 +112,7 @@ Do NOT write anything until approved.
 3. Record the change in `~/apex/SKILL-HISTORY.md` — prepend one row (newest first):
    `Date | Skill | Files | Version | Event | What Changed | Sources`.
    SKILL-HISTORY.md is the single source of truth for "what changed when" — do NOT create
-   per-skill CHANGELOG.md files. Sync `~/apex/SKILLS.md` / `registry/domains.md` if the
+   per-skill CHANGELOG.md files. Sync `~/apex/SKILLS.md` if the
    description or routing changed (the triple-write — see apex-skill-author).
 
 ## Audit mode (/apex-refresh --audit)
@@ -124,10 +124,10 @@ Display:
 ```
 Skill staleness audit (informational — nothing is blocked)
 ──────────────────────────────────────────────────────────
-✅ apex-frontend     updated 5d ago    (threshold: 14d)
-🟡 apex-backend      updated 18d ago   (threshold: 14d) → consider refreshing
-🔴 apex-security     updated 45d ago   (threshold: 14d) → recommended to refresh
-⚠️ apex-data         no metadata header
+✅ apex-plan         updated 5d ago    (threshold: 14d)
+🟡 apex-code         updated 18d ago   (threshold: 14d) → consider refreshing
+🔴 apex-research     updated 45d ago   (threshold: 14d) → recommended to refresh
+⚠️ apex-debug        no metadata header
 
 Run /apex-refresh <skill> when ready.
 ```
@@ -170,7 +170,7 @@ returns, per skill, one quality verdict **and** any rule-promotion candidates.
 - [ ] `description` is **trigger-style** ("Use when…", real phrases, near-miss exclusions) — NOT a workflow summary
 - [ ] SKILL.md ≤ 500 lines / 5k tokens
 - [ ] SKILL-vs-impl split appropriate; if `impl.md` exists it follows the **two-tier core/references** convention (core, by section identity = frontmatter + `## Stack assumptions` [capability only] + NEVER/ALWAYS + `## Verification Recipe` [stack only] + a compact errors table; bulky content in `references/*.md` with a load condition)
-- [ ] **Triple-write in sync:** a `registry/domains.md` row, a `SKILLS.md` entry, and a `SKILL-HISTORY.md` row all exist
+- [ ] **Double-write in sync:** a `SKILLS.md` entry and a `SKILL-HISTORY.md` row all exist
 - [ ] Content is gotchas / defaults / procedures — not what the model already knows
 - [ ] Stack skill (`apex-<framework>`): `impl.md` carries a runnable `## Verification Recipe`
 - [ ] Holistic: actionability · scope-fit · uniqueness (not replaceable by CLAUDE.md / another skill) · currency

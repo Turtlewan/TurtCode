@@ -11,7 +11,7 @@ staleness_threshold: 30d
 description: >
   Use when writing or consuming a session handoff — the coding→planning narrative inbox
   (docs/handoff/YYYY-MM-DD.md) or the planning→coding spec boundary. Triggers: "write the
-  handoff", end of any coding session, "what did the last build learn", draining the handoff
+  handoff", end of any session that built something, "what did the last build learn", draining it
   at planning session start, deciding where a fact lives (one-home-per-fact routing).
   CANONICAL home of the four-section handoff contract — apex-plan, apex-code, and global
   CLAUDE.md carry summaries of it; on conflict, this file wins. Not the spec format itself
@@ -20,7 +20,8 @@ description: >
 
 # APEX Handoff Protocol
 
-Defines the bidirectional handoff format between planning and coding modes.
+Defines the handoff format across a session boundary (ADR-038: one session plans and builds, so
+the handoff spans *days*, not modes — it is what the next session reads to pick up).
 The only way to move from planning to coding is a spec file.
 The only way to move from coding to planning is a handoff file.
 
@@ -49,7 +50,7 @@ Called by apex-code at the end of every session.
    - **Decisions Made** — autonomous decisions + rationale; mark "review needed" if planning should revisit.
      Tag any *build-time architectural decision* with `[arch]` (a choice that shaped structure —
      a data model, a boundary, a protocol, a dependency). Coding only **tags** it; planning writes
-     the ADR during the drain. Do not author the ADR in coding mode — the rationale is
+     the ADR during the drain. Do not author the ADR mid-build — the rationale is
      judgment-heavy and is planning's job.
    - **Specialist Flags** — the non-obvious gotcha a specialist surfaced that git diff won't show
      - **AFK-only — end-gate findings:** for an unattended Build Mode run, docs-technical-agent

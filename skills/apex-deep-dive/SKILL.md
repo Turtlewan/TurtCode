@@ -34,14 +34,14 @@ Output is analysis only — no code, no spec produced.
 
 ## Deep dive workflow
 
-### Step 1: Load specialist skill
+### Step 1: Frame the domain
 
-Identify the domain from the invocation.
-Read the corresponding specialist SKILL.md:
-- apex-security/SKILL.md for security
-- apex-architecture/SKILL.md for architecture
-- apex-performance/SKILL.md for performance
-- (etc. — any specialist domain registered in `~/.claude/registry/domains.md`)
+Identify the domain from the invocation and state what you already know about it, so the research
+targets the gap rather than re-deriving the basics.
+
+There is **no domain-specialist skill to load** — domain knowledge is model-native (ADR-036). What a
+deep dive adds is not recall but *this project's* constraints: read the code, the stack, and the
+decisions already made, then research only what those make genuinely uncertain.
 
 ### Step 2: Read project context
 
@@ -177,9 +177,9 @@ strongest independent dissent under "## Opposing View" (it supersedes the single
 
 ## Available domains
 
-Any specialist domain registered in `~/.claude/registry/domains.md` (the source of truth) —
-e.g. security, frontend, backend, architecture, system-design, devops, testing, performance,
-observability, accessibility, ai-systems, data, auth, search, and the rest of the apex-* set.
+Any domain — security, frontend, architecture, devops, performance, data, auth, and so on. There is
+no registry and no domain skill to load (ADR-036); the model brings the expertise, and the deep dive
+supplies what it cannot know: *this project's* code, constraints, and prior decisions.
 
 For topics that span multiple domains (e.g., "how should we handle auth for our API?"):
 Load the primary domain (security) and note where other domains are relevant.

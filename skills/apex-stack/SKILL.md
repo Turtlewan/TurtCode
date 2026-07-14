@@ -18,7 +18,7 @@ description: >
   decision — "what stack should I use", "starting a new project", "which
   framework / database / ORM / language". Runs before apex-init. Selects merit-based
   across ecosystems (NOT JS-by-default), weighing AI-buildability and verifiability
-  heavily, then runs the stack-skill coverage gate and writes the stack_skills binding.
+  heavily, then writes the chosen stack's verify commands into the repo's AGENTS.md.
   Not for picking a feature library inside an already-chosen stack.
 ---
 
@@ -27,8 +27,8 @@ description: >
 Selection is **requirements-driven and merit-based across ecosystems** — never "the JS preset for
 this profile." APEX builds with heavy AI assistance for developers who often don't know the stack,
 so **AI-buildability and verifiability are first-class selection criteria** (see *How to choose*),
-not afterthoughts. After the stack is chosen, the **coverage gate** records skill coverage and
-writes the `stack_skills` binding.
+not afterthoughts. After the stack is chosen, write its **verify commands into `AGENTS.md`** — the
+one thing about a stack the model cannot derive is how *this repo* proves itself green.
 
 ## Research findings
 
@@ -127,26 +127,29 @@ option only if it wins on the criteria above; it sits alongside the others, neve
 
 **Deployment platform caveat:** Vercel is listed as low-lock-in but is also a feature provider (edge middleware, image optimization). Self-hosting or moving to Railway later requires replacing these features. Factor this into the ADR analysis.
 
-## Coverage gate (run after the stack is chosen — before handing to apex-init)
+## Land the recipe (run after the stack is chosen — before handing to apex-init)
 
-Informational, never blocks — it surfaces stack-skill coverage and binds it to the project.
-
-1. **Check the registry.** Look in `~/.claude/registry/domains.md` for a stack skill
-   (`apex-<language>` / `apex-<framework>`) matching the chosen stack.
-2. **Write the binding.** Set `stack_skills:` in the project's `status.md` to the matching skills
-   (e.g. `stack_skills: [apex-python, apex-fastapi]`). Coding mode reads their `## Verification
-   Recipe` from this binding (ADR-005/006).
-3. **No match → record-the-gap-and-proceed.** Set `stack_skills: []` and note the gap ("no stack
-   skill for <stack> — building on base-model knowledge"). **Never derail stack selection to author
-   a skill** — that is a separate explicit step via `apex-skill-author`.
-4. **Build threshold (whether a skill is worth creating later).** Only when **(a)** the stack
-   recurs across projects **and (b)** the base model gets patterns wrong / they should be enforced
-   consistently. Otherwise the recorded gap is the correct end state.
+1. **APEX ships no stack skills.** There is no global `apex-python` / `apex-nextjs` to bind — the
+   domain layer was removed (ADR-036). A frontier coder knows the stack; what it cannot know is how
+   *this repo* verifies itself.
+2. **The Verification Recipe's single home is the repo's `AGENTS.md`** (ADR-037). Write the exact
+   commands (install, lint, typecheck, test, build) there under `## Verify commands`. This is a
+   **per-project fact**, not model knowledge — that is why it is written down at all.
+   **It must be AGENTS.md, not status.md:** Codex reads AGENTS.md natively on every `codex exec` and
+   **never sees status.md**. A recipe in status.md is invisible to the coder that runs it.
+   `apex-code` reads AGENTS.md before dispatching; absent a recipe, it falls back to the spec's
+   `## Commands to run`.
+3. **Write only what the model cannot derive.** Real command names, real flags, and any gotcha that
+   would otherwise waste a run (e.g. "plain `uv sync` — there is NO `agentic` group; `--group
+   agentic` errors"). Do **not** restate framework best practice — an AGENTS.md padded with what the
+   model already knows measurably *lowers* task success (ADR-037).
+4. **Never author a stack skill.** That layer is gone (ADR-036) and re-creating it one stack at a
+   time is the failure mode to guard against. A stack gap is not a skill gap.
 
 ## Hard blocks
 
 - Never default to a JS/TS stack by reflex — select on merit across ecosystems, weighing AI-buildability and verifiability (see *How to choose*). The JS option must *win*, not be assumed.
-- Never finish stack selection without running the coverage gate and writing the `stack_skills` binding to status.md (`[]` + a recorded gap if no skill matches).
+- Never finish stack selection without writing the verify commands into the repo's `AGENTS.md` (or leaving the `<!-- apex:agents:verify -->` stub if the stack is genuinely TBD).
 - Never output a recommendation without naming the runner-up and why it lost.
 - Never recommend MongoDB for apps with relational data — PostgreSQL handles documents via JSONB
 - Never recommend a hosted auth provider (Clerk, Supabase Auth) without noting its pricing at 10k+ MAU
@@ -161,8 +164,8 @@ Informational, never blocks — it surfaces stack-skill coverage and binds it to
 - [ ] Lock-in table reviewed — high lock-in items confirmed intentionally, not by default
 - [ ] Hosted services priced at expected scale (MAU × price per seat)
 - [ ] ADR written to docs/technical/adr/ADR-001-stack.md
-- [ ] Coverage gate run: registry checked, `stack_skills` written to status.md (or `[]` + recorded gap)
-- [ ] Any gaps in apex-* coverage flagged (e.g. "apex-payments not yet a skill")
+- [ ] Verify commands written into `AGENTS.md` `## Verify commands` — install, lint, typecheck, test, build
+- [ ] AGENTS.md carries no content the model could derive (that content lowers task success)
 
 ## Gotchas / edge cases
 

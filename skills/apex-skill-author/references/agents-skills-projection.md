@@ -1,24 +1,30 @@
 # `.agents/skills/` projection — card anatomy, gates, workflow (ADR-031)
 
 Read when projecting or editing a Codex-facing card. Cards live in the **target project's repo**
-(`.agents/skills/<card-name>/`), are committed with it, and are NOT tracked in
-`registry/domains.md` / `SKILLS.md` (project artifacts, not APEX skills). The APEX skill is the
-source; the card is generated output.
+(`.agents/skills/<card-name>/`), are committed with it, and are NOT tracked in `SKILLS.md` (project
+artifacts, not APEX skills).
+
+**The source is the project, not an APEX skill (ADR-036).** APEX no longer ships domain or stack
+skills, so there is nothing to mirror from. A card is written from **this repo's own facts** — its
+pinned versions, its verification commands, its real hazards, its established patterns — and is
+grounded by reading the repo, not by copying a rulebook.
 
 ## What projects (selective — never a mirror)
 
 | Card class | Projects from | Example cards |
 |---|---|---|
-| Bound-stack | stack impl.md NEVER/ALWAYS + Verification Recipe + version-bound hazards | `typed-python`, `tauri2`, `swift-concurrency` |
-| Debug / testing | apex-debug one-hypothesis + regression-test discipline; apex-testing recipe rules | `debug-discipline`, `test-discipline` |
-| Domain hazard | security invariants only (auth-source, tenant scoping, secret handling) from apex-security / apex-auth / apex-data impl cores | `auth-hazards`, `migration-hazards` |
-| Plan-review | Sol's plan-check rubric — **lands with Phase C**, listed here for shape only | `apex-plan-review` |
+| Bound-stack | the repo's pinned versions + its Verification Recipe (`status.md` / `AGENTS.md`) + hazards that bit *this repo* | `typed-python`, `tauri2`, `swift-concurrency` |
+| Debug / testing | apex-debug's one-hypothesis + regression-test discipline (process, not knowledge) | `debug-discipline`, `test-discipline` |
+| Domain hazard | security invariants **specific to this codebase** — where auth comes from, how tenants are scoped, where secrets live | `auth-hazards`, `migration-hazards` |
+| Plan-review | Sol's plan-check rubric | `apex-plan-review` |
 
-What does NOT project: planning judgment, orchestration process, generic hygiene (validation,
-HTTP codes, naming, DRY, no-silent-errors — native to GPT-5.6; injecting degrades output).
-Content calibration is the same as AGENTS.md § Conventions (ADR-031): repo-specific, version-
-bound, resolved values, security invariants, runnable verification; positively phrased;
-internally consistent with the repo's AGENTS.md.
+What does NOT project: planning judgment, orchestration process, and — critically — **anything the
+model already knows**: generic hygiene (validation, HTTP codes, naming, DRY, no-silent-errors),
+framework best practice, OWASP categories, language idiom. Injecting these degrades output. This is
+the same rule that removed APEX's own knowledge layer; apply it here without exception.
+
+Content calibration (ADR-031): repo-specific, version-bound, resolved values, security invariants,
+runnable verification; positively phrased; internally consistent with the repo's AGENTS.md.
 
 ## Card anatomy
 
@@ -69,3 +75,6 @@ description: <activation trigger — when Codex should pull this card; this stri
 - Start-set for a new project: bound-stack card(s) + debug/testing. Add hazard cards when the
   domain enters the roadmap. Never pre-build a full grid.
 - Deleting a source skill → delete its cards in consuming repos (flag them in the session close).
+  **Live as of 2026-07-14:** the 36 domain skills were deleted (ADR-036). Any consuming repo holding
+  a card projected from one of them (e.g. Artemis) must have that card re-grounded in the repo's own
+  facts or removed — a card citing a skill that no longer exists is a stale rulebook.

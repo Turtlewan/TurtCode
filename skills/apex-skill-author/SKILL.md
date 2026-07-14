@@ -62,7 +62,7 @@ holds under the competing prompt. (Adapted from ECC `skill-comply`'s prompt-inde
 
 - Creating a new skill (`/add a skill`, "we need a skill for X")
 - Updating any existing `SKILL.md` or `impl.md`
-- Changing skill frontmatter, a `registry/domains.md` row, or `SKILLS.md`
+- Changing skill frontmatter or `SKILLS.md`
 - Reviewing whether a skill is well-formed
 
 ## Before you author — ask first
@@ -75,7 +75,7 @@ holds under the competing prompt. (Adapted from ECC `skill-comply`'s prompt-inde
    author from the verified `docs/research/` doc, not assumptions. For a **stack skill**
    (`apex-<framework>`) this is **unconditional** — see **Stack skills** below.
 3. **Which skill type is it?** (table below — determines how you baseline-test it.)
-4. **Does it already exist?** Check `registry/domains.md` and `SKILLS.md` before creating.
+4. **Does it already exist?** Check `SKILLS.md` before creating.
 
 ## Skill types → baseline-test style
 
@@ -139,7 +139,6 @@ description: >
 A skill isn't "done" until all three are updated. (Agents mirror SKILL.md fine but forget
 these — they are the most-skipped step.)
 
-- [ ] `~/.claude/registry/domains.md` — add a row: domain, SKILL path, impl path (or `—`), agent (or `—`), keywords
 - [ ] `~/apex/SKILLS.md` — quick-reference row + one-paragraph entry in the right section
 - [ ] `~/apex/SKILL-HISTORY.md` — prepend one row (newest first): `Date | Skill | Files | Version | Event | What Changed | Sources`
 
@@ -185,7 +184,7 @@ human-readable "verification checklist" is **not** a recipe: the runner cannot c
   *language* property (static vs dynamic typing), so the language layer carries the buildability
   weight and is where it's bought back — e.g. enforce `mypy --strict` to raise a dynamic
   language's feedback quality toward a typed one's.
-- **Composition:** coding mode unions the recipes of every bound `stack_skills` entry
+- **Composition (historical — ADR-036/037):** APEX no longer ships stack skills; the recipe lives in the repo's `AGENTS.md`. Ignore any `stack_skills` entry
   (`apex-python` + `apex-django` → Python checks **+** Django checks).
 - **No npm bias.** State the stack's real commands; never default to `npm run build` / `npx tsc`
   for a non-JS stack.

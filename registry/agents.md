@@ -1,37 +1,26 @@
 # APEX Agent Registry
 
-## Phase 1 Agents
-(none — orchestration handled by skills)
+Five agents. The per-domain agent roster was retired in two waves: the 14 review/enforce stubs in
+2026-06-01 (ADR-007), and the last four tooling agents — `apex-security-agent`,
+`apex-figma-agent`, `apex-docs-technical-agent`, `apex-docs-product-agent` — on 2026-07-14 with the
+knowledge layer they enforced (ADR-036).
 
-## Phase 2 Agents (coding pipeline)
+## Build pipeline
 
-| Agent | File | Mode | Spawned by | Job |
-|-------|------|------|-----------|-----|
-| apex-coder | agents/apex-coder.md | Coding host | apex-code | Dependency analysis + parallel planning |
-| code-worker | agents/code-worker.md | Coding host | apex-coder | Executes one isolated task |
-| apex-reviewer | agents/apex-reviewer.md | Coding host | apex-code | Post-build advisory review |
-| apex-docs-technical-agent | agents/apex-docs-technical-agent.md | Claude | apex-code | Writes handoff, ADRs |
-| apex-docs-product-agent | agents/apex-docs-product-agent.md | Coding host | apex-code | Inline docs, changelog, README |
+| Agent | Spawned by | Job |
+|-------|-----------|-----|
+| apex-coder | apex-code | Dependency analysis, wave grouping, parallel dispatch |
+| code-worker | apex-coder | Executes one isolated task from a spec |
+| apex-reviewer | apex-code | Post-build advisory review against the spec's acceptance criteria |
 
-## Phase 3 Agents (domain review + tooling)
+## Review gates
 
-Planning-side **domain review** is one generic agent dispatched per domain (ADR-007), not a
-per-domain roster:
+| Agent | Spawned by | Job |
+|-------|-----------|-----|
+| apex-spec-reviewer | apex-plan | Planning-side review of a draft spec — returns BLOCK / FLAG |
+| apex-wave-reviewer | apex-code | Reviews a completed build wave — returns BLOCK / FLAG / CLEAN |
 
-| Agent | File | Mode | Activation |
-|-------|------|------|-----------|
-| apex-spec-reviewer | agents/apex-spec-reviewer.md | Claude | Dispatched by apex-plan to review a draft spec against one `apex-<domain>/SKILL.md`; auto-fired for the heavy set (security/auth/data/testing/a11y), judgment-fired otherwise |
-
-Agents retained for domain-specific **tooling** (not review stubs):
-
-| Agent | File | Mode | Activation |
-|-------|------|------|-----------|
-| apex-security-agent | agents/apex-security-agent.md | Both | security, auth, crypto keywords (Bash security verification) |
-| apex-figma-agent | agents/apex-figma-agent.md | Coding host | When spec includes a Figma URL (MCP / image steps). Note: ADR-027 coders (Codex/Opus) are both sighted, so the old image-blind detour is moot. |
-
-The post-build doc agents are listed in Phase 2 (`apex-docs-technical-agent`, `apex-docs-product-agent`).
-
-_Retired 2026-06-01 (ADR-007): the 14 per-domain review/enforce stubs — accessibility, ai-systems,
-animation, architecture, backend, data, design-system, devops, frontend, observability, performance,
-testing, ui-testing, ui-ux-design. They were never dispatched; planning-side review is now the generic
-`apex-spec-reviewer`, coding-side enforcement is `apex-coder` wave-workers loading `impl.md` inline._
+Both reviewers are **generic and parametrised**: what they review against is passed in, not baked
+into a per-domain agent. With the domain skills gone, they review against the spec's own acceptance
+criteria and `apex-coding-principles`. Cross-family routing holds (Codex builds → Claude reviews —
+ADR-032).

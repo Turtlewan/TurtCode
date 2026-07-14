@@ -103,7 +103,7 @@ Each piece of the bug record gets ONE durable home — **git, not a doc that get
 | Prevention | a **regression test** (fails before, passes after; name it "it {bug scenario}") |
 | High-recurrence-risk warning | a **code comment at the fix site** |
 | "A bug was fixed" (session signal) | the handoff — transient, a pointer only |
-| Unfixed / deferred bug | a **GitHub Issue** (routed + gated — see apex-github) |
+| Unfixed / deferred bug | a **GitHub Issue** (routed + gated) |
 
 1. Write the regression test (fails before the fix, passes after).
 2. Put the root cause in the **commit message body** — not only the handoff. If the fix closes
@@ -148,7 +148,7 @@ bug was touched — it does not duplicate the record:
 ```
 
 For an **unfixed / deferred / escalated** bug (or a recurrence-risk:high left unaddressed):
-do NOT bury it in the handoff — route it to a **GitHub Issue** via `apex-github`, subject to
+do NOT bury it in the handoff — route it to a **GitHub Issue**, subject to
 its security/visibility gate. **The Issue *is* the bug backlog; `status.md` does not carry one.**
 A bug fixed in-session with a regression test gets **no issue** (git + test only — avoid
 created-and-closed noise).
