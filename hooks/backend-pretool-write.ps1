@@ -46,54 +46,6 @@ if ($fp -like "$claudeRoot\*") { exit 0 }
 #     Any project's docs/research/mockups/ is a throwaway design scratch area. ---
 if ($fp -like '*docs\research\mockups\*') { exit 0 }
 
-# --- AFK bypass (ADR-033): when AFK is armed, stand down and defer to afk-gate.js's own
-#     critical-file judgment -- UNLESS this target is itself critical, in which case this
-#     guard's ask still applies (defense in depth; afk-gate.js falls through on critical
-#     paths too, so the two must agree or a critical file loses ask coverage entirely).
-#     This is what makes AFK mode-independent (works armed in a planning-mode session, not
-#     just coding-mode) instead of being silently overridden by this hook's "ask". ---
-function Test-AfkArmed {
-  $flagPath = Join-Path $env:USERPROFILE '.claude\afk.on'
-  if (-not (Test-Path $flagPath)) { return $false }
-  $token = $null; $expires = $null
-  Get-Content $flagPath | ForEach-Object {
-    if ($_ -match '^\s*token\s*=\s*(.+)$')   { $token   = $Matches[1].Trim() }
-    if ($_ -match '^\s*expires\s*=\s*(.+)$') { $expires = $Matches[1].Trim() }
-  }
-  if (-not $token -or -not $expires) { return $false }
-  try { $expiresAt = [DateTime]::Parse($expires, [System.Globalization.CultureInfo]::InvariantCulture, [System.Globalization.DateTimeStyles]::AdjustToUniversal -bor [System.Globalization.DateTimeStyles]::AssumeUniversal) }
-  catch { return $false }
-  return $expiresAt -gt (Get-Date).ToUniversalTime()
-}
-
-function Test-AfkCriticalPath {
-  param([string]$Normalized)
-  $basename = Split-Path $Normalized -Leaf
-  if ($basename -match '\.env(\..*)?$')                       { return $true }
-  if ($Normalized -match '(^|\\)migrations(\\|$)')             { return $true }
-  if ($Normalized -match '(^|\\)alembic\\versions(\\|$)')      { return $true }
-  if ($Normalized -match 'auth' -or $Normalized -match 'guard') { return $true }
-  if ($Normalized -match '(^|\\)\.github\\workflows(\\|$)')    { return $true }
-  if ($basename -eq '.gitlab-ci.yml')                          { return $true }
-  if ($Normalized -match '(^|\\)\.circleci(\\|$)')             { return $true }
-  if ($basename -match '^azure-pipelines')                     { return $true }
-  $manifests = @('package.json','package-lock.json','pnpm-lock.yaml','yarn.lock',
-    'pyproject.toml','poetry.lock','cargo.toml','cargo.lock','go.mod','go.sum')
-  if ($manifests -contains $basename -or $basename -match '^requirements.*\.txt$') { return $true }
-  if ($basename -eq '.npmrc' -or $basename -eq '.netrc')       { return $true }
-  if ($Normalized -match '(^|\\)\.ssh(\\|$)')                  { return $true }
-  if ($basename -match '^id_rsa' -or $basename -match '\.(pem|key)$') { return $true }
-  if ($Normalized -match 'secret' -or $Normalized -match 'credential') { return $true }
-  if ($Normalized -match '(^|\\)\.claude\\hooks(\\|$)')                { return $true }
-  if ($basename -eq 'settings.json' -and $Normalized -match '\\\.claude\\') { return $true }
-  return $false
-}
-
-if (Test-AfkArmed) {
-  $normalized = $fp.ToLowerInvariant()
-  if (-not (Test-AfkCriticalPath $normalized)) { exit 0 }
-}
-
 # --- Otherwise: planning mode editing a code file outside APEX -> ask ---
 $reason = "Planning mode (Anthropic backend). DEFAULT: throw this to a DeepSeek coding session -- '$filePath' is a non-doc file outside the APEX project, and code edits belong in coding mode. Approve this prompt ONLY to explicitly request the special planning-mode edit for this one action."
 $out = @{

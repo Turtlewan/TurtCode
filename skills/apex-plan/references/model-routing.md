@@ -31,8 +31,8 @@ Fail any one → **dispatch**.
 
 **Two gotchas the reasoning won't supply:**
 - The planning write-guard **exempts APEX + `~/.claude` only**. Every other repo prompts per non-`.md`
-  edit. AFK arming (ADR-033) removes that prompt anywhere — but fixes neither the pool economics nor the
-  ceiling, so it makes host-direct *possible* elsewhere, never *advisable*.
+  edit — so host-direct outside those two is a prompt-per-edit slog regardless of how the reasoning
+  above scores. Run the build in coding mode (`apex-build`) instead.
 - **The B1 scope hole is live** (`apex:docs/findings/artemis-13-7-issues.md`): a dispatched Codex can
   write outside its authorized file list with nothing stopping it. Until the post-dispatch diff check
   lands, dispatch carries a risk host-direct does not. Expected to expire.

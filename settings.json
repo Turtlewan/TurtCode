@@ -43,7 +43,7 @@
       "C:/Users/User"
     ]
   },
-  "model": "fable",
+  "model": "opus",
   "hooks": {
     "SessionStart": [
       {
@@ -79,16 +79,6 @@
           {
             "type": "command",
             "command": "\"C:/Program Files/nodejs/node.exe\" \"C:/Users/User/.claude/hooks/destructive-command-guard.js\"",
-            "timeout": 5
-          }
-        ]
-      },
-      {
-        "matcher": "Write|Edit|Bash",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "\"C:/Program Files/nodejs/node.exe\" \"C:/Users/User/.claude/hooks/afk-gate.js\"",
             "timeout": 5
           }
         ]
