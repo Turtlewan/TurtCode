@@ -2,7 +2,7 @@
 
 Per-project visual source of truth the **image-less coding model reads**. Scope = stable,
 single-homed visual decisions only (ADR-017). Seeded by apex-init (scope-gated to UI-bearing
-projects); owned by apex-ui-ux-design. NOT a per-screen visual spec — screens/journeys live in
+projects); owned by apex-plan/references/design-workflow.md. NOT a per-screen visual spec — screens/journeys live in
 `app-flow.md`; live per-screen visual judgment is verified by the visual review gate, not frozen here.
 
 ```markdown
