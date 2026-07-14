@@ -83,8 +83,17 @@ $snap     = Get-Content $snapPath -Raw | ConvertFrom-Json
 $preDirty = @{}
 foreach ($p in @($snap.dirty)) { $preDirty[(Normalize $p)] = $true }
 
+# Split on commas as well as on array elements. A caller invoking this from bash (or any shell that
+# does not understand PowerShell array syntax) passes -Authorized 'a.py','b.py' as ONE string,
+# "a.py,b.py" -- which then matches nothing, and every authorized file is misreported as a violation.
+# Silent, and it would have broken the first real build.
 $allowed = @{}
-foreach ($a in $Authorized) { $allowed[(Normalize $a)] = $true }
+foreach ($a in $Authorized) {
+    foreach ($piece in ($a -split ',')) {
+        $p = $piece.Trim().Trim("'").Trim('"')
+        if ($p) { $allowed[(Normalize $p)] = $true }
+    }
+}
 
 $nowDirty = Get-DirtySet
 

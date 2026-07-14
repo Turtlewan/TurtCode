@@ -91,7 +91,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "\"C:/Program Files/nodejs/node.exe\" \"C:/Users/User/.claude/hooks/gsd-context-monitor.js\"",
+            "command": "\"C:/Program Files/nodejs/node.exe\" \"C:/Users/User/.claude/hooks/apex-context-monitor.js\"",
             "timeout": 10
           }
         ]
@@ -101,7 +101,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "\"C:/Program Files/nodejs/node.exe\" \"C:/Users/User/.claude/hooks/gsd-read-injection-scanner.js\"",
+            "command": "\"C:/Program Files/nodejs/node.exe\" \"C:/Users/User/.claude/hooks/apex-read-injection-scanner.js\"",
             "timeout": 5
           }
         ]
@@ -122,7 +122,7 @@
   "enableWorkflows": true,
   "statusLine": {
     "type": "command",
-    "command": "\"C:/Program Files/nodejs/node.exe\" \"C:/Users/User/.claude/hooks/gsd-statusline.js\""
+    "command": "\"C:/Program Files/nodejs/node.exe\" \"C:/Users/User/.claude/hooks/apex-statusline.js\""
   },
   "enabledPlugins": {
     "playwright@claude-plugins-official": true,
