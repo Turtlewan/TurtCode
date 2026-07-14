@@ -1,26 +1,34 @@
 ---
 name: propose-coder-model-at-coding-shift
-description: "At any planning→coding shift, name the coder path (Codex primary / Opus fallback) — don't silently auto-route"
+description: "Before any build, name the coder path (Codex primary / Opus fallback) and confirm — don't silently auto-route"
 metadata: 
   node_type: memory
   type: feedback
-  originSessionId: 96111116-0ea9-4c5f-a6b9-e8ffc55b7d87
+  originSessionId: 97a47186-588e-4011-a69e-aab98ab8c5c7
 ---
 
-Whenever the user is about to shift into a coding session — any "let's build" / "shift to coding" /
-"start build" / spec-ready handoff — **state which coder path will run and confirm**, with a
-recommendation. Do **not** silently auto-route.
+Before starting any build — "let's build" / "start build" / a spec going ready — **state which coder
+will run, recommend one, and confirm.** Do not silently auto-route.
 
-Under ADR-027 the choice collapsed (was Flash/Pro/Codex): **Codex (`gpt-5.5`) is the primary coder;
-Opus is the manual fallback when Codex quota runs out.** The launchers:
-- `codex-code` → **Codex** directly (standalone, supervised — no APEX pipeline). Good for quick/Artemis-style builds.
-- `apex-opus` → the **Claude coding host** (`APEX_MODE=coding`): apex-code dispatches `codex exec` per task and builds inline as **Opus** on quota-out (mechanic A — full verify/review/docs/checkpoint). The integrated Plan-A path.
-- Archived/recovery-only: `coding-mode-deepseek` (Flash) / `apex-code-deepseek-pro` (Pro) — DeepSeek is parked (ADR-027).
+**The paths (as of 2026-07-14):**
+- **Codex `gpt-5.6-sol`** — the primary coder. Dispatched **per task as a `codex exec` subprocess**
+  from the current session. Its own auth, its own quota; spends none of the Anthropic pool.
+- **Opus** — the fallback, a fresh `model: opus` worker in the same session, when Codex quota runs
+  out. **This one draws the scarce Anthropic Max pool** — the reason the user wants to be told.
+- `codex-code` (PS function) — drives Codex standalone, outside the APEX pipeline. Fine for a quick
+  supervised build.
 
-**Why:** the user wants to stay in the loop on which coding path runs (cost/capability + the manual
-Codex→Opus fallback). Scoped exception to the high-autonomy default ([[user-autonomy-preference]]) —
-applies to the coder pick at the coding shift, not other decisions.
+**Why:** the user wants to stay in the loop on cost and capability, especially the Codex→Opus
+fallback. A scoped exception to the high-autonomy default ([[user-autonomy-preference]]) — it applies
+to the *coder pick*, not to other decisions.
 
-**How to apply:** at the shift, name the path (codex-code vs apex-opus), recommend one for the task,
-flag that Opus-fallback draws the shared Max pool (soft-pool guard), and let the user confirm before
-launching. Related: [[cursor-coedit-flow]].
+**How to apply:** name the path, recommend one, flag it if Opus-fallback is likely (shared pool), and
+let the user confirm before launching.
+
+**Superseded machinery — do not reference these, they are deleted (ADR-038):** there is no
+"planning→coding shift" and no coding *session* — one session plans and builds. `APEX_MODE`, the
+`apex-build` / `apex-opus` / `planning-mode` / DeepSeek launchers, and the planning write-guard are
+all gone. The mode split only ever existed because `ANTHROPIC_BASE_URL` is session-level and reaching
+DeepSeek required a restart; Codex is a subprocess, so it doesn't.
+
+Related: [[cursor-coedit-flow]].

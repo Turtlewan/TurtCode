@@ -43,7 +43,7 @@
       "C:/Users/User"
     ]
   },
-  "model": "sonnet",
+  "model": "opus",
   "hooks": {
     "SessionStart": [
       {
