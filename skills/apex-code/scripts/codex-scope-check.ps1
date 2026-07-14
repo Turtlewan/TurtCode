@@ -72,6 +72,39 @@ if ($Snapshot) {
     }
     $state | ConvertTo-Json -Depth 5 | Out-File -FilePath $snapPath -Encoding utf8
     Write-Host "[scope] snapshot for '$Task': HEAD=$($state.head.Substring(0,7)), $($state.dirty.Count) file(s) already dirty (host work - will never be reverted)."
+
+    # --- RE-DISPATCH HAZARD -----------------------------------------------------------------------
+    # If a file this task is AUTHORIZED to write is ALREADY dirty, the task's own work may already be
+    # sitting in the tree -- from a previous dispatch that appeared to fail but wasn't a no-op.
+    # The coder then cannot run its load-bearing test RED before the fix, because the fix is already
+    # there. It can only verify what it finds. That is a rubber-stamp, not a build, and a coder less
+    # honest than the one that reported it would simply say "done".
+    #
+    # Live: cap-deps-1a, 2026-07-14 -- "The complete scoped implementation and test file were already
+    # present as uncommitted changes at initial inspection. Consequently, the load-bearing test could
+    # not be run red against the then-current worktree before the fix."
+    if ($Authorized.Count -gt 0) {
+        $preAuth = @()
+        foreach ($a in $Authorized) {
+            foreach ($piece in ($a -split ',')) {
+                $p = Normalize ($piece.Trim().Trim("'").Trim('"'))
+                if ($p -and $dirty.ContainsKey($p)) { $preAuth += $p }
+                elseif ($p) {
+                    foreach ($k in $dirty.Keys) { if ((Normalize $k) -eq $p) { $preAuth += $p } }
+                }
+            }
+        }
+        if ($preAuth.Count -gt 0) {
+            Write-Host ""
+            Write-Host "[scope] RE-DISPATCH HAZARD - $($preAuth.Count) file(s) this task is authorized to write are ALREADY dirty:" -ForegroundColor Yellow
+            foreach ($p in ($preAuth | Select-Object -Unique)) { Write-Host "      $p" }
+            Write-Host "[scope] The task's work may already be in the tree from an earlier dispatch that only LOOKED like it failed." -ForegroundColor Yellow
+            Write-Host "[scope] The coder cannot run its test RED against a tree that already contains the fix - it can only" -ForegroundColor Yellow
+            Write-Host "[scope] verify what it finds. Reset these paths to the base SHA before re-dispatching, or accept that" -ForegroundColor Yellow
+            Write-Host "[scope] this run VERIFIES rather than BUILDS - and say so in the decisions table." -ForegroundColor Yellow
+            Write-Host ""
+        }
+    }
     exit 0
 }
 

@@ -117,9 +117,16 @@ defensively, but pass it properly.
 - The run streams to a tailable `docs/progress/codex-<spec>-<task>.log`. **Post a one-line progress
   pulse to chat per check-in** — a backgrounded Codex is otherwise invisible until it exits.
   Recipe → `references/codex-observability.md`.
-- The final message is schema-constrained: `{status, changed_files, commands_run, deviations,
-  unresolved, blocker}`. Route `status` per `references/dispatch-pack.md` § Completion routing.
+- **Read the completion from `<scratch>/codex-<spec>-<task>.final`** (what `-o` captures — the final
+  message by construction). `{status, changed_files, commands_run, deviations, unresolved, blocker}`.
+  Route `status` per `references/dispatch-pack.md` § Completion routing.
   **`blocked` = spec defect → Forks, never a model fallback.**
+- **NEVER parse the completion out of the log.** `--output-schema` forces *every* agent message into
+  the completion shape, so Codex uses it for narration. A real run emits several (`cap-deps-1a`
+  emitted **nine**). The first said `status: done, changed_files: []` — a clean no-op success — while
+  it was only just starting; four of the middle ones said plain `done` with the right six files and
+  **silently dropped the concerns**. Only the **last** `agent_message` is the report. If you must
+  read the log, take the last and discard the rest — never the first match, never "the first `done`".
 - **A scope violation is a SPEC DEFECT, not a coder failure** — the task needed a file its spec
   didn't list. Log it, surface it to planning, **don't just re-run**.
 - **Blast radius:** the Codex subprocess does **not** ride Claude Code's `permissions.deny` floor.

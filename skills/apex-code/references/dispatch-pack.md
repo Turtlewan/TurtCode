@@ -52,6 +52,36 @@ deviations): which existing pattern to mirror, a local name. Blocker (report in 
 improvise): an acceptance criterion that cannot pass as written, a needed file outside the
 authorized set, a missing credential."
 
+## Reading the completion — the LAST agent_message, never any other
+
+**`--output-schema` forces EVERY agent message into the completion shape, so Codex uses that shape
+for narration.** A real run emits several. Only the last one is a completion report; every earlier
+one is a thought.
+
+From the live `cap-deps-1a` run (2026-07-14) — nine of them, in order:
+
+```
+0. status=done                changed_files=[]     <- "I'm about to start reading the spec"
+1. status=done                changed_files=[]
+2. status=done_with_concerns  changed_files=6
+3. status=done                changed_files=6
+4. status=done                changed_files=6
+...
+8. status=done_with_concerns  changed_files=6      <- THE ONLY REAL ONE
+```
+
+**Two ways to be silently wrong:**
+- Take the **first** match → `done` with **zero** changed files. Reads as a clean no-op success. The
+  task is checked off having apparently done nothing, and nobody looks again.
+- Take **any `status: done`** → messages 3–5 and 7 qualify, look complete, carry the right six files
+  — and **silently drop the concerns.** The deviations vanish. This is the worse one, because the
+  output looks correct.
+
+**The rule:** read `<scratch>/codex-<spec>-<task>.final` (what `-o` captures — it is the final
+message by construction). If you are reading the **log** instead — a progress pulse, a tail, any
+regex over `"status":` — you must take the **last** `agent_message` and discard the rest. Never the
+first match, never "the first `done`".
+
 ## Completion routing (host reads exit code + `.final` JSON)
 
 | Signal | Meaning | Host action |
