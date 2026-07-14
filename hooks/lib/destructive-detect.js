@@ -1,6 +1,14 @@
 'use strict';
 
-const DESTRUCTIVE_SQL_DD = /\b(drop\s+table|delete\s+from|truncate|dd\s+if=)\b/i;
+const DESTRUCTIVE_SQL_DD = /\b(drop\s+(table|schema|database)|delete\s+from|truncate|dd\s+if=)\b/i;
+
+// Heads that only READ. A destructive-looking string in their arguments is data, not an action --
+// `grep "<sql>" migrations/` must not be blocked. Anything NOT on this list gets its RAW
+// (quotes-intact) command tested against DESTRUCTIVE_SQL_DD. See isDestructiveBash.
+const READONLY_HEADS = new Set([
+  'grep', 'rg', 'ag', 'cat', 'bat', 'less', 'more', 'head', 'tail', 'echo', 'printf',
+  'find', 'ls', 'dir', 'wc', 'diff', 'awk', 'jq', 'git', 'type', 'get-content', 'select-string'
+]);
 
 function stripQuotedStrings(input) {
   return input
@@ -133,6 +141,19 @@ function isDestructiveGit(tokens) {
   var command = sub.command;
   var rest = sub.rest;
 
+  // Declared permanent hard blocks in apex-governance that this guard did not actually enforce
+  // until 2026-07-14. They were prose, not mechanism.
+  if (command === 'merge') {
+    // `git merge --abort` / `--quit` are recovery, not a merge.
+    return rest.indexOf('--abort') < 0 && rest.indexOf('--quit') < 0;
+  }
+
+  if (command === 'branch') {
+    return rest.some(function(t) {
+      return t === '-d' || t === '-D' || t === '--delete' || t === '-dr' || t === '-Dr';
+    });
+  }
+
   if (command === 'reset') {
     return rest.indexOf('--hard') >= 0;
   }
@@ -216,10 +237,27 @@ function isDestructiveBash(command) {
   for (var si = 0; si < segments.length; si++) {
     var segment = segments[si];
     if (DESTRUCTIVE_SQL_DD.test(stripQuotedStrings(segment))) return true;
+
     var tokens = tokenize(segment);
     if (isDestructiveRm(tokens)) return true;
     if (isDestructiveGit(tokens)) return true;
   }
+
+  // Quoted-SQL check, on the RAW command.
+  //
+  // This guard was dead until 2026-07-14. DESTRUCTIVE_SQL_DD was only ever tested against
+  // stripQuotedStrings(...) output -- and splitCommandSegments() strips quotes before it segments --
+  // so `psql -c "<statement>"`, which is how every SQL client is actually invoked, was never seen.
+  // apex-governance declared these permanent hard blocks; the mechanism enforced none of them.
+  //
+  // Gate on the command heads so that READING about a statement stays legal (`grep`, `cat`, `echo`,
+  // `git log -S`). If any head could actually execute it, test the raw string.
+  var executes = segments.some(function(seg) {
+    var tk = tokenize(seg);
+    return tk.length > 0 && !READONLY_HEADS.has(commandBasename(tk[0]));
+  });
+  if (executes && DESTRUCTIVE_SQL_DD.test(raw)) return true;
+
   return false;
 }
 
@@ -334,152 +372,20 @@ function isRemoteCodeExec(command) {
   return /(?:^|[;|&\s])(?:[^\s;|&]*[\\/])?(?:curl|wget|iwr|irm|invoke-[a-z0-9-]+)(?:\.exe)?\b[^;|&]*\|\s*(?:[^\s;|&]*[\\/])?(?:bash|sh|zsh|pwsh|powershell|iex|invoke-expression|node|python)(?:\.exe)?\b/i.test(flattened);
 }
 
-function isAfkTarget(value) {
-  return /(?:~|\$home)[\\/]\.claude[\\/]afk\.on\b/i.test(value) ||
-    /c:[\\/]+users[\\/]+user[\\/]+\.claude[\\/]+afk\.on\b/i.test(value);
-}
-
-function isCriticalPath(value) {
-  var raw = String(value || '');
-  var normalized = raw.replace(/\//g, '\\').toLowerCase();
-  var basename = normalized.split('\\').pop();
-
-  if (/\.env(?:\..*)?$/.test(basename)) return true;
-  if (/(^|\\)migrations(\\|$)/.test(normalized)) return true;
-  if (/(^|\\)alembic\\versions(\\|$)/.test(normalized)) return true;
-  if (normalized.indexOf('auth') >= 0 || normalized.indexOf('guard') >= 0) return true;
-  if (/(^|\\)\.github\\workflows(\\|$)/.test(normalized)) return true;
-  if (basename === '.gitlab-ci.yml') return true;
-  if (/(^|\\)\.circleci(\\|$)/.test(normalized)) return true;
-  if (/^azure-pipelines/.test(basename)) return true;
-  var manifests = ['package.json', 'package-lock.json', 'pnpm-lock.yaml', 'yarn.lock',
-    'pyproject.toml', 'poetry.lock', 'cargo.toml', 'cargo.lock', 'go.mod', 'go.sum'];
-  if (manifests.indexOf(basename) >= 0 || /^requirements.*\.txt$/.test(basename)) return true;
-  if (basename === '.npmrc' || basename === '.netrc') return true;
-  if (/(^|\\)\.ssh(\\|$)/.test(normalized)) return true;
-  if (/^id_rsa/.test(basename) || /\.(pem|key)$/.test(basename)) return true;
-  if (normalized.indexOf('secret') >= 0 || normalized.indexOf('credential') >= 0) return true;
-  // Self-config: the guard's own live hooks/settings must never be a "safe" bypass target,
-  // whether reached via Write/Edit or via a Bash copy/move (BLOCK 3, cross-model review).
-  if (/(^|\\)\.claude\\hooks(\\|$)/.test(normalized)) return true;
-  if (basename === 'settings.json' && normalized.indexOf('\\.claude\\') >= 0) return true;
-
-  return false;
-}
-
-function isAfkFlagWrite(command) {
-  var raw = String(command || '');
-  if (!isAfkTarget(raw)) return false;
-  // Any shell redirect at all, combined with the target-path check above (tilde OR the real
-  // absolute path — BLOCK 2, cross-model review), means this command writes the flag.
-  if (/(?:^|[^<])>{1,2}/.test(raw)) {
-    return true;
-  }
-
-  var segments = splitCommandSegments(raw);
-  for (var si = 0; si < segments.length; si++) {
-    var segment = segments[si];
-    var tokens = tokenize(segment);
-    var head = commandBasename(tokens[0]);
-    if (['tee', 'set-content', 'add-content', 'out-file', 'new-item', 'cp',
-      'copy-item', 'move-item', 'mv', 'touch', 'install', 'dd', 'truncate',
-      'clear-content', 'remove-item', 'rm', 'del', 'erase'].indexOf(head) >= 0 &&
-        isAfkTarget(raw)) {
-      return true;
-    }
-  }
-  return false;
-}
-
-// Deliberately EXCLUDES general-purpose interpreters / package managers / AI CLIs (node, python,
-// py, npx, npm, pnpm, yarn, uv, uvx, pip, pytest, tsc, eslint, ruff, mypy, cargo, go, codex,
-// claude) — each executes arbitrary code from its own arguments/lockfile-scripts in a way no
-// destructive/exfil/RCE detector can safely allowlist by command head alone (cross-model review
-// BLOCK 1). Unattended builds needing them fall through to the normal dontAsk gate instead of
-// auto-allow — a real usability cost, but the only way this stays a true fail-closed allowlist.
-var SAFE_AFK_COMMANDS = new Set([
-  'taskkill', 'stop-process', 'start-job', 'get-process', 'wait-job', 'kill', 'ls', 'dir',
-  'get-childitem', 'cat', 'get-content', 'type', 'echo', 'printf', 'grep',
-  'rg', 'find', 'wc', 'sed', 'head', 'tail', 'mkdir', 'new-item', 'cp',
-  'copy-item', 'move-item', 'mv', 'git'
-]);
-
-// Heads whose destination/target argument must be checked against isCriticalPath even though
-// the command itself is on the safe list -- these can overwrite an arbitrary file, including the
-// guard's own hooks/settings (BLOCK 3).
-var FILE_WRITE_HEADS = new Set(['cp', 'copy-item', 'move-item', 'mv', 'new-item']);
-
-function hasCriticalWriteTarget(tokens) {
-  for (var ti = 1; ti < tokens.length; ti++) {
-    if (isCriticalPath(tokens[ti])) return true;
-  }
-  return false;
-}
-
-function isFindUnsafe(tokens) {
-  var unsafeFlags = ['-exec', '-execdir', '-ok', '-okdir', '-delete', '-fprintf'];
-  for (var ti = 1; ti < tokens.length; ti++) {
-    if (unsafeFlags.indexOf(tokens[ti].toLowerCase()) >= 0) return true;
-  }
-  return false;
-}
-
-function isSedUnsafe(tokens) {
-  var inPlace = false;
-  for (var ti = 1; ti < tokens.length; ti++) {
-    var t = tokens[ti];
-    if (t === '-i' || t.indexOf('-i') === 0 || t === '--in-place' || t.indexOf('--in-place=') === 0) {
-      inPlace = true;
-    }
-  }
-  return inPlace && hasCriticalWriteTarget(tokens);
-}
-
-function isGitConfigInjection(tokens) {
-  for (var ti = 1; ti < tokens.length; ti++) {
-    var t = tokens[ti];
-    if (t === '-c' || t === '--config-env' || t.indexOf('--config-env=') === 0) return true;
-  }
-  return false;
-}
-
-function isSafeAfkBash(command) {
-  var raw = String(command || '');
-  if (!raw.trim() || isDestructiveBash(raw) || isExfiltrationBash(raw) ||
-      isRemoteCodeExec(raw) || isAfkFlagWrite(raw)) {
-    return false;
-  }
-
-  var segments = splitCommandSegments(raw);
-  if (segments.length === 0) return false;
-  for (var si = 0; si < segments.length; si++) {
-    var tokens = tokenize(segments[si]);
-    var head = commandBasename(tokens[0]);
-    if (tokens.length === 0 || !SAFE_AFK_COMMANDS.has(head)) {
-      return false;
-    }
-    if (head === 'git' && (isDestructiveGit(tokens) || isGitConfigInjection(tokens))) {
-      return false;
-    }
-    if (head === 'find' && isFindUnsafe(tokens)) {
-      return false;
-    }
-    if (head === 'sed' && isSedUnsafe(tokens)) {
-      return false;
-    }
-    if (FILE_WRITE_HEADS.has(head) && hasCriticalWriteTarget(tokens)) {
-      return false;
-    }
-  }
-  return true;
-}
+// The AFK-only helpers (isAfkTarget / isCriticalPath / isAfkFlagWrite / SAFE_AFK_COMMANDS /
+// isSafeAfkBash and their private support functions) were removed 2026-07-14.
+//
+// They existed solely for the `!afk` permission gate, which was reverted (ADR-033 Reversal) --
+// after that, nothing called them. isCriticalPath also carried a real bug: it substring-matched
+// "auth" inside "author", so any path containing the word "author" was treated as auth code.
+// Dead code in a safety library is worse than no code: it looks like a control and enforces
+// nothing. The two checks worth keeping -- isExfiltrationBash and isRemoteCodeExec -- were
+// stranded in here too, reachable only from isSafeAfkBash; they are now wired into the live
+// destructive-command-guard.
 
 module.exports = {
   isDestructiveBash: isDestructiveBash,
   isReadOnlyGitIntrospection: isReadOnlyGitIntrospection,
   isExfiltrationBash: isExfiltrationBash,
-  isRemoteCodeExec: isRemoteCodeExec,
-  isAfkFlagWrite: isAfkFlagWrite,
-  isSafeAfkBash: isSafeAfkBash,
-  isCriticalPath: isCriticalPath
+  isRemoteCodeExec: isRemoteCodeExec
 };
