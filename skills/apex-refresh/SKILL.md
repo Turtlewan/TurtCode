@@ -1,224 +1,101 @@
 ---
 skill: apex-refresh
 backend: claude
-version: 1.3.0
-last_updated: 2026-06-10
+version: 2.0.0
+last_updated: 2026-07-14
 sources:
-  - APEX Design Specification 2026-05-24
-  - Context7 (Upstash) — github.com/upstash/context7
-  - Snyk Agent Scan — github.com/snyk/agent-scan
-  - Vercel Skills CLI — github.com/vercel-labs/skills
-  - ECC skill-stocktake + rules-distill (absorption Phase 5)
+  - docs/technical/adr/ADR-036-remove-knowledge-layer.md
 staleness_threshold: 30d
 description: >
-  Use when maintaining the skill SET itself — refreshing a skill's content against current best
-  practice, or auditing skill quality/staleness across all skills. Triggers: "refresh apex-X",
-  "is this skill stale", "/apex-refresh", "audit the skills", "skill stocktake", "are my skills
-  still good". Three jobs: currency refresh of one/all skills (research-driven, diff + approval),
-  staleness audit by date (--audit), and quality stocktake of the set + rule-promotion candidates
-  (--stocktake, folds in rules-distill). Not authoring a new skill (apex-skill-author) or a token/
-  context audit (apex-context-budget).
+  Use when maintaining the skill SET — refreshing a skill against current fact, auditing staleness,
+  or taking stock of whether the set still earns its keep. Triggers: "refresh apex-X", "is this
+  skill stale", "audit the skills", "skill stocktake", "are my skills still good". Not authoring a
+  new skill (apex-skill-author) or a token/context audit (apex-context-budget).
 ---
 
-# APEX Knowledge Refresh
+# Refreshing the skill set
 
-Manual-only. Suggested cadence: every 2 weeks.
-Never overwrites a skill without showing a diff and getting approval.
-Full research pass — not limited to original sources.
+## The thing this skill exists to remember
 
-## Invocation
+**A truth-audit is structurally blind to redundancy.** Every claim in a skill can verify clean and
+the file still be worthless — because the model knew it all along. Redundancy is the *larger* source
+of bloat, and it is invisible to the check most people run. APEX carried 17,700 lines for months
+while passing every currency check.
 
-/apex-refresh apex-plan                  # refresh one skill
-/apex-refresh --audit                    # show staleness of all skills (informational only)
-/apex-refresh --all                      # refresh all stale skills, one at a time
-/apex-refresh --stocktake                # quality audit of the skill SET (Quick Scan; folds in rules-distill)
-/apex-refresh --stocktake full           # quality audit of every skill
+**A stale skill is worse than no skill.** With no skill, the model falls back on its prior — which is
+decent, and *improves with every model release*. A stale skill overrides that improving prior,
+authoritatively and silently, every run, and the agent will never flag it.
 
-## Single skill refresh workflow
+That splits the set cleanly:
+- **Local facts** (this repo's build command, this project's convention) — no prior to fall back on;
+  staleness breaks the build immediately, so it is self-correcting and cheap to hold. **Keep these.**
+- **General best-practice content** — decays worst, justifies itself least, competes with a prior
+  that is getting better. **This is what to cut.**
 
-### Step 1: Read current skill
+**Deletion has no advocate.** Every incident adds a rule; nothing removes one. The set grows by
+default. That is not a discipline failure, it is a structural one — so counteract it structurally:
+**assume delete, and require a passing probe to keep.**
 
-Read the target skill file in full. Extract:
-- What does this skill currently teach? (summarise in 3-5 bullets)
-- What sources were originally cited?
-- When was it last updated? (from metadata header)
-- What domain does it cover?
+## Three different problems, three different fixes
 
-### Step 2: Full research pass
+| | Detector | Fix |
+|---|---|---|
+| **Stale** — a dated external fact drifted | extract falsifiable claims (versions, flags, paths, model ids), check against a primary source | refresh the fact; stamp source + date |
+| **Wrong** — the instruction fails *here* | apply it and watch it break; grep for cross-skill contradictions | correct it — or remove the *source* of the conflict rather than patching over it |
+| **Redundant** — true, current, and the model does it anyway | **RED probe: run a real task with the skill withheld.** No behaviour delta → the skill buys nothing | **delete** |
 
-Research the current state of the domain. Do NOT limit to original sources.
-Ask: "If I were writing this skill today from scratch, what would I include?"
+Only the third finds bloat, and only a probe finds the third.
 
-Research directions:
-- Current best practices for this domain (as of today)
-- What has changed since {last_updated} in this domain?
-- Current recommended standards, tools, and patterns
-- Known anti-patterns or vulnerabilities discovered recently
-- Community consensus from respected sources
-- Any deprecations or replacements for tools previously recommended
+## Refreshing one skill
 
-Research tools:
-- **Context7** (`mcp__context7__query-docs`): live library docs — use for any framework/library claims. Prevents recommending deprecated APIs.
-- **Snyk Agent Scan**: for security or devops skills, run `snyk agent-scan` to check if recommended tools have known vulnerabilities
-- **WebFetch + Firecrawl**: for official standard bodies (OWASP, WCAG, NIST), fetch the live source directly
+1. **Read it.** Note `last_updated`, `sources`, `staleness_threshold`.
+2. **Extract every falsifiable claim** — versions, flags, commands, paths, model ids. Everything else
+   is behaviour, and behaviour is what the RED probe tests, not the source check.
+3. **Verify each claim** against a primary source (changelog, `--help`, real error output) — never
+   against the model's recall. That is the same distribution that produced the stale line.
+4. **RED-probe the behavioural half** (apex-skill-author § The Iron Law) — sandboxed, no `docs/`.
+5. **Show the full proposed rewrite as a diff. Require explicit approval.** Never silently rewrite.
+6. On approval: bump `version` + `last_updated`, stamp `sources`, and land the **double-write**
+   (`SKILLS.md` + `SKILL-HISTORY.md`).
 
-### Step 3: Synthesise findings
+**If the refresh changes no behaviour, the refresh was a no-op — and that is a DELETE signal, not a
+success.**
 
-Produce a structured comparison:
+## Audit (`--audit`)
 
-```
-STILL VALID (keep as-is):
-- {point} — confirmed current by {source}
+Cheap, no reading, highest kill-rate first — don't spend research budget refreshing a skill you are
+about to delete:
 
-OUTDATED (needs update):
-- CURRENT: "{what the skill currently says}"
-  UPDATED: "{what it should say}" — reason: {why it changed}
+1. **Dates** — `last_updated` vs `staleness_threshold`. 🔴 over · 🟡 approaching · ✅ fresh · ⚠️ no
+   metadata header.
+2. **Reachability** — is the skill in `SKILLS.md`? Does its `description` actually route? An orphan
+   or a never-fired skill dies here without being read closely.
+3. **Cross-skill conflict** — grep the set for rules that contradict each other. Two skills
+   disagreeing is a bug regardless of which is right.
 
-MISSING (add to skill):
-- {important content not covered} — from {source}
+## Stocktake (`--stocktake`)
 
-NEW SOURCES:
-- {source name}: {URL} — why it's better/more current than what was cited
-```
+The real audit. For each skill, one question: **would an agent WITHOUT this skill produce materially
+worse output on a task the user actually performs?**
 
-### Step 4: Show full proposed rewrite
+Dispatch RED probes in parallel (sandboxed — no planning docs). Then, per skill:
 
-Present the complete updated skill content — not just the changed sections.
-The executor should be able to copy-paste the full rewrite if approved.
+- **No behaviour delta** → delete.
+- **Delta, but it's a local/project fact** → keep; it is exactly what a skill is for.
+- **Delta, but it's general best practice** → suspect. Re-probe with a harder task before keeping.
+- **Trigger never fires** → delete.
+- **Really one rule that belongs inside another skill** → merge.
 
-### Step 5: Require approval
+**Deletion is reversible — it's in git. On a tie, delete.** The asymmetry runs the opposite way to
+intuition: the cost of a wrongly-deleted skill is one re-write; the cost of a wrongly-kept one is
+paid every session, forever, and it degrades adherence to the rules that *do* matter.
 
-Present clearly:
-```
-Summary of changes:
-- {N} sections updated (outdated → current)
-- {N} new sections added (missing content)
-- {N} sources replaced or added
+**Budget:** adding a skill requires cutting one, unless the set is demonstrably under-weight.
+Without a fixed budget the ratchet has no pawl.
 
-Apply full update? [y / n / partial]
+## Automate the detector, gate the edit
 
-partial → user specifies which sections to accept
-```
-
-Do NOT write anything until approved.
-
-### Step 6: On approval
-
-1. Update the skill file with approved content
-2. Update metadata header:
-   - version: bump minor (1.0.0 → 1.1.0) for partial, major (1.0.0 → 2.0.0) for full rewrite
-   - last_updated: today's date
-   - sources: updated list with new citations
-3. Record the change in `~/apex/SKILL-HISTORY.md` — prepend one row (newest first):
-   `Date | Skill | Files | Version | Event | What Changed | Sources`.
-   SKILL-HISTORY.md is the single source of truth for "what changed when" — do NOT create
-   per-skill CHANGELOG.md files. Sync `~/apex/SKILLS.md` if the
-   description or routing changed (the triple-write — see apex-skill-author).
-
-## Audit mode (/apex-refresh --audit)
-
-Read all skill files in ~/.claude/skills/apex-*/SKILL.md.
-For each, read metadata header and calculate days since last_updated.
-
-Display:
-```
-Skill staleness audit (informational — nothing is blocked)
-──────────────────────────────────────────────────────────
-✅ apex-plan         updated 5d ago    (threshold: 14d)
-🟡 apex-code         updated 18d ago   (threshold: 14d) → consider refreshing
-🔴 apex-research     updated 45d ago   (threshold: 14d) → recommended to refresh
-⚠️ apex-debug        no metadata header
-
-Run /apex-refresh <skill> when ready.
-```
-
-Staleness states:
-- ✅ Fresh: updated within threshold (default 14d, configurable per skill)
-- 🟡 Aging: 1x–2x threshold
-- 🔴 Stale: beyond 2x threshold
-- ⚠️ Unknown: no metadata header
-
-Nothing is blocked by staleness. This is informational only.
-
-## Stocktake mode (/apex-refresh --stocktake)
-
-A quality audit of the skill **set** — distinct from `--audit`, which only checks staleness by
-date. It scores each skill against the APEX authoring contract **and** cross-reads for principles
-that should be promoted to `apex-coding-principles` (rules-distill, folded in — ECC absorption
-Phase 5). **Report-only — it never edits a skill.** Automates the *finding* step of a manual SP5
-sweep; fixing stays on the existing paths (Phase 4 below).
-
-### Modes
-- **Quick Scan** (default): evaluate only skills changed since the last stocktake.
-- **Full** (`--stocktake full`): evaluate every `apex-*` skill.
-
-### Phase 1 — Inventory
-- `Glob ~/.claude/skills/apex-*/{SKILL,impl}.md`; read each frontmatter.
-- **Quick Scan change-detection (git, no verdict cache):** read the marker
-  `~/.claude/skills/apex-refresh/.stocktake-state` (a stored commit SHA), then
-  `git -C ~/.claude diff --name-only <SHA>..HEAD -- skills/apex-*` for the changed set.
-  Marker absent → report "no prior stocktake — run `--stocktake full`" and stop.
-- State which skills will be evaluated (and which paths were scanned).
-
-### Phase 2 — Evaluate (dispatched, chunked)
-Dispatch `general-purpose` subagents, **~15–20 skills per chunk** (keeps each context lean). Give
-each chunk the skill files + the checklist below + the full `apex-coding-principles` text. Each
-returns, per skill, one quality verdict **and** any rule-promotion candidates.
-
-**Quality checklist (per skill):**
-- [ ] Frontmatter complete: `skill, backend, version, last_updated, sources, staleness_threshold, description`
-- [ ] `description` is **trigger-style** ("Use when…", real phrases, near-miss exclusions) — NOT a workflow summary
-- [ ] SKILL.md ≤ 500 lines / 5k tokens
-- [ ] SKILL-vs-impl split appropriate; if `impl.md` exists it follows the **two-tier core/references** convention (core, by section identity = frontmatter + `## Stack assumptions` [capability only] + NEVER/ALWAYS + `## Verification Recipe` [stack only] + a compact errors table; bulky content in `references/*.md` with a load condition)
-- [ ] **Double-write in sync:** a `SKILLS.md` entry and a `SKILL-HISTORY.md` row all exist
-- [ ] Content is gotchas / defaults / procedures — not what the model already knows
-- [ ] Stack skill (`apex-<framework>`): `impl.md` carries a runnable `## Verification Recipe`
-- [ ] Holistic: actionability · scope-fit · uniqueness (not replaceable by CLAUDE.md / another skill) · currency
-
-**Verdict (per skill):** `Keep | Improve | Update | Retire | Merge into [X]`.
-The `reason` **must be self-contained and decision-enabling** — restate the evidence; never just
-"unchanged" or "too long". For **Retire/Merge**, name what covers the same need instead; for
-**Improve**, name the section and the change.
-
-**Rule-promotion cross-read (folded-in rules-distill):** while reading, flag any principle meeting
-**ALL** of — appears in **2+ skills** · is an actionable do/don't · has a clear violation risk · is
-**NOT** already in `apex-coding-principles`. Verdict each: `Append | Revise | New Section | New File
-| Already Covered | Too Specific`. Target = `apex-coding-principles` (or a shared `impl.md` core).
-**What, not how** — code/commands stay in the skill; the promoted rule links back with `See skill: X`.
-
-### Phase 3 — Report (two tables, informational — nothing is blocked)
-- **Table A — per-skill quality:** `| Skill | Verdict | Reason |`
-- **Table B — promotion candidates:** `| Principle | # skills (evidence) | Verdict | Target |`
-
-### Phase 4 — Route (no auto-fix; apply only on user go-ahead)
-Each finding goes to its existing fix path:
-- **Update** (stale tech) → `/apex-refresh <skill>`
-- **Improve / frontmatter / length / triple-write gap** → an `apex-skill-author` edit
-- **Retire / Merge** → present full justification (defect found · what covers it · impact), require **explicit** user confirmation
-- **Promotion candidate** → an `apex-skill-author` edit to `apex-coding-principles`
-
-Then write the new HEAD SHA + UTC timestamp (`date -u +%Y-%m-%dT%H:%M:%SZ`) to `.stocktake-state`.
-
-## Batch refresh (/apex-refresh --all)
-
-Refreshes all skills with 🔴 or ⚠️ status, one at a time.
-Presents each refresh individually — you approve or skip each skill before moving on.
-Does not batch approvals — every skill gets its own review.
-
-## Skill metadata header format
-
-Every skill should have this at the top:
-
-```yaml
----
-skill: apex-{name}
-backend: claude
-version: 1.0.0
-last_updated: YYYY-MM-DD
-sources:
-  - {Source Name} — {URL or reference}
-staleness_threshold: 14d
----
-```
-
-If a skill is missing this header, add it during the refresh.
+Staleness is *silent* — nothing fails loudly — so a cheap scheduled sweep (dates, extracted claims,
+reachability) earns its keep. But scheduled *editing* manufactures churn. Real fixes fire on events:
+a build failed in a way a skill should have prevented; a dependency or model bumped; a new skill
+overlaps an old one.

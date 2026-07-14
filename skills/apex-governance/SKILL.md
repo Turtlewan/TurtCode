@@ -1,262 +1,172 @@
 ---
 skill: apex-governance
 backend: claude
-version: 1.17.0
-last_updated: 2026-07-10
+version: 2.0.0
+last_updated: 2026-07-14
 sources:
-  - APEX Design Specification 2026-05-24
-  - Superpowers (obra) — github.com/obra/superpowers
-  - gstack (garrytan) — github.com/garrytan/gstack
-  - Claude Code Action — github.com/anthropics/claude-code-action
-  - Odysseus analysis (PewDiePie) — docs/research/odysseus-analysis.md
-  - donor-analysis (Superpowers receiving-code-review) — docs/research/donor-analysis/
+  - docs/technical/adr/ADR-010-multi-pass-review.md
+  - docs/technical/adr/ADR-027-codex-primary-opus-fallback-deepseek-archived.md
   - docs/technical/adr/ADR-032-gpt56-role-split.md
+  - docs/technical/adr/ADR-038-single-session.md
 staleness_threshold: 30d
 description: >
-  Defines the APEX autonomy model — autonomy modes (Build/AFK vs Edit — how much the agent asks,
-  NOT a session type; ADR-038 removed session modes), levels L0–L5,
-  approval gates, permanently-forbidden hard blocks, critical-file confirmation, and the L4+
-  audit log. Referenced by apex-orchestrate and apex-code. Triggers: "what level am I at",
-  "set autonomy to L{n}", "is this action allowed", "run in build/edit mode", reviewing an
-  approval gate or a hard block. Stack-neutral.
+  The APEX autonomy model — levels L0–L5, Build/AFK vs Edit, approval gates, permanently-forbidden
+  hard blocks, critical-file confirmation, cross-model review, and evaluator independence. Canonical
+  home: apex-orchestrate and apex-code carry summaries; on conflict, this file wins. Triggers: "what
+  level am I at", "set autonomy to L{n}", "is this allowed", reviewing a gate or a hard block.
 ---
 
 # APEX Governance
 
-Defines the autonomy model, approval gates, hard blocks, and audit requirements.
-Referenced by apex-orchestrate and apex-code.
+## What autonomy actually is
 
-## Two primary operating modes
+**Autonomy is a budget for un-reviewed *distance*, not for *blast radius*.** The levels vary how far
+the agent may travel from a pre-approved plan before it must stop. They never vary what is safe.
 
-### Build Mode (AFK)
-Full discussion and spec creation in planning. Readiness gate passed.
-Coding runs silently — no questions, no gates, no approvals during execution.
-Unlisted actions blocked and logged. Review decisions in next planning session.
-Every AFK build ends with the mandatory standing end-of-run **Opus** adversarial pass (owner-ratified spend, ADR-033 A1; model per ADR-034 — cross-family, since Sol is the coder) before the handoff is written; it is read-only, advisory-only, and never auto-edits.
-The one class to capture-and-surface (never block on, never silently decide): a choice that
-**opens the project to the internet or an external service** — log it and raise it at session end.
+Two corollaries, both load-bearing:
 
-**Worktree isolation (headless / AFK default):** an unattended build runs against the user's live
-working tree, so default its parallel build-recipe workers into isolated managed git worktrees
-(apex-code § dispatch rule — inline `isolation: "worktree"`, workflow `isolate: true`) — concurrent
-builds then can't collide on artifacts / lockfiles / ports or mutate the live tree mid-session.
-Interactive Edit Mode stays same-tree (the user is watching).
+- **"May do X without asking" ≠ "may do X."** Removing the prompt removes a *check on judgment*, not
+  a *grant of authority*. The action still has to be right on its merits. An unattended agent should
+  hold itself to a **higher** bar, not a lower one, because nobody will catch the error. "You don't
+  have to ask" means "we moved the review downstream — make it survive review."
+- **Capability is not authority.** A stronger coder lowers *competence* risk and leaves
+  *correctability* risk untouched. A force-push is exactly as unrecoverable when a genius does it. So
+  a better model earns **narrower review** — fewer prompts, longer runs, bigger batches — and earns
+  **nothing** from the hard blocks or the critical-file list, which are indexed to consequence, not
+  skill. (Worse: a stronger model pursues a mis-specified goal *further* before anything breaks, and
+  argues for it more persuasively.)
 
-### Edit Mode (interactive)
-User present and watching. Small changes. Can ask questions.
-Confirmation gates active for critical files.
+## Modes
 
-## Autonomy levels
+**Build / AFK** — "run the list, don't ask." Spec frozen, gate passed. Runs silently; unlisted
+actions are blocked and logged. Every AFK run ends with the standing **Opus** adversarial pass
+(read-only, advisory) before the handoff. Parallel workers default to **isolated git worktrees** — an
+unattended build must not mutate the live tree or collide on lockfiles, ports, and caches.
 
-L0 — Read Only: no writes, no commands
-L1 — Supervised Write: write with per-file confirmation, no commands
-L2 — Controlled Auto-Write (default): write non-critical files freely
-L3 — Pipeline Auto-Run: full pipeline + test/lint/build, no *unprompted* git commits
-L4 — Agentic Loop: includes git commit (message approved first)
-L5 — High Autonomy: includes git push to non-main + draft PR creation
+**Edit** — user present and watching. Small changes, questions allowed, confirmation gates live.
 
-See levels/ directory for full definition of each level. **This file is the canonical home of
-the level definitions and the hard-block list — apex-orchestrate and apex-code carry summaries
-only; on conflict, this file wins.**
+These are **autonomy** modes, not session types. ADR-038 removed session modes: one session plans and
+builds.
 
-**Commit-discipline interaction (resolves the L2/L3 vs CLAUDE.md tension):** the levels govern
-*autonomous* commits — what the agent may do without asking. The per-spec commit workflow in
-global CLAUDE.md (prompt the user → draft message → user approves → commit) is a *user-approved*
-action and is permitted at **every** level L2+. "No git commits" at L2/L3 means: never commit
-without that explicit prompt-and-approval exchange.
-
-**Coder model is capability, not authority.** Which model codes (Codex / Opus) is orthogonal to the
-autonomy level — "let the stronger coder do more" means raise the L-level, never relax a gate,
-critical-file confirmation, or hard block because a particular coder is in use.
-
-## Coding model routing (ADR-027, supersedes ADR-024/026)
-
-APEX coding is **Codex-primary**: `gpt-5.6-sol` (run as a `codex exec -p apex-coder` subprocess from the
-build session) is the default coder for every task (ADR-034 — supersedes Terra in this slot). The `coder_models` menu is `{codex, opus}`;
-per-task routing collapses to **"codex unless its quota is exhausted, then Opus."** Capability-not-
-authority applies — the model that codes never widens an autonomy gate, critical-file confirmation, or
-hard block.
-
-**Opus is the manual fallback coder:** the session dispatches Codex per task; when Codex quota runs
-out the task is built by **Opus** — a fresh `model: opus` code-worker, or the operator switches the
-session (`/model opus`) for a fallback-heavy build. Operator-driven, not auto-escalation. See
-apex-code § Model escalation on verify-fail.
-
-**The host is this session (ADR-038).** There is no separate build host and no `APEX_MODE` — one
-session plans, dispatches, and **runs the verify loop; never the coder subprocess judging itself**
-(evaluator independence at task level). Opus as the coder is a deliberate choice, not the
-default: the per-spec **coder** pin (`coder_model: opus` — selects who codes, a different axis
-from who hosts), an Opus **host** as an operator choice for `risk: high` supervision or
-GRAY-fork-heavy work, and the Opus fallback coder at Codex quota-out (dispatched as above).
-The first real Sonnet-hosted build is the flip's proving run.
-
-**Soft pool guard — RE-INSTATED, scoped to the fallback.** Steady-state coding spends the separate
-OpenAI pool; the light Anthropic-pool draw lands mostly on the Sonnet bucket (host orchestration + routine Claude reviews); Opus draws only for high-risk dual-pass reviews and the fallback below.
-**But when the build falls back to Opus, Opus builds draw the same scarce Max weekly pool as planning**
-→ treat the fallback as a budgeted exception: surface remaining planning headroom at the switch, and
-prefer parking or splitting the build over draining the shared pool. Warn, don't block.
-
-DeepSeek (Flash/Pro) is **archived/parked** — recoverable, not in the active menu.
-
-## Capability-routed UI escalation (ADR-020) — RETIRED (ADR-027)
-
-**Retired 2026-06-23.** This carve-out let planning (Claude, multimodal) make a bounded view-layer UI
-edit because the coder (DeepSeek) was **image-blind**. Under ADR-027/034 the coder is **Codex (`gpt-5.6-sol`,
-native vision)** or **Opus (multimodal)** on fallback — it **sees the render**, so a visual divergence
-is fixed as a **normal build task**. No special exception is needed. (ADR-038 retires the premise
-twice over: there is no planning/coding split left to escalate across.) The live-preview design loop
-(design lane → build → visual gate) survives in `apex-plan/references/design-workflow.md`.
-
-## Critical files — always require explicit confirmation regardless of level
-
-- *.env and *.env.*
-- Any migrations directory (`**/migrations/**`, `**/alembic/versions/**`) — schema-altering, hard to reverse
-- Auth middleware / guard / handler files (`**/auth*`, `**/middleware/auth*`, `**/*guard*`)
-- .github/workflows/** (and other CI pipeline definitions)
-- Any file containing the word "secret" or "credential" in its path
-- Infrastructure config files (terraform/, opentofu/, k8s/, docker-compose.yml)
-
-## Hard blocks — permanently forbidden at every level
-
-These actions are never executed under any circumstances:
+## Levels
 
 ```
-- git push to main or master branch
-- git merge (any branch)
-- Any SQL DROP TABLE, DROP SCHEMA, DROP DATABASE
-- git branch -d or git branch -D
+L0  Read only          — no writes, no commands
+L1  Supervised         — write with per-file confirmation, no commands
+L2  Controlled (default) — write non-critical files freely; critical files need confirmation
+L3  Pipeline           — full build + the verify recipe; no unprompted git commits
+L4  Agentic            — includes git commit (message approved first)
+L5  High               — includes push to non-main branches + draft PR
+```
+
+No level unlocks the hard blocks. A level that did would just be L4 with the safeties off, which is
+the thing we are refusing to build.
+
+**Commit discipline:** the levels govern *autonomous* commits. The per-spec workflow (prompt → draft
+message → user approves → commit) is a *user-approved* action, permitted at **every** level L2+. "No
+commits" at L2/L3 means: never without that exchange.
+
+## Hard blocks — permanently forbidden, every level, regardless of who asks
+
+```
+- git push to main/master; any force-push or history rewrite on a shared branch
+- git merge / merging its own PR
+- SQL DROP TABLE / DROP SCHEMA / DROP DATABASE; TRUNCATE against a non-local store
+- git branch -d / -D
 - Reading, logging, or writing production secrets to any file
-- Any modification to files in docs/audit/
-- Any action that disables or bypasses governance rules
+- Any modification to docs/audit/
+- ANY action that disables, bypasses, or widens its own controls
+- Deploying to production, or anything with external side effects (payments, email, publish)
+- Weakening a security control to satisfy an acceptance criterion
 ```
 
-If a spec requests any of these: flag to user during planning. Do not add to permissions.
-If coding mode encounters one of these during execution: stop, log, return to user.
+Each is either **irreversible by the agent**, or **removes the mechanism by which humans catch its
+other mistakes**. The last kind is load-bearing: **an agent that can widen its own permissions has no
+permissions.**
 
-## Permissions pre-authorisation
+**And that block cannot live here.** Every gate in this file is enforced by the same system it
+constrains — a motivated agent, or a prompt injection, can reason around an *instruction*. So
+self-modification must be blocked in the **harness**: hooks, branch protection, credential scoping,
+`permissions.deny`. **When a rule must hold with zero exceptions, it belongs in a hook, not in this
+file.**
 
-At build start, apex-code reads ## Permissions from the spec.
-All listed operations are pre-authorised for this build session.
-Any operation NOT listed is blocked and logged — never executed.
+> **Proven the hard way, 2026-07-14.** Removing the mode split silently disarmed the
+> destructive-command guard — it was conditioned on a mode that no longer existed. `rm -rf` was
+> unblocked for hours and nothing surfaced it. **Deleting a mode disarms everything conditioned on
+> it.** Check that first, every time.
 
-Blocked action format in handoff:
-| {action attempted} | Task {n} | Not in spec permissions — blocked |
+## Critical files — always confirm, regardless of level
 
-## Approval gate format
+`.env` / `*.env.*` · migrations (`**/migrations/**`, `**/alembic/versions/**`) · auth/authz/crypto
+source and middleware · `.github/workflows/**` and any CI config · dependency manifests **and
+lockfiles** (a one-line change executes arbitrary code) · infra-as-code · anything with `secret` or
+`credential` in its path · **the permission settings, the hooks, and the audit log themselves**.
 
-Used when a confirmation is required (L1: per file; L3: before commit):
+Common property: **a small, plausible-looking diff has effects far outside the diff** — including on
+the agent's own leash. These are exactly the files a confused or compromised agent would touch.
+
+**An authorising spec does not settle it.** A spec is a *plan*, written under assumptions the build
+has since been testing, and irreversibility is precisely the case where a stale assumption cannot be
+walked back. Unattended and irreversible → **park the task and continue the queue.** The right
+behaviour at 3am is to lose an hour, not to bet the repo.
+
+A new dependency is a **supply-chain action**: verify the exact name (typosquat) and that it is
+maintained. Unattended and uncertain → don't install; block the spec.
+
+## Approval gate
 
 ```
 ⚠️  Approval required [L{n} gate]
-
 Action:    {exact action}
 Scope:     {files or paths affected}
 Risks:     {what could go wrong}
-Rollback:  {how to undo if needed}
-
+Rollback:  {how to undo}
 Approve? [y / n / edit]
 ```
 
-No silent escalation. Denied action is logged and skipped — never retried.
+No silent escalation. A denied action is logged and skipped — never retried.
 
-## Two-stage review (superpowers pattern)
+**Permissions pre-authorisation:** at build start, `apex-code` reads the spec's `## Permissions`.
+Everything listed is pre-authorised for the run; anything not listed is **blocked and logged, never
+executed**. Handoff row: `| {action attempted} | Task {n} | Not in spec permissions — blocked |`.
 
-For every build, run two distinct review passes:
-1. **Spec compliance**: did coding implement what the spec asked? (not what it should have asked)
-2. **Code quality**: independent of spec — bugs, security issues, patterns, performance
+## Evaluator independence — the anti-collusion invariant
 
-Running both prevents the spec becoming a ceiling rather than a floor.
-Route output of both reviews to the handoff's ## Decisions Made and Reviewer sections.
+Any mechanism that scores, votes on, or selects among outputs must keep the evaluator **disjoint from
+the evaluated**, **stake-free**, and (with multiple evaluators) **blind to each other**. Break any of
+the three and evaluators optimise the scoring rule instead of the task.
 
-**Acting on review findings (Superpowers — receiving-code-review).** When an agent or human consumes
-review output, the discipline is: **verify before implementing** — a finding can be wrong; confirm it
-against the code before acting. No performative agreement ("you're absolutely right"); push back with
-evidence when a finding is mistaken; YAGNI-check any *suggested addition* before adding it. A review is
-input to judgement, not an order to comply.
+This is why the council's voices are fresh-context and advisory; why the AFK end-gate is **Opus, not
+the coder that built the run**; why the host runs the verify loop rather than the Codex subprocess
+judging itself; and why a cross-model reviewer never sees the first reviewer's findings.
 
-## Safety guardrails (scope limiting)
+**Cross-model review** (`cross_model_review: true`; auto for auth / security / data / `risk: high`).
+Invariant: **reviewer family ≠ builder family** (ADR-032).
+- **Codex built** (the default) → **Claude** reviews, always fresh context; `model: opus` for the
+  high-risk set.
+- **Opus built** (the fallback) → **Codex** reviews, headless and read-only. Advisory only.
 
-Use these to prevent accidental scope creep during execution:
-- **Freeze mode**: restrict writes to one specific directory during a focused debug
-- **Careful mode**: warn before any destructive command (rm, DROP, truncate)
-- **Guard mode**: combines freeze + careful — use when editing critical files in isolation
+Give the second reviewer the spec + diff, **never the first's findings**. Both flag it →
+high-confidence, resolve before shipping. Only one → human adjudication, never auto-dismiss.
+Reviewer unavailable — usually Codex quota is out, which is *why* Opus was building — → **say so in
+the report**; never a silent skip.
 
-Coding mode must honour these signals from the spec's ## Permissions section.
-Add `scope: directory/path` to Permissions to activate freeze for that build.
+**Acting on findings:** verify before implementing. A finding can be wrong — confirm it against the
+code, push back with evidence, YAGNI-check any *suggested addition*. A review is input to judgment,
+not an order to comply.
 
-## Cross-model review (opt-in — spec flag `cross_model_review: true`)
+**`/code-review ultra`** — Claude Code's cloud multi-agent tier. **Billed and user-triggered; APEX
+cannot self-launch it.** Recommend it for `risk: high` / auth / security / data / pre-PR. It
+complements the in-pipeline reviewers and replaces none. **Reject `--fix`** — it auto-applies edits,
+violating the advisory-reviewer invariant.
 
-A second, **independent review by a different model family than the builder** before shipping a
-high-stakes build (auth / security / data migrations). Opt-in, not default. **Invariant: reviewer
-family ≠ builder family** (family-aware routing, ADR-027):
-- **Codex-built** task (the default coder) → **Claude** reviews (`apex-reviewer`, always a **fresh
-  context** — never the orchestrating host reviewing its own build): the host family (Sonnet)
-  routinely; **Opus** reviewers for the high-risk dual-pass set (auth / security / data,
-  `risk: high`). This is the common path (ADR-032).
-- **Opus-built** task (the fallback coder) → **Codex** (`gpt-5.6-sol`) reviews, via headless `codex exec`
-  (read-only, schema'd — apex-code § Cross-model review + `references/codex-review.md`). **Advisory** —
-  never auto-blocks, never auto-fixes. Note: Opus builds only *because* Codex quota is exhausted, so this
-  Codex review usually can't run either → degrade to single-model + human flag (below).
+## Logging
 
-**How it runs (coding-side, wired in apex-code post-build):**
-1. The normal single-model review runs first (`apex-reviewer`, same family as the build).
-2. If `cross_model_review: true`, run the family-aware independent review above. Give it only the spec
-   + changed files, **never the first review's findings** (evaluator independence — judge the code, not
-   anchor on the first verdict).
-3. Combine the verdicts:
-   - **Both flag the same issue** → high-confidence finding; resolve before shipping.
-   - **Only one flags it** → divergent; route to the human to adjudicate — do not auto-dismiss.
-
-**Graceful degrade:** if the reviewer family is unavailable (`codex --version` fails **or Codex quota is
-exhausted** — the latter is the usual case when Opus is the fallback builder), do **not** silently pass — run the single-model review and emit "cross-model review requested but {family}
-unavailable — single-model only; flagged for human." Never a silent skip. Codex runs on **any host**
-(its own auth — the old Mac co-location prerequisite is retired).
-
-The value is the *independence* — a different family has different blind spots, so agreement is
-real signal. Two passes of the *same* model is the santa-method dual-pass (apex-code wave review,
-ADR-010), which is weaker here because it shares blind spots. See § Evaluator independence.
-
-## Ultra review gate (recommended, not pipeline-wired)
-
-`/code-review ultra` is Claude Code's **cloud, multi-agent** review tier (local branch or a GitHub
-PR). It is **billed and user-triggered — APEX cannot self-launch it.** So it is a *recommendation*,
-never a wired pipeline step: apex-code's post-build report suggests it for **high-risk** builds
-(`risk: high`, auth / security / data domains, or pre-PR). It **complements** the free in-pipeline
-reviewers (`apex-reviewer`, `apex-wave-reviewer`, opt-in cross-model) — a heavier, independent tier —
-and replaces none of them. **Reject `/code-review --fix`** (it auto-applies edits — violates the
-advisory-reviewer invariant that review never rewrites code).
-
-## Evaluator independence (anti-collusion invariant)
-
-Any APEX mechanism that scores, votes on, or selects among candidate outputs must keep the
-**evaluator disjoint from the evaluated**, **stake-free**, and (when multiple evaluators weigh in)
-**independent** — judgements formed without seeing each other or any consequence tied to the result.
-Break any of the three and evaluators optimise the scoring rule instead of the task (reward
-hacking / collusion). This is *why* APEX's council (ADR-010) uses fresh-context, advisory, stake-free
-voices and folds dissent rather than running a survival-weighted vote, and why cross-model review
-keeps the second model independent. Honour the same rule before adding any vote- or score-based gate.
-_Origin: `docs/research/odysseus-analysis.md` (A1) — distilled from the Odysseus council collusion._
-
-## Claude Code Action (CI integration)
-
-For automated PR review, use `anthropics/claude-code-action` in GitHub Actions:
-- Responds to `@claude` mentions in PR comments
-- Supports multiple auth: Anthropic API, AWS Bedrock, Google Vertex AI
-- Runs on your own GitHub runners — API calls go to your provider
-- ⚠️ For interactive mode only — do not enable for untrusted external PRs
-
-## Audit log (L4+ required)
-
-Written to docs/audit/YYYY-MM-DD.log at end of L4+ sessions.
-
-Format:
-```
-[YYYY-MM-DD HH:MM:SS] SESSION START — Level: L{n}
-[YYYY-MM-DD HH:MM:SS] SPECIALIST LOADED — {domain} (trigger: {keyword/path})
-[YYYY-MM-DD HH:MM:SS] FILE WRITE — {path} (auto-approved L{n})
-[YYYY-MM-DD HH:MM:SS] GATE TRIGGERED — {action} (approval required)
-[YYYY-MM-DD HH:MM:SS] GATE APPROVED — {action} {details}
-[YYYY-MM-DD HH:MM:SS] GATE DENIED — {action} (user denied)
-[YYYY-MM-DD HH:MM:SS] BLOCKED — {action} (not in spec permissions)
-[YYYY-MM-DD HH:MM:SS] SESSION END — {n} files written, {n} commits, {n} blocks
-```
+- **For the user** (morning review): what ran, what changed (SHAs), verify results, every autonomous
+  decision + rationale, and **everything skipped or parked, and why**. The parked list is the most
+  valuable artifact of an unattended run.
+- **For the next session:** in-flight position, discoveries, blocked actions → the handoff.
+- **Audit (L4+, append-only, agent cannot edit):** every side-effecting command, every file touched,
+  every gate hit — **approved *or* refused.** Refusals must be logged as loudly as actions: a leash
+  that silently declines things is indistinguishable from a broken one, and an agent repeatedly
+  probing a gate is exactly the signal a human needs to see.
