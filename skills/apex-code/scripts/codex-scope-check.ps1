@@ -118,7 +118,9 @@ $contested  = @()   # ours AND the host's -> REPORT, never revert
 foreach ($path in $nowDirty.Keys) {
     $n = Normalize $path
     if ($allowed.ContainsKey($n)) { continue }                    # authorized - fine
-    if ($stateRel -and $n.StartsWith($stateRel)) { continue }     # our own scratch - ignore
+    # Our own scratch dir. Note git COLLAPSES an untracked parent: if docs/ is itself untracked it
+    # reports "docs/", not "docs/progress/scope-x.json" -- so match the collapsed parent too.
+    if ($stateRel -and ($n.StartsWith($stateRel) -or $stateRel.StartsWith($n.TrimEnd('/') + '/'))) { continue }
     if ($preDirty.ContainsKey($n)) {
         # The host had this dirty BEFORE dispatch and it is not authorized. Codex may have written
         # to it as well -- this is precisely the status.md incident -- but the two edits cannot be
@@ -137,6 +139,35 @@ function Show-Contested {
     foreach ($c in $contested) { Write-Host ("    {0}  {1}" -f $c.Status, $c.Path) }
     Write-Host "[scope] NOT reverted - a blanket revert would destroy the host's concurrent work." -ForegroundColor Yellow
     Write-Host "[scope] Inspect by hand: the task may have written a file it was never authorized to touch." -ForegroundColor Yellow
+}
+
+# --- MANGLED-ALLOWLIST GUARD ------------------------------------------------------------------
+# A wrong -Authorized list does not merely fail to protect: it REVERTS THE CODER'S REAL WORK. That
+# is strictly worse than no check at all, and it is one quoting slip away (an array passed as one
+# comma-joined string matches nothing, so every file the task wrote reads as a violation).
+#
+# The tell: a task that did real work always writes at least one file it WAS authorized to write.
+# If it wrote several files and not one of them is on the list, the list is wrong -- not the coder.
+# Refuse to revert, say so loudly, and exit distinctly.
+$authorizedHits = 0
+foreach ($path in $nowDirty.Keys) {
+    if ($allowed.ContainsKey((Normalize $path))) { $authorizedHits++ }
+}
+if ($violations.Count -gt 1 -and $authorizedHits -eq 0 -and $allowed.Count -gt 0) {
+    Write-Host ""
+    Write-Host "[scope] REFUSING TO REVERT - the authorized list looks wrong, not the coder." -ForegroundColor Red
+    Write-Host "[scope] The task wrote $($violations.Count) file(s) and NOT ONE is on the authorized list." -ForegroundColor Red
+    Write-Host "[scope] A task that did real work always touches at least one file it was allowed to touch," -ForegroundColor Red
+    Write-Host "[scope] so this is almost certainly a malformed -Authorized (e.g. an array passed as one" -ForegroundColor Red
+    Write-Host "[scope] comma-joined string). Reverting here would destroy the build." -ForegroundColor Red
+    Write-Host ""
+    Write-Host "[scope] Authorized ($($allowed.Count)):" -ForegroundColor Yellow
+    foreach ($a in $allowed.Keys) { Write-Host "      $a" }
+    Write-Host "[scope] Written ($($violations.Count)):" -ForegroundColor Yellow
+    foreach ($v in $violations) { Write-Host ("      {0}  {1}" -f $v.Status, $v.Path) }
+    Write-Host ""
+    Write-Host "[scope] Nothing was reverted. Fix the list and re-check, or inspect by hand." -ForegroundColor Yellow
+    exit 66
 }
 
 if ($violations.Count -eq 0) {
