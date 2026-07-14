@@ -73,6 +73,16 @@
             "timeout": 5
           }
         ]
+      },
+      {
+        "matcher": "Bash|PowerShell",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"C:/Program Files/nodejs/node.exe\" \"C:/Users/User/.claude/hooks/codex-dispatch-guard.js\"",
+            "timeout": 5
+          }
+        ]
       }
     ],
     "PostToolUse": [

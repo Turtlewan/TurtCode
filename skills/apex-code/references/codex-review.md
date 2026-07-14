@@ -6,17 +6,38 @@ default *builder*, so this review path fires only on the Opus fallback); it is *
 blocks the pipeline and never edits code. Note: Opus builds only when Codex quota is exhausted, so this
 Codex review usually can't run either → apex-code degrades to single-model + human flag.
 
-## Invocation (read-only, schema-enforced) — PROVEN on Windows 2026-06-22
-From the repo root, after the build. **Pipe the prompt via stdin — never pass it as a positional arg**
-(a bare-arg `codex exec` hangs in a non-interactive shell waiting on stdin):
+## Invocation — through the WRAPPER, always
 
-```sh
-printf '%s' "<review prompt below, placeholders filled>" | \
-  codex exec -c approval_policy="never" --sandbox read-only \
-    --output-schema ~/.claude/skills/apex-code/references/codex-review-schema.json \
-    -o <out.json> -m gpt-5.6-sol -C <repo-root>
+A raw `printf … | codex exec …` is **hard-blocked** by `hooks/codex-dispatch-guard.js` and will be
+denied. That is deliberate: the raw path has no ledger, no watchdog, no `-Adopt`, and — the one that
+matters most here — **it does not read the verdict.** Codex exits **0** even when its review returns
+`"verdict": "BLOCK"`, so a hand-rolled review reports success on a blocking result. Two reviews of the
+harness itself did exactly that before anyone noticed.
+
+Write the prompt to a file, then:
+
+```powershell
+$pack = Get-Content -Raw <review-prompt.txt>
+scripts/codex-dispatch.ps1 `
+  -Spec <spec> -Task review -Phase review `
+  -Worktree <repo-root> -BaseSha <sha> `
+  -Schema review `
+  -Effort high `
+  -SkipScopeCheck `
+  -Prompt $pack
 ```
-Then read `<out.json>` — the schema-constrained final message `{ findings[], verdict }`.
+
+The wrapper supplies the rest of what this recipe used to spell out by hand:
+
+- **`-Sandbox read-only` is forced** for `-Phase review` / `-Schema review`. A reviewer that can edit
+  the tree it is judging is not a reviewer — and the standing end-gate ran with repo write access for
+  months despite a runbook promising it "never auto-edits anything".
+- **`--output-schema` is selected from `-Schema`**, so the findings can't be silently dropped by a
+  mismatched schema.
+- **The tree is pinned** before the review and verified after; if it moved, the verdict is **VOID**
+  (exit 69) rather than a stale opinion about a tree that no longer exists.
+- **The verdict is routed**: `BLOCK` → exit 67, `FLAG` → exit 68, anything unrecognised → **fails
+  closed**. Read the report at the `[dispatch] report:` path it prints.
 
 - `-c approval_policy="never"` → in non-interactive `exec`, any other policy turns the first
   sandboxed-command failure into a halt-to-escalate that nobody can answer → the review stalls. `never`

@@ -1,7 +1,7 @@
 ---
 skill: apex-code
 backend: claude
-version: 2.0.0
+version: 2.1.0
 last_updated: 2026-07-14
 sources:
   - docs/technical/adr/ADR-027-codex-primary-opus-fallback-deepseek-archived.md
@@ -92,22 +92,74 @@ scripts/codex-dispatch.ps1 `
   -Effort <coder_effort>                          # default medium
 ```
 
-**Never hand-roll `printf … | codex exec …`.** Three things are load-bearing, and each has already
-broken a real build when done by hand:
+**Never hand-roll `printf … | codex exec …`.** You now *can't* — a `PreToolUse` hook
+(`hooks/codex-dispatch-guard.js`) hard-blocks a raw `codex exec` in Bash or PowerShell. This
+sentence existed in prose for weeks and **three consecutive real builds bypassed it anyway**, with
+the ledger sitting frozen while they ran. That is the Iron Law's own rule landing on APEX itself:
+mechanism beats instruction, *including when you are the one writing the instruction*.
+
+Four things are load-bearing, and each has already broken a real build when done by hand:
 
 1. **stdin.** Codex needs the prompt *on* stdin, but backgrounding a process wants stdin *closed* —
    so a reflexive `< /dev/null` clobbers the pipe and Codex reports *"No prompt provided via
    stdin"* (live failure, 2026-07-14). Passing the prompt as a bare argument hangs instead. The
    wrapper writes to the child's stdin and closes it, with **no shell redirect anywhere in the
    path**, so neither failure is reachable.
-2. **Scope.** `-Authorized` arms the host-side scope check (`scripts/codex-scope-check.ps1`,
-   called by the wrapper — never run it by hand): snapshot before launch, diff after exit,
-   **path-scoped revert** of anything unauthorized that was clean at snapshot. Omit it and the scope
-   lock is prose only — which is *proven not to work*: Codex has been given that rule, in those
-   words, and written outside it anyway. **Exit 65 = scope violation on a Codex exit-0.** Anything
-   the host had already dirtied is reported **contested** and never reverted (a blanket revert once
-   destroyed the owner's concurrent ADRs and produced a false "Codex fabricated files" finding).
+2. **Scope.** `-Authorized` arms the host-side scope check (`scripts/codex-scope-check.ps1`, called
+   by the wrapper — never run it by hand): snapshot before launch, compare after exit, and **report**
+   anything unauthorized. **It reverts nothing.** Omit `-Authorized` and the scope lock is prose only
+   — *proven not to work*: Codex has been given that rule, in those words, and written outside it
+   anyway. **Exit 65 = out-of-scope writes, still sitting in the tree. Exit 66 = the `-Authorized`
+   list itself is wrong** (the task wrote several files and none is on it — fix the spec, not the
+   coder).
 3. **Durability** — run ledger, no-output watchdog, `-Adopt` recovery after a host crash.
+4. **The verdict.** The wrapper reads the coder's own `.final` report and **fails on `blocked`**.
+   Hand-rolled, you get an exit code — and the exit code lies: Codex exits **0** while its report
+   says `blocked`. On `cap-deps-1b` (2026-07-14) that unread `blocked` — *"the sandbox can no longer
+   launch helpers, so implementation cannot be inspected, corrected, or verified"* — was committed,
+   and the next spec was built on top of it.
+
+**The wrapper's exit codes are the contract. Route on them, not on the log and not on a hunch:**
+
+| Exit | Meaning | What you do |
+|------|---------|-------------|
+| 0 | done | Verify, review, commit. |
+| 65 | scope violation | **Spec defect** — the task needed a file its spec didn't list. **Nothing was reverted; the changes are still in the tree.** Read them, then surface to planning; don't just re-run. |
+| 66 | bad `-Authorized` list | The task wrote several files and *none* is on the list — the **list** is wrong, not the coder. |
+| 67 | **blocked** | **HARD STOP.** Do not commit. Do not build a dependent spec on top. Clear every `unresolved` item with a host re-verify first. Outranks every other code. |
+| 68 | done_with_concerns | The coder finished but flagged doubts. Read them; carry them into the review. |
+| 69 | **tree moved under a gate** | The verdict is **VOID** — it describes a tree that no longer exists. Find the writer, let it finish, re-run the gate. |
+| 71 | shared worktree refused | A coder is already live here. `git worktree add` one per concurrent task, or go serial. |
+| 75 | still running | Your *call* died; the coder did **not**. Wait for `.final`. |
+| 124 | stalled (no output) | The watchdog fired. The child is deliberately **not** killed — you decide. |
+
+**The scope check DETECTS. It never reverts, deletes, or checks anything out.** It used to, and it
+inferred authorship from timing — *clean at snapshot, dirty now, unauthorized ⇒ the coder wrote it* —
+which is **false the moment anything else is writing**, and it can never enumerate every writer. In
+one day it destroyed a sibling coder's files mid-run and a background planning agent's drafts. So the
+cause was removed rather than guarded: out-of-scope changes are **left exactly where the coder put
+them**, reported, and the dispatch fails. You decide what happens to them.
+
+**It catches a careless coder, not a hostile one.** It cannot see what git cannot see, it cannot
+survive a corrupted repo, and a write that is undone before the coder exits leaves no trace. The real
+defences against bad faith are `--sandbox`, the review gate, and a human reading the diff. Don't ask
+this script for more than it does — the limits are written at the top of it.
+
+**Never infer the coder's death from your own timeout.** `codex exec` outlives the tool call that
+launched it. A harness Bash ceiling SIGTERMs your shell (`exit 143`) while Codex keeps running —
+and keeps **writing**. On `cap-deps-1b` the host read *"my call died"* as *"the coder died"*,
+announced a crash that never happened, and moved to recovery while the coder wrote for another
+**3.5 minutes**. **The completion signal is `.final`, and only `.final`.** No `.final` + a live PID
+= still running: run `-Adopt`, which now refuses to hand back a half-written tree and tells you so.
+
+Never bound a dispatch with your own timeout — the wrapper's `-NoOutputTimeoutMin` watchdog is what
+bounds it, and it distinguishes *quiet* from *dead*, which a wall-clock ceiling cannot.
+
+**Carry the coder's concerns forward.** The wrapper prints `unresolved` / `deviations` / `blocker`
+and writes them to `<final>.concerns.md`. Paste that into the reviewer's prompt **verbatim**. The
+coder's own account of what it could not finish is the highest-value input the review will get —
+and on `cap-deps-1b` it evaporated into a status word, leaving the reviewer to re-derive the coder's
+doubts from scratch. It guessed. It happened to guess right.
 
 `-Authorized` is an **array**: `@('a.py','b.py')`. Passed as one comma-joined string it matches
 nothing, and then *every authorized file reads as a violation*. The wrapper splits on commas
@@ -171,9 +223,35 @@ un-evaled — first rung to cut if the eval disappoints (see status.md).
 
 ## Post-build
 
+**Pin the tree before you open a gate.** A gate reads the tree at time T and acts on a verdict at
+T+n. Nothing pins T — so if the tree moves in between, the verdict describes a tree that no longer
+exists.
+
+**Wrapper-dispatched read-only gates pin themselves** (`-Phase review` or `-Sandbox read-only`):
+the dispatcher pins before launch, verifies on return, and **exits 69 with the verdict VOID** if the
+tree moved. You don't have to remember. For a gate the wrapper doesn't run — a Claude-side
+`apex-reviewer`, a manual verify, the commit itself — pin it yourself:
+
+```powershell
+scripts/tree-pin.ps1 -Pin    -Worktree <repo> -Label <spec>   # before the gate opens
+scripts/tree-pin.ps1 -Verify -Worktree <repo> -Label <spec>   # when the verdict returns, BEFORE acting
+```
+
+**Exit 69 = the tree moved; the verdict is VOID.** Find the writer (a live coder, a concurrent
+agent, a hand-edit), let it finish, re-pin, re-run the gate. Do the same around the commit: **what
+you verified and what you commit must be the same tree.**
+
+This is not hypothetical. On 2026-07-14 a reviewer read `store.py` at +2 lines and returned a
+high-severity finding four minutes later; by then the tree was at +6 and the finding was already
+fixed. Stale-and-already-fixed is the *harmless* direction — the dangerous one is identical in
+mechanism: the reviewer reads, the tree moves, the reviewer returns **CLEAN**, and the gate blesses
+code nobody ever looked at. The pin covers **content, not just filenames** — that day the filename
+never changed, only what was inside it, so a `git status` check would have seen nothing.
+
 1. **In parallel:**
-   - `apex-reviewer` — spec_path, files_changed. **Always runs.** It is the evaluator-independence
-     gate; skipping it to save tokens trades away the one thing that sees what the coder cannot.
+   - `apex-reviewer` — spec_path, files_changed, **and `<final>.concerns.md` verbatim** if the coder
+     raised any. **Always runs.** It is the evaluator-independence gate; skipping it to save tokens
+     trades away the one thing that sees what the coder cannot.
    - `apex-docs-product-agent` — files_changed, spec_path, date.
 2. **Cross-family review** (`cross_model_review: true`; auto for auth/security/data/`risk: high`).
    Derive the reviewer from the builder (ADR-032/034): **Codex built → Claude reviews** (`model:

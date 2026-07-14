@@ -3,7 +3,14 @@
 # not a dispatcher bug -- but it bit twice today, so the real caller must pass arrays properly too).
 
 $ErrorActionPreference = 'Stop'
-$SP   = 'C:\Users\User\AppData\Local\Temp\claude\C--users-user-apex\97a47186-588e-4011-a69e-aab98ab8c5c7\scratchpad'
+
+# The fake lives BESIDE this test, in the repo. It used to be referenced out of a session scratchpad
+# ($SP\fakecodex.ps1) that no longer exists -- a self-test reaching outside its own repo for the
+# thing it is testing, which is how it quietly stopped running at all.
+$fakeCodex = Join-Path $PSScriptRoot 'dispatch-test-fakecodex.ps1'
+if (-not (Test-Path -LiteralPath $fakeCodex)) { throw "Fake codex not found: $fakeCodex" }
+
+$SP   = Join-Path $env:TEMP 'apex-dispatch-test'
 $repo = Join-Path $SP 'dt3'
 
 if (Test-Path $repo) { Remove-Item -Recurse -Force $repo }
@@ -31,12 +38,19 @@ Write-Host "`n--- dispatching (authorized: src/a.py only) ---`n" -ForegroundColo
     -Prompt 'Implement the deps field.' `
     -Authorized @('src/a.py') `
     -CodexExecutable 'powershell.exe' `
-    -CodexExecutableArgumentPrefix @('-NoProfile','-ExecutionPolicy','Bypass','-File', (Join-Path $SP 'fakecodex.ps1'))
+    -CodexExecutableArgumentPrefix @('-NoProfile','-ExecutionPolicy','Bypass','-File', $fakeCodex)
 
 $ec = $LASTEXITCODE
 
 Write-Host "`n===== RESULTS =====" -ForegroundColor Cyan
-$log = Get-Content (Join-Path $repo 'docs/progress/codex-cap-test-t3.log') -Raw -ErrorAction SilentlyContinue
+# The dispatch log lives OUTSIDE the worktree now, beside the ledger. It used to be written into the
+# target repo -- which meant the scope check had to exempt its own state directory, and every version
+# of that exemption was a hole. Once the exemption was removed, the harness's own log read as an
+# unauthorized write and EVERY CLEAN BUILD EXITED 65. The harness must not write into the tree it is
+# judging.
+$apexRoot = if ($env:LOCALAPPDATA) { Join-Path $env:LOCALAPPDATA 'apex' } else { Join-Path $env:TEMP 'apex' }
+$logRoot = Join-Path (Join-Path $apexRoot 'progress') 'codex-logs'
+$log = Get-Content ((Get-ChildItem -Path $logRoot -Filter 'codex-cap-test-t3-*.log' -ErrorAction SilentlyContinue | Sort-Object LastWriteTime | Select-Object -Last 1).FullName) -Raw -ErrorAction SilentlyContinue
 
 function Check($label, $cond, $detail) {
     $mark = if ($cond) { 'ok  ' } else { 'FAIL' }
@@ -47,8 +61,11 @@ function Check($label, $cond, $detail) {
 Check 'stdin delivered the prompt'   ($log -match 'got prompt')                  'fake codex read stdin'
 Check 'scope lock reached the prompt'($log -match 'scope lock present')          'belt-and-braces prose'
 Check 'authorized change KEPT'        ((Get-Content src/a.py -Raw) -match 'codex authorized')  'src/a.py'
-Check 'out-of-scope REVERTED'         (-not ((Get-Content src/b.py -Raw) -match 'OUT OF SCOPE')) 'src/b.py'
-Check 'stray file DELETED'            (-not (Test-Path src/rogue.py))            'src/rogue.py'
+# The scope check DETECTS and reports; it no longer reverts. It destroyed real work twice by
+# inferring authorship from timing while other writers were live, so it now leaves the tree alone
+# and fails loudly instead. Both out-of-scope writes must therefore still be PRESENT -- and flagged.
+Check 'out-of-scope write still PRESENT' ((Get-Content src/b.py -Raw) -match 'OUT OF SCOPE')  'src/b.py -- detected, not destroyed'
+Check 'stray file still PRESENT'         (Test-Path src/rogue.py)                             'src/rogue.py -- detected, not destroyed'
 $st = Get-Content docs/status.md -Raw
 Check 'host status.md edit SURVIVED'  ($st -match 'host ADR note')               'the ADR-destroying bug'
 Check 'codex status.md write flagged' ($st -match 'codex clobbered')             'contested, not reverted'

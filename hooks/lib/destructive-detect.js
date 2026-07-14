@@ -387,5 +387,11 @@ module.exports = {
   isDestructiveBash: isDestructiveBash,
   isReadOnlyGitIntrospection: isReadOnlyGitIntrospection,
   isExfiltrationBash: isExfiltrationBash,
-  isRemoteCodeExec: isRemoteCodeExec
+  isRemoteCodeExec: isRemoteCodeExec,
+  // Shared shell-parsing primitives. Exported so a second guard does not grow a fourth private
+  // copy of quote/segment handling -- divergent copies are how the SQL never-list ended up
+  // testing against the wrong side of the quote-stripping and never matching a single statement.
+  splitCommandSegments: splitCommandSegments,
+  tokenize: tokenize,
+  commandBasename: commandBasename
 };
