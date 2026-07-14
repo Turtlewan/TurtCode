@@ -81,43 +81,54 @@ Same-tree parallel workers collide on lockfiles, ports, caches and the git index
 ## Codex dispatch — the coder
 
 Every task tagged `▸codex` (the default). Assemble the **dispatch pack** — Goal → Context →
-Constraints → Done-when — per `references/dispatch-pack.md`, then **run it backgrounded**:
+Constraints → Done-when — per `references/dispatch-pack.md`, then **always dispatch through the
+wrapper**:
 
-```
-printf '%s' "<the dispatch pack>" | codex exec -p apex-coder --sandbox workspace-write -m gpt-5.6-sol \
-  -c model_reasoning_effort="<coder_effort>" -C <repo-root> --json \
-  --output-schema ~/.claude/skills/apex-code/references/codex-completion-schema.json \
-  -o <scratch>/codex-<task>.final --color never > docs/progress/codex-<task>.log 2>&1
+```powershell
+scripts/codex-dispatch.ps1 `
+  -Spec <spec> -Task <task> -Phase build -Worktree <repo-root> -BaseSha <sha> `
+  -Prompt "<the dispatch pack>" `
+  -Authorized @('src/a.py','tests/test_a.py') `   # the spec's ## Files to change, VERBATIM
+  -Effort <coder_effort>                          # default medium
 ```
 
-- **Pipe the prompt via stdin** — a bare argument hangs.
-- Omit `-c model_reasoning_effort` at `medium`.
-- `--json` streams to a tailable log. **Post a one-line progress pulse to chat per check-in** — a
-  backgrounded Codex is otherwise invisible until it exits. Recipe → `references/codex-observability.md`.
-- `-o` captures the schema-constrained final message: `{status, changed_files, commands_run,
-  deviations, unresolved, blocker}`. Route `status` per `references/dispatch-pack.md` § Completion
-  routing. **`blocked` = spec defect → Forks, never a model fallback.**
+**Never hand-roll `printf … | codex exec …`.** Three things are load-bearing, and each has already
+broken a real build when done by hand:
+
+1. **stdin.** Codex needs the prompt *on* stdin, but backgrounding a process wants stdin *closed* —
+   so a reflexive `< /dev/null` clobbers the pipe and Codex reports *"No prompt provided via
+   stdin"* (live failure, 2026-07-14). Passing the prompt as a bare argument hangs instead. The
+   wrapper writes to the child's stdin and closes it, with **no shell redirect anywhere in the
+   path**, so neither failure is reachable.
+2. **Scope.** `-Authorized` arms the host-side scope check (`scripts/codex-scope-check.ps1`,
+   called by the wrapper — never run it by hand): snapshot before launch, diff after exit,
+   **path-scoped revert** of anything unauthorized that was clean at snapshot. Omit it and the scope
+   lock is prose only — which is *proven not to work*: Codex has been given that rule, in those
+   words, and written outside it anyway. **Exit 65 = scope violation on a Codex exit-0.** Anything
+   the host had already dirtied is reported **contested** and never reverted (a blanket revert once
+   destroyed the owner's concurrent ADRs and produced a false "Codex fabricated files" finding).
+3. **Durability** — run ledger, no-output watchdog, `-Adopt` recovery after a host crash.
+
+`-Authorized` is an **array**: `@('a.py','b.py')`. Passed as one comma-joined string it matches
+nothing, and then *every authorized file reads as a violation*. The wrapper splits on commas
+defensively, but pass it properly.
+
+- Omit `-Effort` at `medium`.
+- The run streams to a tailable `docs/progress/codex-<spec>-<task>.log`. **Post a one-line progress
+  pulse to chat per check-in** — a backgrounded Codex is otherwise invisible until it exits.
+  Recipe → `references/codex-observability.md`.
+- The final message is schema-constrained: `{status, changed_files, commands_run, deviations,
+  unresolved, blocker}`. Route `status` per `references/dispatch-pack.md` § Completion routing.
+  **`blocked` = spec defect → Forks, never a model fallback.**
+- **A scope violation is a SPEC DEFECT, not a coder failure** — the task needed a file its spec
+  didn't list. Log it, surface it to planning, **don't just re-run**.
 - **Blast radius:** the Codex subprocess does **not** ride Claude Code's `permissions.deny` floor.
   `workspace-write` is its only guardrail — keep it repo-confined, never `danger-full-access`.
 - **Windows sandbox:** install dependencies **as the normal user** in this session (`npm install` /
   `uv sync`) *before* dispatch. Never let the subprocess create `node_modules`/`.venv` — the sandbox
-  SID owns them and your verify (running as you) then hits a locked tree.
-**Scope check — wrap every `▸codex` task.** The dispatch brief already says "touch nothing else" and
-Codex has written outside its scope anyway. A louder prohibition is not a mechanism, and a PreToolUse
-hook **cannot see these writes at all** (the subprocess doesn't ride Claude Code's permission floor).
-The host enforces it, after the fact:
+  SID owns them and your verify (running as you) then hits a locked tree. Codex's per-task scratch
+  dirs (`.scratch-*`) must be gitignored, or the scope check flags them on every run.
 
-```
-scripts/codex-scope-check.ps1 -Snapshot -Worktree <repo> -Task <name>     # BEFORE dispatch
-<codex exec ...>
-scripts/codex-scope-check.ps1 -Check -Worktree <repo> -Task <name> -Authorized 'a.py','b.py'
-```
-
-Exit 1 = violation. It reverts **only paths that were clean at snapshot time** — anything the host
-had already dirtied is reported as **contested** and never touched (a blanket revert once destroyed
-the host's concurrent ADRs and produced a false "Codex fabricated files" finding). A violation is a
-**spec defect** — the task needed a file its spec didn't authorize. Log it, surface it to planning;
-don't just re-run.
 
 **Parallel Codex** (2+ independent `▸codex` tasks) → `references/parallel-codex.md`.
 

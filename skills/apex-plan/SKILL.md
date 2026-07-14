@@ -112,6 +112,32 @@ Write to **`docs/drafts/{short-name}.md`** first — never straight to `docs/cha
 pending specs), make the specs **file-disjoint**, with any real dependency as a `## Prerequisites`
 edge — so a session drains the whole set as parallel waves (ADR-029).
 
+### Spec one WAVE ahead — never the whole roadmap (the default)
+
+Design the whole thing. **Then spec and build one dependency wave at a time:**
+
+> spec wave 1 → **build wave 1** → spec wave 2 *against the real, shipped wave-1 code* → build wave 2
+
+**Inside a wave**, specs are dependency-independent by construction, so spec them all up front and
+dispatch them in parallel — you keep the full batching win. **Across waves, never.** A spec that
+consumes another spec's *output shape* is being written against an interface that **does not exist
+yet**, and you will not find out until the build.
+
+This is not theoretical. Artemis's 35-spec one-shot (2026-07-14) shipped, but **four of its six
+host-caught defects were spec-ahead damage**, and every one of them landed in a *chained* family
+(mcp a→b→c, map3→map4, ref, pr) while the independent specs came through clean. The deepest —
+`dto.ts`/`gateway.ts` appearing in **no** spec's file list across mcp6a/6b/6c — would have broken
+every invoke-confirm call at the IPC layer. The same run also found "10 of 47 unbuilt specs were
+already shipped, just unarchived": **specs written far ahead of the build decay, because the codebase
+moves under them.**
+
+The cost used to be a session restart. It isn't any more (ADR-038 — one session plans and builds), so
+the main argument for spec-everything-first is gone.
+
+**Spec further ahead only when** the specs are genuinely file-disjoint *and* depend on no interface
+that doesn't exist yet. That is the same test as `Batch-joinable` in the readiness gate — if a spec
+fails that, it is also too far ahead to write.
+
 **Three rules a bare model does not reliably apply:**
 
 1. **No *why* inline.** Litmus: does it change what gets built? **No** → cut it (home = an ADR).

@@ -17,6 +17,11 @@ param(
     [ValidateRange(1, 2147483647)]
     [int]$NoOutputTimeoutMin = 8,
     [switch]$Adopt,
+    # The spec's '## Files to change' list. Given, the scope lock is ENFORCED (snapshot before
+    # launch, diff + path-scoped revert after exit). Omitted, it is prose only -- and prose has
+    # already failed: Codex has written outside a scope lock it was explicitly given.
+    [string[]]$Authorized = @(),
+    [switch]$SkipScopeCheck,
     [string]$Prompt,
     # Selects the --output-schema codex is constrained to. A review/end-gate pass returns
     # findings, not a build completion; constraining it to the build schema (whose
@@ -211,11 +216,33 @@ $logPath = Join-Path $logDirectory "codex-$safeSpec-$safeTask.log"
 $finalPath = Join-Path $ScratchDirectory "codex-$safeSpec-$safeTask.final"
 [System.IO.File]::WriteAllText($logPath, [string]::Empty, [System.Text.UTF8Encoding]::new($false))
 
-# Standing scope lock, appended to EVERY dispatch so it cannot be forgotten at 3am.
+# --- Host-side scope enforcement (snapshot) -------------------------------------------------------
+# The prose scope lock below is NOT the enforcement. It is a courtesy. Codex has been given that
+# rule, in those words, and has written outside its scope anyway -- prohibitions do not enforce.
+# The mechanism is codex-scope-check.ps1: snapshot the dirty set BEFORE launch, diff it AFTER exit,
+# revert anything unauthorized that was clean at snapshot time. Wiring it into the dispatcher --
+# rather than documenting it as a step for the host to remember -- is the whole point. A procedure a
+# human has to remember is the procedure that gets skipped at 2am.
+$scopeCheckScript = Join-Path $PSScriptRoot 'codex-scope-check.ps1'
+$scopeCheckArmed = $false
+if ($Authorized.Count -gt 0) {
+    if (-not (Test-Path $scopeCheckScript)) {
+        Write-Host "[dispatch] WARNING: -Authorized was given but codex-scope-check.ps1 is missing. Running WITHOUT scope enforcement." -ForegroundColor Yellow
+    }
+    else {
+        & $scopeCheckScript -Snapshot -Worktree $Worktree -Task "$safeSpec-$safeTask" | Write-Host
+        $scopeCheckArmed = $true
+    }
+}
+elseif (-not $SkipScopeCheck) {
+    Write-Host "[dispatch] NOTE: no -Authorized file list given, so the scope lock is prose only and unenforced." -ForegroundColor Yellow
+    Write-Host "[dispatch]       Pass -Authorized with the spec's '## Files to change' list to enforce it, or -SkipScopeCheck to silence this." -ForegroundColor Yellow
+}
+
+# Standing scope lock, appended to EVERY dispatch. Belt-and-braces only -- see above.
 # A planning host commonly edits docs/status.md in the same working tree while a build runs; Codex
 # has repeatedly rewritten it out of scope-lock, and a blanket revert of it has already destroyed
-# concurrent owner planning work once. Enforcing this in the wrapper -- rather than trusting each
-# prompt author to remember -- is the whole point.
+# concurrent owner planning work once.
 $scopeLock = @'
 
 ---
@@ -383,7 +410,26 @@ try {
     }
     $exitCode = $process.ExitCode
     $status = if ($exitCode -eq 0) { 'done' } else { 'failed' }
-    Update-LedgerRow -RunId $runId -Changes @{ status = $status; ended = (Get-UtcTimestamp) }
+
+    # --- Host-side scope enforcement (check) ------------------------------------------------------
+    # Runs on EVERY exit path, including a failed task -- a task that failed may still have written
+    # files it was never authorized to touch, and those are exactly the ones nobody goes looking for.
+    $scopeViolation = $false
+    if ($scopeCheckArmed) {
+        & $scopeCheckScript -Check -Worktree $Worktree -Task "$safeSpec-$safeTask" -Authorized $Authorized | Write-Host
+        if ($LASTEXITCODE -ne 0) {
+            $scopeViolation = $true
+            $status = 'scope-violation'
+            Write-Host "[dispatch] Task '$Task' wrote outside its authorized set. Out-of-scope paths were reverted." -ForegroundColor Red
+            Write-Host "[dispatch] This is a SPEC DEFECT: the task needed a file its spec did not list. Surface it to planning; do not just re-run." -ForegroundColor Red
+        }
+    }
+
+    Update-LedgerRow -RunId $runId -Changes @{ status = $status; ended = (Get-UtcTimestamp); scopeViolation = $scopeViolation }
+
+    # A scope violation is a real failure even when Codex exits 0 -- otherwise the host reads "done",
+    # integrates, and the out-of-scope write is discovered days later (or never).
+    if ($scopeViolation -and $exitCode -eq 0) { exit 65 }
     exit $exitCode
 } catch {
     # A launch/setup failure has no child exit code, but it is still durable.
