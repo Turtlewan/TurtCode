@@ -185,20 +185,25 @@ function Get-ContentHash([string]$relPath) {
     $full = Join-Path $repo $relPath
 
     if (Test-Path -LiteralPath $full -PathType Container) {
-        $parts = New-Object System.Collections.Generic.List[string]
-        foreach ($file in (Get-ChildItem -LiteralPath $full -Recurse -File -Force -ErrorAction SilentlyContinue |
-                Sort-Object FullName)) {
-            $rel = $file.FullName.Substring($repo.Length).TrimStart('\', '/') -replace '\\', '/'
-            $h = Invoke-Git hash-object -- $rel
-            if (-not $h) { $h = "size:$($file.Length)" }   # unreadable (ACL): still varies with content
-            $parts.Add("$rel $(([string]$h).Trim())")
+        # Fingerprint a directory by aggregating its files' metadata in ONE enumeration -- NEVER a git
+        # subprocess per file. The old per-file `git hash-object` spawned one process for EVERY file
+        # under the entry: fine on a test repo, fatal on a real one. `git status --ignored=traditional`
+        # collapses each ignored node_modules / .venv / target -- tens of thousands of files -- to a
+        # single dir entry, so the snapshot spawned tens of thousands of git processes and never
+        # returned, wedging every build dispatch before launch (session 9; reviews skip the snapshot,
+        # which is why only -Phase build hung). Count + total size + newest mtime changes whenever a
+        # file is added, removed, or edited -- what the before/after comparison needs. Byte-identical
+        # with a deliberately preserved mtime is out of scope (this catches a careless coder, not a
+        # hostile one -- the gate's stated threat model).
+        $count = 0; $totalLen = [long]0; $maxTicks = [long]0
+        foreach ($file in (Get-ChildItem -LiteralPath $full -Recurse -File -Force -ErrorAction SilentlyContinue)) {
+            $count++
+            $totalLen += $file.Length
+            $t = $file.LastWriteTimeUtc.Ticks
+            if ($t -gt $maxTicks) { $maxTicks = $t }
         }
-        if ($parts.Count -eq 0) { return 'dir:empty' }
-        $sha = [System.Security.Cryptography.SHA256]::Create()
-        try {
-            $bytes = [System.Text.Encoding]::UTF8.GetBytes([string]::Join("`n", $parts))
-            return 'dir:' + [System.BitConverter]::ToString($sha.ComputeHash($bytes)).Replace('-', '').ToLower()
-        } finally { $sha.Dispose() }
+        if ($count -eq 0) { return 'dir:empty' }
+        return "dir:$count`:$totalLen`:$maxTicks"
     }
 
     if (-not (Test-Path -LiteralPath $full -PathType Leaf)) { return '-' }
