@@ -40,10 +40,19 @@ $secs = [math]::Round($sw.Elapsed.TotalSeconds, 1)
 Check 'snapshot of a 600-file untracked dir completes' ($snapExit -eq 0) "exit=$snapExit"
 Check 'and does so FAST (< 15s; old path would not)' ($sw.Elapsed.TotalSeconds -lt 15) "took ${secs}s"
 
-# The snapshot recorded the directory as the metadata fingerprint form, and the -Check afterward
-# agrees it is unchanged (before == after), proving the new hash is stable and comparable.
+# Unchanged tree -> in scope (before == after, so the new hash is stable and comparable).
 & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $scope -Check -Worktree $repo -Task 'scale' -Authorized @('app.py') -StateDirectory $state *> $null
-Check 'a following -Check on the unchanged tree is in scope' ($LASTEXITCODE -eq 0) "check exit=$LASTEXITCODE"
+Check 'unchanged tree is in scope (0)' ($LASTEXITCODE -eq 0) "check exit=$LASTEXITCODE"
+
+# DETERMINISTIC path-sensitivity (not timing-dependent): rename a file inside the unauthorized dir. A
+# rename preserves count, total size, and mtime, so an aggregate fingerprint MISSES it and passes --
+# the exact hole a first version of this fix had. The path-inclusive fingerprint sees the directory
+# change and flags an out-of-scope write (exit 65). Fails against an aggregate-only implementation.
+Rename-Item (Join-Path $big 'f0.tmp') (Join-Path $big 'renamed0.tmp')
+& powershell.exe -NoProfile -ExecutionPolicy Bypass -File $scope -Check -Worktree $repo -Task 'scale' -Authorized @('app.py') -StateDirectory $state *> $null
+# Non-zero = the change was DETECTED (a real scope violation), not silently passed as clean-0. That is
+# the property the aggregate fingerprint lost; path-inclusive restores it.
+Check 'a RENAME inside the dir is detected (not clean)' ($LASTEXITCODE -ne 0) "check exit=$LASTEXITCODE"
 
 try { Remove-Item -Recurse -Force $parent -ErrorAction SilentlyContinue } catch {}
 Write-Host ""

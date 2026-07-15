@@ -185,25 +185,33 @@ function Get-ContentHash([string]$relPath) {
     $full = Join-Path $repo $relPath
 
     if (Test-Path -LiteralPath $full -PathType Container) {
-        # Fingerprint a directory by aggregating its files' metadata in ONE enumeration -- NEVER a git
-        # subprocess per file. The old per-file `git hash-object` spawned one process for EVERY file
-        # under the entry: fine on a test repo, fatal on a real one. `git status --ignored=traditional`
-        # collapses each ignored node_modules / .venv / target -- tens of thousands of files -- to a
-        # single dir entry, so the snapshot spawned tens of thousands of git processes and never
-        # returned, wedging every build dispatch before launch (session 9; reviews skip the snapshot,
-        # which is why only -Phase build hung). Count + total size + newest mtime changes whenever a
-        # file is added, removed, or edited -- what the before/after comparison needs. Byte-identical
-        # with a deliberately preserved mtime is out of scope (this catches a careless coder, not a
-        # hostile one -- the gate's stated threat model).
-        $count = 0; $totalLen = [long]0; $maxTicks = [long]0
-        foreach ($file in (Get-ChildItem -LiteralPath $full -Recurse -File -Force -ErrorAction SilentlyContinue)) {
-            $count++
-            $totalLen += $file.Length
-            $t = $file.LastWriteTimeUtc.Ticks
-            if ($t -gt $maxTicks) { $maxTicks = $t }
+        # Fingerprint from each file's relative PATH + length + mtime, hashed IN-PROCESS. NEVER a git
+        # subprocess per file: the old `git hash-object` per file spawned one process for EVERY file
+        # under the entry, so an ignored node_modules / .venv / target (git status --ignored collapses
+        # each to a single dir entry -- tens of thousands of files) spawned tens of thousands of git
+        # processes and never returned, wedging every build dispatch before launch (session 9; reviews
+        # skip the snapshot, which is why only -Phase build hung).
+        #
+        # Keeping the PATH is load-bearing: an aggregate of count+size+mtime alone misses a RENAME
+        # inside the directory (all three unchanged). Path + length + mtime catch renames, adds,
+        # deletes, and edits. Byte-identical with a deliberately preserved mtime is out of scope (a
+        # careless coder, not a hostile one -- the gate's stated threat model).
+        $parts = New-Object System.Collections.Generic.List[string]
+        $enumErr = $null
+        foreach ($file in (Get-ChildItem -LiteralPath $full -Recurse -File -Force -ErrorAction SilentlyContinue -ErrorVariable enumErr |
+                Sort-Object FullName)) {
+            $rel = $file.FullName.Substring($repo.Length).TrimStart([char]92, [char]47) -replace '\\', '/'
+            $parts.Add("$rel|$($file.Length)|$($file.LastWriteTimeUtc.Ticks)")
         }
-        if ($count -eq 0) { return 'dir:empty' }
-        return "dir:$count`:$totalLen`:$maxTicks"
+        # A subtree we could not read must not fingerprint identically to one we could -- fold the
+        # failure count in so a newly-unreadable subtree changes the hash rather than silently passing.
+        if ($enumErr -and $enumErr.Count -gt 0) { $parts.Add("UNREADABLE|$($enumErr.Count)") }
+        if ($parts.Count -eq 0) { return 'dir:empty' }
+        $sha = [System.Security.Cryptography.SHA256]::Create()
+        try {
+            $bytes = [System.Text.Encoding]::UTF8.GetBytes([string]::Join("`n", $parts))
+            return 'dir:' + [System.BitConverter]::ToString($sha.ComputeHash($bytes)).Replace('-', '').ToLower()
+        } finally { $sha.Dispose() }
     }
 
     if (-not (Test-Path -LiteralPath $full -PathType Leaf)) { return '-' }
