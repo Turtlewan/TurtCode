@@ -537,12 +537,29 @@ function Invoke-Adopt {
         }
     }
 
+    # The encoding gate runs here too, and NOT because it is tidy: an adopted run's writes sit in the
+    # tree exactly like a normal run's. Session 71 shipped "two copies of one rule, the weaker one
+    # fails open" FOUR TIMES in this one file. Leaving -Adopt without this scan would be the fifth.
+    # It needs no snapshot, so unlike the scope check it can always be re-run for real.
+    # Same fail-closed rule as the main path. Two copies of one rule always diverge and the weaker one
+    # fails open -- this file shipped that bug four times. If the helper is gone, neither path pretends.
+    if (-not (Test-Path $adoptScript)) {
+        throw "codex-scope-check.ps1 is missing ($adoptScript). Refusing to adopt without the encoding gate."
+    }
+    $adoptEncodingViolation = $false
+    if ($match.worktree) {
+        & $adoptScript -EncodingScan -Worktree ([string]$match.worktree) -Task ([string]$match.scope_task) `
+            -Authorized @($match.authorized) | Write-Host
+        if ($LASTEXITCODE -eq 73) { $adoptEncodingViolation = $true }
+    }
+
     $adoptFinal = $adoptStatus
     if ($adoptScopeExit -ne 0) { $adoptFinal = "$adoptStatus+scope$adoptScopeExit" }
     try {
         Update-LedgerRow -RunId ([string]$match.run_id) -Changes @{
             status = "adopted-$adoptFinal"; ended = (Get-UtcTimestamp)
             scopeViolation = ($adoptScopeExit -ne 0); scope_exit = $adoptScopeExit
+            encoding_violation = $adoptEncodingViolation
         }
     } catch { Write-Host "[adopt] WARNING: could not close the ledger row: $($_.Exception.Message)" -ForegroundColor Yellow }
 
@@ -553,6 +570,10 @@ function Invoke-Adopt {
     }
     if ($adoptScopeExit -eq 66) { exit 66 }
     if ($adoptScopeExit -ne 0) { exit 65 }
+    if ($adoptEncodingViolation) {
+        Write-Host "[adopt] DOUBLE-ENCODED TEXT in the tree. Do NOT commit: the suite is green and WRONG." -ForegroundColor Red
+        exit 73
+    }
     if ($adoptStatus -eq 'done_with_concerns') { exit 68 }
     exit 0
 }
@@ -1103,6 +1124,25 @@ try {
         }
     }
 
+    # --- Encoding gate: the one defect a green test suite GUARANTEES you will not see ---------------
+    # Codex-on-Windows double-encodes non-ASCII into source (em-dash -> a-circumflex/euro/quote). The
+    # suite cannot catch it: the coder writes the same corrupted bytes into the EXPECTED string, so
+    # the assertion compares corrupt to corrupt and passes. It bit twice on 2026-07-10, green both
+    # times. This is its own axis, like scope -- it says nothing about whether the coder finished.
+    #
+    # Runs on EVERY dispatch, not just scope-armed ones: corruption does not care what was authorized,
+    # and a failed task can still have written mojibake before it died.
+    # FAIL CLOSED if the helper is gone. The first cut wrapped this in `if (Test-Path ...)`, so a
+    # missing script meant the gate silently did not run and the dispatch exited 0 -- the "every
+    # dispatch is scanned" guarantee quietly downgraded to "scanned when convenient". The scope check
+    # already throws in exactly this situation; this now matches it.
+    if (-not (Test-Path $scopeCheckScript)) {
+        throw "codex-scope-check.ps1 is missing ($scopeCheckScript). Refusing to finish a dispatch without the encoding gate: a gate that silently does not run reads as a pass."
+    }
+    $encodingViolation = $false
+    & $scopeCheckScript -EncodingScan -Worktree $Worktree -Task $gateKey -Authorized $Authorized | Write-Host
+    if ($LASTEXITCODE -eq 73) { $encodingViolation = $true }
+
     # Did the tree move while this read-only gate was open? If so the verdict is about a tree that no
     # longer exists, and a CLEAN verdict would be a rubber stamp on unreviewed code.
     $treeMoved = $false
@@ -1114,6 +1154,7 @@ try {
     Update-LedgerRow -RunId $runId -Changes @{
         status = $status; ended = (Get-UtcTimestamp)
         scopeViolation = $scopeViolation; scope_exit = $scopeExit; tree_moved = $treeMoved
+        encoding_violation = $encodingViolation
         report_status = $reportStatus; unresolved = $unresolved; deviations = $deviations; blocker = $blocker
     }
 
@@ -1172,6 +1213,15 @@ try {
     # through -- outside the documented exit space entirely, and with the scope route hidden. A child
     # failure does not excuse an out-of-scope write; it is usually how you get one.
     if ($scopeViolation) { exit 65 }
+
+    # Corrupted bytes in the tree. Ranked BELOW a scope violation deliberately: a scope violation is a
+    # SPEC defect and re-routes the whole task through planning -- and when that task is re-dispatched,
+    # this scan runs again and re-catches the mojibake. Encoding is a mechanical byte fix; scope is
+    # structural. Both are printed above and both are in the ledger, whichever one the exit code carries.
+    if ($encodingViolation) {
+        Write-Host "[dispatch] DOUBLE-ENCODED TEXT in the tree. Do NOT commit: the suite is green and WRONG." -ForegroundColor Red
+        exit 73
+    }
 
     # `done_with_concerns` is not `done`. It exits distinctly so the host must decide, not skim.
     if ($status -eq 'done_with_concerns') { exit 68 }

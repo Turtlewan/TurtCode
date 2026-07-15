@@ -1,7 +1,7 @@
 ---
 skill: apex-code
 backend: claude
-version: 2.1.0
+version: 2.3.0
 last_updated: 2026-07-14
 sources:
   - docs/technical/adr/ADR-027-codex-primary-opus-fallback-deepseek-archived.md
@@ -129,6 +129,7 @@ Four things are load-bearing, and each has already broken a real build when done
 | 67 | **blocked** | **HARD STOP.** Do not commit. Do not build a dependent spec on top. Clear every `unresolved` item with a host re-verify first. Outranks every other code. |
 | 68 | done_with_concerns | The coder finished but flagged doubts. Read them; carry them into the review. |
 | 69 | **tree moved under a gate** | The verdict is **VOID** — it describes a tree that no longer exists. Find the writer, let it finish, re-run the gate. |
+| 73 | **double-encoded text (mojibake)** | Codex-on-Windows corrupted non-ASCII it wrote (em-dash → `â€"`). **Do not commit — the suite is green and wrong.** The coder writes the same bad bytes into the *expected* string, so the assertion compares corrupt to corrupt and passes. Fix the bytes, re-verify. |
 | 71 | shared worktree refused | A coder is already live here. `git worktree add` one per concurrent task, or go serial. |
 | 75 | still running | Your *call* died; the coder did **not**. Wait for `.final`. |
 | 124 | stalled (no output) | The watchdog fired. The child is deliberately **not** killed — you decide. |

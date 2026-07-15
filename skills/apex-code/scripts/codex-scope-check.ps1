@@ -32,11 +32,18 @@
 # USAGE
 #   Before dispatch:  codex-scope-check.ps1 -Snapshot -Worktree <repo> -Task <name>
 #   After it exits:   codex-scope-check.ps1 -Check -Worktree <repo> -Task <name> -Authorized 'src/a.py','tests/b.py'
+#   Encoding gate:    codex-scope-check.ps1 -EncodingScan -Worktree <repo> -Task <name> -Authorized 'src/a.py'
 #
 # EXITS
-#   0  = in scope.
+#   0  = in scope (or, for -EncodingScan, no double-encoded text).
 #   1  = out-of-scope writes found. NOTHING was touched. They are still in the tree; deal with them.
 #   66 = the -Authorized list itself looks wrong (nothing the task wrote is on it).
+#   73 = -EncodingScan only: double-encoded text (mojibake) in the scanned files.
+#
+# -EncodingScan needs NO snapshot and is INDEPENDENT of scope: it answers "are the bytes corrupt?",
+# not "did the coder stay in its lane". It exists because this is the one defect class a green test
+# suite GUARANTEES you will not see -- the coder writes the same corrupted bytes into the expected
+# string as into the source, so the assertion compares corrupt to corrupt and passes.
 #
 # ── THREAT MODEL: A CARELESS CODER, NOT A HOSTILE ONE ──────────────────────────────────────────
 # This catches a coder that WANDERED outside its file list. It is not a security boundary against a
@@ -61,6 +68,7 @@
 param(
     [switch]$Snapshot,
     [switch]$Check,
+    [switch]$EncodingScan,
     [Parameter(Mandatory)][string]$Worktree,
     [Parameter(Mandatory)][string]$Task,
     [string[]]$Authorized = @(),
@@ -105,6 +113,15 @@ function Get-DirtySet {
     # pre-existing node_modules/ is byte-identical and ignored as host state; only a NEW or CHANGED
     # ignored path shows up as a violation.
     $out = Invoke-Git status --porcelain --ignored=traditional
+
+    # git's EXIT CODE is the verdict. Without this check a FAILED `git status` (corrupt index, locked
+    # .git, not a repo) returns nothing, every caller reads "no dirty paths", and the scope check and
+    # the encoding gate both report CLEAN on a tree they never actually looked at. A gate that fails
+    # open is worse than no gate, because it reads as a pass.
+    if ($LASTEXITCODE -ne 0) {
+        throw "git status failed in '$repo' (exit $LASTEXITCODE). Refusing to report a clean tree that was never read."
+    }
+
     $set = @{}
     foreach ($line in $out) {
         if (-not $line) { continue }
@@ -226,6 +243,213 @@ if (-not $StateDirectory) {
 }
 if (-not (Test-Path $StateDirectory)) { New-Item -ItemType Directory -Force -Path $StateDirectory | Out-Null }
 $snapPath = Join-Path $StateDirectory "scope-$Task.snapshot.json"
+
+# --------------------------------------------------------------------------- ENCODING SCAN
+# Codex-on-Windows double-encodes non-ASCII it writes into source: an em-dash goes in as U+2014 and
+# comes out as `â€"` (the UTF-8 bytes read back as CP1252, then re-encoded as UTF-8).
+#
+# WHY A MACHINE HAS TO DO THIS: **the test suite cannot catch it, by construction.** The coder writes
+# the SAME corrupted bytes into the expected string as into the source, so the assertion compares
+# corrupt to corrupt and passes. A fully green suite is exactly what this bug looks like. It bit
+# twice on 2026-07-10 alone (ask-presence-alias, then fix-build-stream-transport) and both times the
+# tests were green. Greppable in a second; invisible to every gate we had.
+#
+# NO AUTHORSHIP INFERENCE. This reports "there is double-encoded text in this tree", not "the coder
+# wrote it" -- the same discipline that made the scope check stop reverting. Timing lies; the host
+# reads the paths and decides.
+#
+# NO OVERRIDE SWITCH. Every exemption written into this harness became a hole someone walked through.
+# A hit is a hit; if it is a false positive, that is a file with `â€` in it, which is worth a look.
+if ($EncodingScan) {
+    # --- THE DETECTOR, derived from the encoding rather than from the one example we had ----------
+    # Mojibake = UTF-8 bytes decoded as CP1252/Latin-1, then re-encoded as UTF-8. Read the byte
+    # structure and the signature falls out:
+    #
+    #   * a 2-byte UTF-8 sequence has lead 0xC2-0xDF -> Latin-1 UPPERCASE (U+00C2 A-circumflex ..
+    #     U+00DF sharp-s), followed by EXACTLY ONE continuation byte (0x80-0xBF).
+    #     e-acute (C3 A9) double-encodes to A-tilde + copyright.
+    #   * a 3- or 4-byte sequence has lead 0xE0-0xF4 -> Latin-1 LOWERCASE (U+00E0 .. U+00F4),
+    #     followed by TWO or THREE continuation bytes.
+    #     em-dash (E2 80 94) double-encodes to a-circumflex + euro + right-double-quote.
+    #     CJK, Cyrillic and emoji all live here.
+    #
+    # The first cut listed only U+00C2/C3/E2 as leads -- the 2-byte leads plus the one lead from the
+    # em-dash in the bug report. It therefore MISSED double-encoded Cyrillic, CJK and emoji: a
+    # mojibake detector that misses most mojibake, because it was written from a single example
+    # instead of from the encoding.
+    #
+    # WHY THE CONTINUATION COUNT IS NOT UNIFORM. Widening the leads to the whole range re-introduces
+    # a false positive: a LEGITIMATE lowercase e-acute followed by a non-breaking space (U+00E9 U+00A0)
+    # looks like lead+continuation. But a real 3-byte double-encode ALWAYS emits two continuations.
+    # So: uppercase lead + 1 continuation, lowercase lead + 2. That distinction is not a heuristic --
+    # it is the byte structure of UTF-8, and it makes accented prose safe while catching CJK.
+    #
+    # BUILT FROM CODE POINTS, NOT LITERALS, ON PURPOSE. Windows PowerShell 5.1 decodes a BOM-less
+    # .ps1 as ANSI, so a literal character class here would itself be re-decoded -- a mojibake
+    # detector corrupted by mojibake. ASCII-only source cannot be misread.
+    $lead2 = -join (@(0x00C2..0x00DF) | ForEach-Object { [char]$_ })   # 2-byte leads (uppercase)
+    $lead3 = -join (@(0x00E0..0x00F4) | ForEach-Object { [char]$_ })   # 3/4-byte leads (lowercase)
+
+    # CP1252's mapping of continuation bytes 0x80-0xBF. Bytes 0x80-0x9F map to punctuation (euro,
+    # smart quotes, dashes); 0xA0-0xBF map to themselves in Latin-1. Unmapped CP1252 bytes decode to
+    # the raw C1 controls, which the 0x0080-0x009F range already covers.
+    $tailCodes = @(0x0080..0x00BF) + @(
+        0x20AC, 0x201A, 0x0192, 0x201E, 0x2026, 0x2020, 0x2021, 0x02C6, 0x2030, 0x0160, 0x2039,
+        0x0152, 0x017D, 0x2018, 0x2019, 0x201C, 0x201D, 0x2022, 0x2013, 0x2014, 0x02DC, 0x2122,
+        0x0161, 0x203A, 0x0153, 0x017E, 0x0178
+    )
+    $tail = -join ($tailCodes | ForEach-Object { [char]$_ })
+
+    $T  = '[' + $tail + ']'
+    $L2 = '[' + $lead2 + ']'
+    $L3 = '[' + $lead3 + ']'
+    $mojibake = "(?:$L2$T)|(?:$L3$T$T)"
+
+    # --- WHAT GETS SCANNED ------------------------------------------------------------------------
+    # The first cut scanned every dirty file and produced 180 hits on a real tree, ALL noise:
+    #   * docs/progress/*.log -- the WRAPPER'S OWN Codex transcripts, which contain mojibake because
+    #     they faithfully RECORD it. The harness writing into a tree it then judges, all over again.
+    #   * prose ABOUT this bug -- handoffs, memories, this script's own comments and SKILL.md's exit
+    #     table all quote the corrupt sequence as the EXAMPLE. The gate flagged its own documentation,
+    #     so a dispatch authorized to edit the harness could never come back clean.
+    #
+    # A gate that fires on every run gets switched off, and then it protects nothing. So: PRECISION,
+    # never an override switch -- every exemption in this harness became a hole someone walked through.
+    #
+    # PROSE IS EXCLUDED BY EXTENSION. That is a real, stated limit, not a dodge: the failure this gate
+    # exists for -- a green suite that proves nothing, because the coder wrote the same corrupt bytes
+    # into the EXPECTED string as into the source -- is a CODE failure. Mojibake in a .md is cosmetic
+    # and a human reading the diff will see it. Mojibake in a string literal is invisible and ships.
+    $proseExtensions = '\.(md|markdown|txt|rst|adoc)$'
+
+    # ROOT-ANCHORED. The first cut used (^|/)docs/progress/, which also excluded a legitimate source
+    # path like src/docs/progress/parser.ps1, and excluded every .lock and .map file -- hiding real
+    # corruption in them. Exclude the harness's own artifacts, and nothing else.
+    $artifactPattern = '^(\.git|node_modules)/|^docs/progress/|\.(log|jsonl)$'
+
+    $dirty = Get-DirtySet
+
+    # Authorized entries may be DIRECTORIES (scope authorization supports them), and git collapses a
+    # new untracked directory to "?? dir/". The first cut treated every entry as a leaf and silently
+    # skipped both -- so corruption anywhere under an authorized or newly-created directory sailed
+    # through and exited 0. Expand a directory to the files beneath it.
+    $script:expandFailures = @()
+    function Expand-ScanPath([string]$rel) {
+        $full = Join-Path $repo $rel
+        if (Test-Path -LiteralPath $full -PathType Leaf) { return @($rel) }
+        if (Test-Path -LiteralPath $full -PathType Container) {
+            # -ErrorAction SilentlyContinue would swallow an inaccessible SUBTREE: those files simply
+            # never enter the scan set, nothing reaches the unreadable handler, and the gate exits 0
+            # having never looked at them. That is the fail-open class this gate exists to not be.
+            # Collect the enumeration errors instead and fail on them.
+            $enumErrors = @()
+            $kids = Get-ChildItem -LiteralPath $full -Recurse -File -Force -ErrorAction SilentlyContinue -ErrorVariable enumErrors
+            foreach ($e in $enumErrors) { $script:expandFailures += ("$rel -> " + $e.Exception.Message) }
+            return @($kids | ForEach-Object {
+                Normalize ($_.FullName.Substring($repo.Length).TrimStart([char]92, [char]47))
+            })
+        }
+        # NOT an error, and deliberately so. -Authorized is the spec's '## Files to change' list, and
+        # AGENTS.md tells the coder outright: "file in spec BUT you don't need to touch it -> skip it".
+        # An authorized file that was never created is the NORMAL case on most dispatches. Failing here
+        # would fire the gate on nearly every run -- and a gate that fires every run gets switched off,
+        # which is how we lose it. Absence is silent; unreadability (above) is fatal.
+        return @()
+    }
+
+    $candidates = @()
+    if ($Authorized.Count -gt 0) {
+        foreach ($a in $Authorized) {
+            foreach ($piece in ($a -split ',')) {
+                $q = Normalize ($piece.Trim().Trim([char]39).Trim([char]34))
+                if ($q) { $candidates += $q }
+            }
+        }
+    }
+    else {
+        $candidates = @($dirty.Keys | Where-Object { $dirty[$_] -ne 'R-' -and $dirty[$_] -notmatch 'D' })
+    }
+
+    $scanSet = @()
+    foreach ($c in ($candidates | Select-Object -Unique)) { $scanSet += (Expand-ScanPath $c) }
+    $scanSet = @($scanSet | Select-Object -Unique |
+        Where-Object { $_ -and $_ -notmatch $artifactPattern -and $_ -notmatch $proseExtensions })
+
+    # --- SCAN. Anything it cannot verify is a FAILURE, never a silent skip -------------------------
+    # The first cut swallowed a read error with `continue` and then reported "clean". A gate that
+    # silently skips is worse than no gate: it reads as a pass.
+    $hits = @()
+    $unreadable = @()
+    foreach ($rel in $scanSet) {
+        $full = Join-Path $repo $rel
+        if (-not (Test-Path -LiteralPath $full -PathType Leaf)) { continue }
+
+        try { $bytes = [System.IO.File]::ReadAllBytes($full) }
+        catch { $unreadable += $rel; continue }
+
+        # UTF-16 IS VALID SOURCE, especially on Windows (PowerShell has shipped UTF-16LE .ps1 files for
+        # years). The NUL-byte heuristic below would classify every one of them as binary and skip it
+        # wholesale -- reporting clean on a file it never read. Decode by BOM first, so UTF-16 text is
+        # scanned as text rather than silently dropped.
+        $text = $null
+        if ($bytes.Length -ge 2 -and $bytes[0] -eq 0xFF -and $bytes[1] -eq 0xFE) {
+            $text = [System.Text.Encoding]::Unicode.GetString($bytes, 2, $bytes.Length - 2)
+        }
+        elseif ($bytes.Length -ge 2 -and $bytes[0] -eq 0xFE -and $bytes[1] -eq 0xFF) {
+            $text = [System.Text.Encoding]::BigEndianUnicode.GetString($bytes, 2, $bytes.Length - 2)
+        }
+        else {
+            # A NUL byte in the first 8k is git's own binary heuristic. Genuine binaries are not scanned:
+            # decoded as UTF-8 they yield arbitrary chars that can match by accident.
+            $probe = [Math]::Min($bytes.Length, 8192)
+            $isBinary = $false
+            for ($k = 0; $k -lt $probe; $k++) { if ($bytes[$k] -eq 0) { $isBinary = $true; break } }
+            if ($isBinary) { continue }
+            $text = [System.Text.UTF8Encoding]::new($false).GetString($bytes)
+        }
+        $fileLines = $text -split "`r?`n"
+        for ($i = 0; $i -lt $fileLines.Count; $i++) {
+            # -cmatch, NOT -match. PowerShell's -match is CASE-INSENSITIVE by default, and this whole
+            # rule rests on the uppercase/lowercase lead distinction: 2-byte leads land on Latin-1
+            # UPPERCASE (one continuation), 3-byte leads on LOWERCASE (two). Case-insensitively, a
+            # legitimate lowercase e-acute (U+00E9) folds to U+00C9 -- inside the uppercase lead range --
+            # so `cafe-acute + non-breaking space` matched the 2-byte rule and reported clean prose as
+            # corrupt. The distinction the detector is built on only exists under a case-SENSITIVE match.
+            if ($fileLines[$i] -cmatch $mojibake) {
+                $hits += [pscustomobject]@{ Path = $rel; Line = $i + 1; Text = $fileLines[$i].Trim() }
+            }
+        }
+    }
+
+    # Everything the gate could not READ -- an unreadable file, or a directory subtree it could not
+    # enumerate -- is a hard failure, never a silent skip. A gate that quietly does not look at
+    # something and then says "clean" is worse than no gate: it reads as a pass.
+    $cannotVerify = @($unreadable) + @($script:expandFailures)
+    if ($cannotVerify.Count -gt 0) {
+        Write-Host ""
+        Write-Host "[encoding] CANNOT VERIFY $($cannotVerify.Count) path(s):" -ForegroundColor Red
+        foreach ($u in $cannotVerify) { Write-Host "      $u" -ForegroundColor Red }
+        Write-Host "[encoding] A gate that cannot read a path must not report it clean." -ForegroundColor Red
+        exit 73
+    }
+
+    if ($hits.Count -eq 0) {
+        Write-Host "[encoding] clean: no double-encoded text in $($scanSet.Count) scanned path(s)."
+        exit 0
+    }
+
+    Write-Host ""
+    Write-Host "[encoding] MOJIBAKE - $($hits.Count) line(s) carry double-encoded text:" -ForegroundColor Red
+    foreach ($h in ($hits | Select-Object -First 40)) {
+        Write-Host ("      {0}:{1}  {2}" -f $h.Path, $h.Line, $h.Text) -ForegroundColor Red
+    }
+    if ($hits.Count -gt 40) { Write-Host "      ... and $($hits.Count - 40) more" -ForegroundColor Red }
+    Write-Host ""
+    Write-Host "[encoding] The tests do NOT catch this: the same corrupted bytes go into the expected" -ForegroundColor Yellow
+    Write-Host "[encoding] string, so a green suite proves nothing. Fix the bytes, then re-verify." -ForegroundColor Yellow
+    Write-Host ""
+    exit 73
+}
 
 # ---------------------------------------------------------------------------------- SNAPSHOT
 if ($Snapshot) {
