@@ -916,7 +916,18 @@ try {
     $stderrTask = $process.StandardError.ReadAsync($stderrBuffer, 0, $bufferSize)
     # ADR-033's load-bearing behavior is preserved -- the WHOLE dispatch pack is written and stdin is
     # closed so Codex never waits on more input -- but asynchronously, so it cannot block the reads.
-    $stdinTask = $process.StandardInput.WriteAsync($Prompt)
+    #
+    # Write EXPLICIT UTF-8 BYTES to the raw pipe. StandardInput is a StreamWriter whose encoding is the
+    # ambient code page (CP1252 on a typical Windows console), so a prompt carrying any non-ASCII --
+    # and an em-dash is in nearly every spec -- reached codex mis-encoded, and codex, which reads stdin
+    # as UTF-8, rejected the ENTIRE prompt: "input is not valid UTF-8 (invalid byte at offset N)".
+    # Writing bytes to BaseStream bypasses the writer's encoding. We then close the BaseStream directly
+    # (below), NOT the StreamWriter: closing the writer flushes ITS preamble, and a BOM-bearing ambient
+    # encoding appends EF BB BF after the prompt, so stdin would no longer be byte-exact (caught in
+    # cross-family review). The final $process.Dispose() is guarded, since it re-disposes that writer
+    # over the now-closed stream.
+    $promptBytes = [System.Text.Encoding]::UTF8.GetBytes($Prompt)
+    $stdinTask = $process.StandardInput.BaseStream.WriteAsync($promptBytes, 0, $promptBytes.Length)
     $stdinClosed = $false
     $stdoutClosed = $false
     $stderrClosed = $false
@@ -928,7 +939,7 @@ try {
         # child that exited early.
         if (-not $stdinClosed -and $stdinTask.IsCompleted) {
             try { $null = $stdinTask.GetAwaiter().GetResult() } catch {}
-            try { $process.StandardInput.Close() } catch {}
+            try { $process.StandardInput.BaseStream.Close() } catch {}
             $stdinClosed = $true
         }
         if ($stdoutTask.IsCompleted) {
@@ -972,7 +983,7 @@ try {
 
     # The child has exited. Close stdin if the write never drained (child died before consuming it),
     # so the pipe handle is released before we wait. The process is already gone, so this cannot block.
-    if (-not $stdinClosed) { try { $process.StandardInput.Close() } catch {}; $stdinClosed = $true }
+    if (-not $stdinClosed) { try { $process.StandardInput.BaseStream.Close() } catch {}; $stdinClosed = $true }
 
     $process.WaitForExit()
     while (-not ($stdoutClosed -and $stderrClosed)) {
@@ -1156,18 +1167,28 @@ try {
     # the assertion compares corrupt to corrupt and passes. It bit twice on 2026-07-10, green both
     # times. This is its own axis, like scope -- it says nothing about whether the coder finished.
     #
-    # Runs on EVERY dispatch, not just scope-armed ones: corruption does not care what was authorized,
-    # and a failed task can still have written mojibake before it died.
+    # Runs on every WRITE dispatch, not just scope-armed ones: corruption does not care what was
+    # authorized, and a failed task can still have written mojibake before it died.
+    #
+    # But NOT on a read-only dispatch (a review or end-gate). The reviewer's sandbox forbids writes, so
+    # there is no coder output to scan -- and a review passes no -Authorized, so the scan falls back to
+    # the WHOLE dirty tree and flags the owner's pre-existing mojibake (e.g. transcript `.err` files the
+    # harness itself wrote), failing a valid review on bytes the reviewer never touched. Skipping here
+    # is not an exemption: read-only means there is nothing of the coder's to check.
     # FAIL CLOSED if the helper is gone. The first cut wrapped this in `if (Test-Path ...)`, so a
-    # missing script meant the gate silently did not run and the dispatch exited 0 -- the "every
-    # dispatch is scanned" guarantee quietly downgraded to "scanned when convenient". The scope check
-    # already throws in exactly this situation; this now matches it.
+    # missing script meant the gate silently did not run and the dispatch exited 0 -- the guarantee
+    # quietly downgraded to "scanned when convenient". The scope check already throws here; this matches.
     if (-not (Test-Path $scopeCheckScript)) {
         throw "codex-scope-check.ps1 is missing ($scopeCheckScript). Refusing to finish a dispatch without the encoding gate: a gate that silently does not run reads as a pass."
     }
     $encodingViolation = $false
-    & $scopeCheckScript -EncodingScan -Worktree $Worktree -Task $gateKey -Authorized $Authorized | Write-Host
-    if ($LASTEXITCODE -eq 73) { $encodingViolation = $true }
+    if ($Sandbox -eq 'read-only') {
+        Write-Host "[encoding] read-only dispatch (review/end-gate): no coder writes to scan -- skipping." -ForegroundColor DarkGray
+    }
+    else {
+        & $scopeCheckScript -EncodingScan -Worktree $Worktree -Task $gateKey -Authorized $Authorized | Write-Host
+        if ($LASTEXITCODE -eq 73) { $encodingViolation = $true }
+    }
 
     # Did the tree move while this read-only gate was open? If so the verdict is about a tree that no
     # longer exists, and a CLEAN verdict would be a rubber stamp on unreviewed code.
@@ -1268,6 +1289,9 @@ try {
     Update-LedgerRow -RunId $runId -Changes @{ status = 'failed'; ended = (Get-UtcTimestamp); error = $_.Exception.Message }
     throw
 } finally {
-    $process.Dispose()
+    # Guarded: we close the child's stdin via BaseStream (see the prompt-write note), so Dispose here
+    # re-disposes the StandardInput StreamWriter over an already-closed stream, which would otherwise
+    # throw out of this finally and mask the exit code.
+    try { $process.Dispose() } catch {}
     $ledgerMutex.Dispose()
 }
