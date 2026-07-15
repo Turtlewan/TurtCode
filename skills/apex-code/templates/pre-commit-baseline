@@ -1,0 +1,79 @@
+#!/bin/sh
+# APEX baseline-green pre-commit hook (M2a).
+#
+# Blocks a commit when the repo's full verify quad (AGENTS.md -> ## Verify
+# commands) is red AGAINST THE STAGED SNAPSHOT -- what will actually be committed,
+# not the working tree. Checking the working tree is unsound in BOTH directions:
+#   * fail-OPEN: a file edited green after `git add` of a red version would let a
+#     red index commit while the green working copy passes;
+#   * fail-RED: unrelated unstaged/untracked breakage elsewhere would block a
+#     clean staged commit.
+#
+# Mechanism: if any file is BOTH staged and further edited (index != working),
+# refuse up front -- verifying that safely needs a stash whose `pop` can conflict
+# and strand the edit. Otherwise stash unstaged + untracked with --keep-index (no
+# same-file overlap => the pop cannot conflict), run the quad on the staged tree,
+# and restore on exit/interrupt.
+#
+# Restore is best-effort and NEVER loses work: if the verify recipe writes an untracked file that
+# collides with a stashed one, or the hook is hard-killed (SIGKILL, uncatchable), `git stash pop` may
+# not run -- the stash is PRESERVED, and the warning below (or `git stash list`) points the way back.
+#
+# Bypass (deliberate, e.g. a docs-only commit on a known-red baseline):
+#   git commit --no-verify
+
+set -u
+
+ROOT=$(git rev-parse --show-toplevel) || exit 1
+
+CHECKER_POSIX="$HOME/.claude/skills/apex-code/scripts/apex-baseline-check.ps1"
+if command -v cygpath >/dev/null 2>&1; then
+    CHECKER=$(cygpath -w "$CHECKER_POSIX")
+    ROOT_WIN=$(cygpath -w "$ROOT")
+fi
+# Guard an empty conversion the same way rev-parse above is guarded.
+[ -n "${CHECKER:-}" ] || CHECKER="$CHECKER_POSIX"
+[ -n "${ROOT_WIN:-}" ] || ROOT_WIN="$ROOT"
+
+# Files that are BOTH staged and further edited in the working tree. Concatenate the two name lists;
+# a path present in both appears twice, so `uniq -d` reports exactly the overlap.
+overlap=$(printf '%s\n%s\n' "$(git diff --cached --name-only)" "$(git diff --name-only)" \
+    | grep -v '^$' | sort | uniq -d)
+if [ -n "$overlap" ]; then
+    echo "" >&2
+    echo "apex baseline hook: BLOCKED - these files are staged AND further edited (index != working):" >&2
+    echo "$overlap" | sed 's/^/    /' >&2
+    echo "  The staged content cannot be verified without risking your unstaged edit." >&2
+    echo "  Stage them fully (git add), or bypass with: git commit --no-verify" >&2
+    exit 1
+fi
+
+# Stash unstaged + untracked so the quad runs on exactly the staged tree. No overlap (checked above),
+# so the pop cannot conflict. Record whether we actually stashed, to only ever pop our own.
+stashed=0
+if [ -n "$(git diff --name-only)" ] || [ -n "$(git ls-files --others --exclude-standard)" ]; then
+    if git stash push --keep-index --include-untracked --quiet -m "apex-precommit-$$"; then
+        stashed=1
+    fi
+fi
+restore() {
+    if [ "$stashed" = "1" ]; then
+        git stash pop --quiet || \
+            echo "apex baseline hook: WARNING - could not restore stashed changes; see 'git stash list'" >&2
+    fi
+}
+trap restore EXIT INT TERM
+
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$CHECKER" -Full -Worktree "$ROOT_WIN"
+rc=$?
+
+if [ "$rc" -ne 0 ]; then
+    echo "" >&2
+    if [ "$rc" -eq 3 ]; then
+        echo "apex baseline hook: BLOCKED - the AGENTS.md verify recipe is present but unparseable (no command block)." >&2
+    else
+        echo "apex baseline hook: BLOCKED (exit $rc) - the staged tree fails the verify quad." >&2
+    fi
+    echo "  Fix it, or bypass deliberately with: git commit --no-verify" >&2
+fi
+exit $rc

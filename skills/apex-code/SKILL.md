@@ -211,6 +211,25 @@ judging its own output** (evaluator independence).
 `ultra` → **Opus** (fresh worker). `ultra` is the only place it fires automatically, and it is
 un-evaled — first rung to cut if the eval disappoints (see status.md).
 
+### Baseline-green commit hook (M2a)
+
+A repo can carry a **pre-commit hook** that runs its full verify quad and **blocks the commit on red**
+— so a file-scoped "green" over a whole-project-red baseline can't be committed and then wedge the
+*next* dispatch (the recurring `host-verify-full-mypy` failure, now mechanised). The hook is the
+higher-value half of the baseline-green gate; the pre-dispatch pre-flight (exit 72) is M2b, not built.
+
+- `scripts/apex-baseline-check.ps1 -Full -Worktree <repo>` runs the recipe (`AGENTS.md → ## Verify
+  commands`) in the repo; exit **0** green · **1** red · **3** recipe heading present but unparseable ·
+  **0** + notice when there is no recipe. This is the single shared parser — M2b's pre-flight will call
+  it, never re-match the heading.
+- Install per consumer repo: `scripts/install-baseline-hook.ps1 -Repo <repo>` (linked-worktree- and
+  `core.hooksPath`-safe; backs a differing hook up to `pre-commit.bak`, overwrite only with `-Force`).
+- It verifies the **staged snapshot** (stashes unstaged/untracked, checks, restores). If a file is
+  both staged and further edited it **refuses up front** (fail closed — a restoring `stash pop` could
+  conflict there); stage fully or bypass with **`git commit --no-verify`**.
+- It runs the AGENTS.md-declared commands **on the host, unsandboxed** — the same trust the host
+  already places in the verify recipe.
+
 ## Forks — when the spec is wrong
 
 - **Assumption wrong / file not where the spec says** → build in the real place and **flag loudly**:
