@@ -890,25 +890,47 @@ $appendLogText = {
 try {
     if (-not $process.Start()) { throw 'Failed to start codex exec.' }
 
-    # ADR-033's load-bearing behavior: write the whole dispatch pack and close
-    # the redirected stdin immediately, so Codex never inherits a wedged stdin.
-    $process.StandardInput.Write($Prompt)
-    $process.StandardInput.Close()
+    # Record the pid the INSTANT the child exists -- before writing stdin. The prompt write below is
+    # asynchronous precisely because it can block, and a blocked write must never hide that the child
+    # was launched: a null pid in the ledger reads as "reserved but never launched" and wedges the
+    # shared-worktree guard for every future dispatch into this tree.
     Update-LedgerRow -RunId $runId -Changes @{ pid = $process.Id; pid_start = (Get-ProcessStamp $process.Id) }
 
-    # Read both redirected streams asynchronously without PowerShell event
-    # handlers.  Windows PowerShell invokes those handlers on threads without a
-    # runspace, while these .NET tasks keep the JSON log live for the watchdog.
-    $bufferSize = 4096
+    # Service ALL THREE pipes concurrently. A synchronous StandardInput.Write($Prompt) here deadlocks
+    # the wrapper: `codex exec --json` streams events to stdout from launch, so for a prompt larger
+    # than the OS stdin pipe buffer (~64 KB on Windows) codex fills its stdout pipe -- which nobody is
+    # draining yet -- and stops reading stdin, so the write never returns and the drain loop below is
+    # never reached. The live signature was exact: a reserved ledger row with the pid recorded but a
+    # 0-byte log, and a caller that died at its own timeout. So: start the stdout/stderr reads FIRST,
+    # write the prompt ASYNCHRONOUSLY, and close stdin once the write drains. (The original fake codex
+    # hid this for months because it drained stdin to EOF before emitting any stdout -- the one
+    # ordering under which the deadlock cannot happen. dispatch-deadlock-test.ps1 reproduces it.)
+    #
+    # The buffer is large and the poll is short (below) so real-size output -- megabytes of JSON over
+    # a build -- actually ferries: at the old 4096 chars per 1-second tick it drained at ~4 KB/s, slow
+    # enough to keep codex's stdout pipe full and re-open the very window this fix closes.
+    $bufferSize = 65536
     $stdoutBuffer = New-Object char[] $bufferSize
     $stderrBuffer = New-Object char[] $bufferSize
     $stdoutTask = $process.StandardOutput.ReadAsync($stdoutBuffer, 0, $bufferSize)
     $stderrTask = $process.StandardError.ReadAsync($stderrBuffer, 0, $bufferSize)
+    # ADR-033's load-bearing behavior is preserved -- the WHOLE dispatch pack is written and stdin is
+    # closed so Codex never waits on more input -- but asynchronously, so it cannot block the reads.
+    $stdinTask = $process.StandardInput.WriteAsync($Prompt)
+    $stdinClosed = $false
     $stdoutClosed = $false
     $stderrClosed = $false
     $stalled = $false
     $nextWatchCheck = (Get-Date).AddSeconds(15)
     while (-not $process.HasExited) {
+        # Close stdin as soon as the async write drains, so Codex sees EOF and proceeds. Observe the
+        # task first (only once completed, so this never blocks) to swallow a broken-pipe fault from a
+        # child that exited early.
+        if (-not $stdinClosed -and $stdinTask.IsCompleted) {
+            try { $null = $stdinTask.GetAwaiter().GetResult() } catch {}
+            try { $process.StandardInput.Close() } catch {}
+            $stdinClosed = $true
+        }
         if ($stdoutTask.IsCompleted) {
             $stdoutCount = $stdoutTask.Result
             if ($stdoutCount -gt 0) {
@@ -928,7 +950,7 @@ try {
             }
         }
 
-        Start-Sleep -Seconds 1
+        Start-Sleep -Milliseconds 50
         $process.Refresh()
         if ($process.HasExited) { break }
 
@@ -947,6 +969,10 @@ try {
         # Do not kill the child: the caller owns that decision.
         exit 124
     }
+
+    # The child has exited. Close stdin if the write never drained (child died before consuming it),
+    # so the pipe handle is released before we wait. The process is already gone, so this cannot block.
+    if (-not $stdinClosed) { try { $process.StandardInput.Close() } catch {}; $stdinClosed = $true }
 
     $process.WaitForExit()
     while (-not ($stdoutClosed -and $stderrClosed)) {
