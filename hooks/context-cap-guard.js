@@ -1,23 +1,21 @@
 #!/usr/bin/env node
 /**
- * context-cap-guard — PostToolUse (Write|Edit).  ADR-037.
+ * context-cap-guard - blocking PreToolUse gate for Write|Edit. ADR-037, refined by ADR-041.
  *
- * The three context files have hard caps. Prose rules did not hold them: status.md's own hygiene
- * rule said "current state only, no rolling session log" and it still reached 641 lines / 108 KB.
- * Anthropic's guidance is explicit — a rule that must hold with zero exceptions belongs in a hook,
- * because CLAUDE.md is advisory and hooks are deterministic.
+ * Deterministically projects the size of a capped context file before the tool runs and denies
+ * growth past its inclusive cap. An edit whose projected size does not exceed the on-disk size is
+ * always allowed, even when the file is already over cap, so cleanup fixes cannot be blocked.
+ *
+ * Line caps use wc -l semantics: size is the number of newline (\n) characters, not the number of
+ * strings produced by splitting on a newline.
  *
  * Caps and why they are what they are:
- *   status.md  <= 100 lines   — live state; past this it is a changelog, and an unbounded state
+ *   status.md  <= 100 lines   - live state; past this it is a changelog, and an unbounded state
  *                               file degrades attention (worse than no state file at all).
- *   CLAUDE.md  <= 200 lines   — Anthropic: "Longer files consume more context and reduce
- *                               adherence." Bloat makes the model ignore the real instructions.
- *   AGENTS.md  <  32 KiB      — Codex's project_doc_max_bytes. Past it, content is SILENTLY
- *                               truncated with no warning (openai/codex#7138) — the file just
- *                               quietly stops being followed.
- *
- * Advisory, not blocking: it reports on the file that was just written, so the breach is caught at
- * the moment it is created rather than months later. Exit 0 always — never wedge a session.
+ *   CLAUDE.md  <= 200 lines   - longer files consume more context and reduce adherence; bloat
+ *                               makes the model ignore the real instructions.
+ *   AGENTS.md  <= 32768 bytes - Codex's project_doc_max_bytes (32768 allowed; 32769+ denied).
+ *                               Past it, content is silently truncated without warning.
  */
 
 'use strict';
@@ -34,6 +32,27 @@ const CAPS = [
     fix: 'Codex silently truncates past 32 KiB — the overflow is not read and you get no warning. Cut to the commands and gotchas the model cannot derive; move the rest to nested per-directory AGENTS.md files.' },
 ];
 
+function newlineCount(content) {
+  let count = 0;
+  for (let i = 0; i < content.length; i += 1) {
+    if (content.charCodeAt(i) === 10) count += 1;
+  }
+  return count;
+}
+
+function countOccurrences(content, needle) {
+  if (needle.length === 0) return 0;
+
+  let count = 0;
+  let start = 0;
+  while (true) {
+    const index = content.indexOf(needle, start);
+    if (index === -1) return count;
+    count += 1;
+    start = index + needle.length;
+  }
+}
+
 function main() {
   let raw = '';
   try {
@@ -42,45 +61,58 @@ function main() {
     process.exit(0);
   }
 
-  let file;
+  let ev;
   try {
-    const ev = JSON.parse(raw);
-    file = ev?.tool_input?.file_path;
+    ev = JSON.parse(raw);
   } catch {
     process.exit(0);
   }
+
+  const input = ev?.tool_input;
+  const file = input?.file_path;
   if (!file) process.exit(0);
 
   const base = path.basename(file);
-  const cap = CAPS.find((c) => c.match.test(base));
+  const cap = CAPS.find((candidate) => candidate.match.test(base));
   if (!cap) process.exit(0);
 
-  let stat;
+  let currentContent = '';
   try {
-    stat = fs.readFileSync(file, 'utf8');
-  } catch {
+    currentContent = fs.readFileSync(file, 'utf8');
+  } catch {}
+
+  const sizeOf = (content) => cap.unit === 'lines'
+    ? newlineCount(content)
+    : Buffer.byteLength(content, 'utf8');
+  const current = sizeOf(currentContent);
+
+  let projected;
+  if (Object.prototype.hasOwnProperty.call(input, 'content') &&
+      typeof input.content === 'string') {
+    projected = sizeOf(input.content);
+  } else if (typeof input.old_string === 'string' &&
+             typeof input.new_string === 'string') {
+    const occurrences = input.replace_all
+      ? countOccurrences(currentContent, input.old_string)
+      : 1;
+    projected = current + occurrences * (sizeOf(input.new_string) - sizeOf(input.old_string));
+  } else {
     process.exit(0);
   }
 
-  const size = cap.unit === 'lines'
-    ? stat.split('\n').length
-    : Buffer.byteLength(stat, 'utf8');
+  if (projected <= cap.limit || projected <= current) process.exit(0);
 
-  if (size <= cap.limit) process.exit(0);
-
-  const over = size - cap.limit;
+  const over = projected - cap.limit;
   const label = cap.unit === 'bytes'
-    ? `${size} bytes (cap ${cap.limit}, over by ${over})`
-    : `${size} lines (cap ${cap.limit}, over by ${over})`;
+    ? `${projected} bytes (cap ${cap.limit}, over by ${over})`
+    : `${projected} lines (cap ${cap.limit}, over by ${over})`;
 
   console.log(JSON.stringify({
     hookSpecificOutput: {
-      hookEventName: 'PostToolUse',
-      additionalContext:
-        `⚠️  CONTEXT CAP BREACHED — ${base} is ${label}.\n\n${cap.fix}\n\n` +
-        `Fix it now, in this turn, before moving on. The cap is not a style preference: ` +
-        `past it the file measurably stops working — the model ignores it, or (AGENTS.md) never ` +
-        `sees the overflow at all.`,
+      hookEventName: 'PreToolUse',
+      permissionDecision: 'deny',
+      permissionDecisionReason:
+        `CONTEXT CAP BLOCKED - ${base} projects to ${label}.\n\n${cap.fix}`,
     },
   }));
   process.exit(0);

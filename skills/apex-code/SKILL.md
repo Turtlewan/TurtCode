@@ -1,8 +1,8 @@
 ---
 skill: apex-code
 backend: claude
-version: 2.6.0
-last_updated: 2026-07-16
+version: 2.7.0
+last_updated: 2026-07-17
 sources:
   - docs/technical/adr/ADR-027-codex-primary-opus-fallback-deepseek-archived.md
   - docs/technical/adr/ADR-028-parallel-codex-dispatch.md
@@ -132,6 +132,7 @@ Four things are load-bearing, and each has already broken a real build when done
 | 71 | shared worktree refused | A coder is already live here. `git worktree add` one per concurrent task, or go serial. |
 | 72 | refused: red baseline | The pre-dispatch pre-flight found a red/unparseable/recipe-less baseline (or a failing in-tree spec validation). NOTHING was launched and NO ledger row exists. Fix the baseline (or the spec), or `-SkipBaselineCheck` for a bootstrap. |
 | 73 | **double-encoded text (mojibake)** | Codex-on-Windows corrupted non-ASCII it wrote (em-dash → `â€"`). **Do not commit — the suite is green and wrong.** The coder writes the same bad bytes into the *expected* string, so the assertion compares corrupt to corrupt and passes. Fix the bytes, re-verify. |
+| 74 | refused: scope lock | A workspace-write build dispatch had an empty -Authorized scope list and no -ScopeUnlocked escape, OR a contradictory/incomplete flag combination. Refused BEFORE reservation, so NO ledger row and NO dispatch log exist for the refused run. Pass the spec's Files-to-change list as -Authorized, or -ScopeUnlocked -ScopeUnlockedReason to bypass (recorded in the row). |
 | 75 | still running | Your *call* died; the coder did **not**. Wait for `.final`. |
 | 124 | stalled (no output) | The watchdog fired. The child is deliberately **not** killed — you decide. |
 

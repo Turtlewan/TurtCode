@@ -22,6 +22,10 @@ param(
     # already failed: Codex has written outside a scope lock it was explicitly given.
     [string[]]$Authorized = @(),
     [switch]$SkipScopeCheck,
+    # Deliberate escape: disables the scope lock; the reason is recorded in the ledger row.
+    [switch]$ScopeUnlocked,
+    # Records why the deliberate escape disabled the scope lock in the ledger row.
+    [string]$ScopeUnlockedReason,
     # Two Codex workers in one working tree is a data race with a delete in it (see the guard below).
     # Wave-parallel dispatch requires ONE WORKTREE PER CONCURRENT TASK. This overrides the refusal.
     [switch]$AllowSharedWorktree,
@@ -49,6 +53,16 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
+
+# Exit 74 = caller-contract error, refused before any I/O; no state dir touched.
+if ($ScopeUnlocked -and $Authorized.Count -gt 0) {
+    Write-Host '[dispatch] REFUSED (exit 74): -ScopeUnlocked and -Authorized are mutually exclusive — pass one, not both' -ForegroundColor Red
+    exit 74
+}
+if ($ScopeUnlocked -and [string]::IsNullOrWhiteSpace($ScopeUnlockedReason)) {
+    Write-Host '[dispatch] REFUSED (exit 74): -ScopeUnlocked requires -ScopeUnlockedReason' -ForegroundColor Red
+    exit 74
+}
 
 function Get-UtcTimestamp {
     return (Get-Date).ToUniversalTime().ToString('o')
@@ -627,6 +641,12 @@ if (($Phase -eq 'review' -or $Schema -eq 'review' -or $Schema -eq 'endgate') -an
     $Sandbox = 'read-only'
 }
 
+# Exit 74 = refused before reservation; NO ledger row/log for this run (shared state dirs already exist, as with exit 72).
+if ($Phase -eq 'build' -and $Sandbox -eq 'workspace-write' -and $Authorized.Count -eq 0 -and -not $ScopeUnlocked) {
+    Write-Host '[dispatch] REFUSED (exit 74): workspace-write build has no -Authorized scope list — pass the spec''s ''## Files to change'' list, or -ScopeUnlocked -ScopeUnlockedReason "<why>" to bypass' -ForegroundColor Red
+    exit 74
+}
+
 $baselineSkipped = $false
 $preflightPinLabel = $null
 $preflightPinArmed = $false
@@ -789,6 +809,8 @@ $ledgerRow = [ordered]@{
     scope_armed = ($Authorized.Count -gt 0 -and -not $SkipScopeCheck)
     scope_task = $gateKey
     authorized = @($Authorized)
+    scope_unlocked = [bool]$ScopeUnlocked
+    scope_unlocked_reason = $(if ($ScopeUnlocked) { $ScopeUnlockedReason } else { '' })
     tree_pin_label = $null
     status = 'running'
 }
@@ -858,6 +880,9 @@ if ($Authorized.Count -gt 0) {
         & $scopeCheckScript -Snapshot -Worktree $Worktree -Task $gateKey -StateDirectory $harnessStateDir -Authorized $Authorized | Write-Host
         $scopeCheckArmed = $true
     }
+}
+elseif ($ScopeUnlocked) {
+    Write-Host "[dispatch] -ScopeUnlocked: scope lock DELIBERATELY DISABLED for this dispatch -- reason: $ScopeUnlockedReason" -ForegroundColor Yellow
 }
 elseif (-not $SkipScopeCheck) {
     Write-Host "[dispatch] NOTE: no -Authorized file list given, so the scope lock is prose only and unenforced." -ForegroundColor Yellow

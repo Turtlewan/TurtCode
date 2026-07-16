@@ -83,9 +83,7 @@
             "timeout": 5
           }
         ]
-      }
-    ],
-    "PostToolUse": [
+      },
       {
         "matcher": "Write|Edit",
         "hooks": [
@@ -95,7 +93,9 @@
             "timeout": 5
           }
         ]
-      },
+      }
+    ],
+    "PostToolUse": [
       {
         "matcher": "Bash|Edit|Write|MultiEdit|Agent|Task",
         "hooks": [
