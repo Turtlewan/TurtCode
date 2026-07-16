@@ -1,8 +1,8 @@
 ---
 skill: apex-stack
 backend: claude
-version: 1.2.0
-last_updated: 2026-06-10
+version: 1.2.1
+last_updated: 2026-07-16
 sources:
   - State of JS 2024 — stateofjs.com
   - Next.js Docs — nextjs.org/docs
@@ -109,7 +109,7 @@ option only if it wins on the criteria above; it sits alongside the others, neve
 
 **Default to PostgreSQL** for relational data in every ecosystem. Per-component lock-in below.
 
-**Note on Auth.js v5:** As of May 2026, Auth.js v5 has not shipped a stable GA release — it remains in perpetual beta. The original maintainer departed in Jan 2025 and the project is now maintained by the Better Auth team. Auth.js v5 is still functional with a large provider ecosystem, but for new projects requiring stability, evaluate Better Auth as an alternative (see apex-auth for detailed comparison). When a JS/TS stack reaches for Auth.js v5 for its provider breadth, flag this beta caveat to the user.
+**Note on Auth.js v5:** As of May 2026, Auth.js v5 has not shipped a stable GA release — it remains in perpetual beta. The original maintainer departed in Jan 2025 and the project is now maintained by the Better Auth team. Auth.js v5 is still functional with a large provider ecosystem, but for new projects requiring stability, evaluate Better Auth as an alternative. When a JS/TS stack reaches for Auth.js v5 for its provider breadth, flag this beta caveat to the user.
 
 ## Lock-in table (required alongside every recommendation)
 

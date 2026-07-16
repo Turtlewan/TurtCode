@@ -775,7 +775,7 @@ if ($Authorized.Count -gt 0) {
         throw "-Authorized was given but codex-scope-check.ps1 is missing ($scopeCheckScript). Refusing to dispatch without the enforcement that was asked for."
     }
     else {
-        & $scopeCheckScript -Snapshot -Worktree $Worktree -Task $gateKey -StateDirectory $harnessStateDir | Write-Host
+        & $scopeCheckScript -Snapshot -Worktree $Worktree -Task $gateKey -StateDirectory $harnessStateDir -Authorized $Authorized | Write-Host
         $scopeCheckArmed = $true
     }
 }

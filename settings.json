@@ -43,7 +43,7 @@
       "C:/Users/User"
     ]
   },
-  "model": "opus",
+  "model": "fable",
   "hooks": {
     "SessionStart": [
       {
@@ -65,7 +65,7 @@
     ],
     "PreToolUse": [
       {
-        "matcher": "Bash",
+        "matcher": "Bash|PowerShell",
         "hooks": [
           {
             "type": "command",
@@ -112,17 +112,6 @@
           {
             "type": "command",
             "command": "\"C:/Program Files/nodejs/node.exe\" \"C:/Users/User/.claude/hooks/apex-read-injection-scanner.js\"",
-            "timeout": 5
-          }
-        ]
-      }
-    ],
-    "UserPromptSubmit": [
-      {
-        "hooks": [
-          {
-            "type": "command",
-            "command": "powershell.exe -NoProfile -ExecutionPolicy Bypass -File 'C:/Users/User/.claude/hooks/coding-git-status.ps1'",
             "timeout": 5
           }
         ]

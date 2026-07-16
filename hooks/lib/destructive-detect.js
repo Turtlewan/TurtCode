@@ -111,6 +111,195 @@ function isDestructiveRm(tokens) {
   return hasR && hasF;
 }
 
+function isPowerShellSwitch(token, fullName, minimumPrefixLength) {
+  var value = String(token || '').toLowerCase();
+  if (value[0] !== '-') return false;
+  var name = value.slice(1);
+  return name.length >= minimumPrefixLength && fullName.indexOf(name) === 0;
+}
+
+function isDestructivePowerShellRemove(tokens) {
+  if (tokens.length === 0) return false;
+  var head = commandBasename(tokens[0]);
+  if (['remove-item', 'ri', 'rm', 'rmdir', 'rd', 'del', 'erase'].indexOf(head) < 0) {
+    return false;
+  }
+
+  var hasRecurse = tokens.some(function(token) {
+    return isPowerShellSwitch(token, 'recurse', 1);
+  });
+  var hasForce = tokens.some(function(token) {
+    return isPowerShellSwitch(token, 'force', 2);
+  });
+  return hasRecurse && hasForce;
+}
+
+function isDestructiveCmdDelete(tokens) {
+  if (tokens.length === 0) return false;
+  var head = commandBasename(tokens[0]);
+  if (['rmdir', 'rd', 'del', 'erase'].indexOf(head) < 0) return false;
+
+  var options = tokens.slice(1).map(function(token) { return String(token).toLowerCase(); });
+  return options.indexOf('/s') >= 0 && options.indexOf('/q') >= 0;
+}
+
+function isClearContent(tokens) {
+  return tokens.length > 1 && commandBasename(tokens[0]) === 'clear-content';
+}
+
+function unwrapOuterQuotes(input) {
+  var value = String(input || '').trim();
+  if (value.length >= 2) {
+    var first = value[0];
+    var last = value[value.length - 1];
+    if ((first === "'" && last === "'") || (first === '"' && last === '"')) {
+      return value.slice(1, -1).trim();
+    }
+  }
+  return value;
+}
+
+function extractQuotedStrings(input) {
+  var strings = [];
+  var quote = null;
+  var current = '';
+  var escaped = false;
+  var raw = String(input || '');
+
+  for (var ci = 0; ci < raw.length; ci++) {
+    var char = raw[ci];
+    if (!quote) {
+      if (char === "'" || char === '"') {
+        quote = char;
+        current = '';
+      }
+      continue;
+    }
+
+    if (escaped) {
+      current += char;
+      escaped = false;
+      continue;
+    }
+    if (char === '`' || (char === '\\' && quote === '"')) {
+      escaped = true;
+      continue;
+    }
+    if (char === quote) {
+      strings.push(current);
+      quote = null;
+      current = '';
+      continue;
+    }
+    current += char;
+  }
+
+  return strings;
+}
+
+function extractBraceBlocks(input) {
+  var blocks = [];
+  var raw = String(input || '');
+  var depth = 0;
+  var start = -1;
+  var quote = null;
+  var escaped = false;
+
+  for (var ci = 0; ci < raw.length; ci++) {
+    var char = raw[ci];
+    if (escaped) {
+      escaped = false;
+      continue;
+    }
+    if (quote) {
+      if (char === '`' || (char === '\\' && quote === '"')) {
+        escaped = true;
+      } else if (char === quote) {
+        quote = null;
+      }
+      continue;
+    }
+    if (char === "'" || char === '"') {
+      quote = char;
+      continue;
+    }
+    if (char === '{') {
+      if (depth === 0) start = ci + 1;
+      depth += 1;
+    } else if (char === '}' && depth > 0) {
+      depth -= 1;
+      if (depth === 0 && start >= 0) {
+        blocks.push(raw.slice(start, ci));
+        start = -1;
+      }
+    }
+  }
+  return blocks;
+}
+
+function retestCarrierPayload(payload, depth) {
+  var inner = unwrapOuterQuotes(payload);
+  inner = inner.replace(/^\s*(?:-c(?:ommand)?|\/c)\s+/i, '');
+  inner = unwrapOuterQuotes(inner);
+  return inner.length > 0 && isDestructiveBash(inner, depth + 1);
+}
+
+function isDestructiveCarrier(command, segments, depth) {
+  if (depth >= 6) return false;
+  var raw = String(command || '');
+  var carrierHeads = new Set([
+    'invoke-expression', 'iex', 'invoke-command', 'start-process', 'start-job',
+    'powershell', 'pwsh', 'cmd'
+  ]);
+  var hasCarrier = false;
+
+  for (var si = 0; si < segments.length; si++) {
+    var tokens = tokenize(segments[si]);
+    if (tokens.length === 0) continue;
+    var head = commandBasename(tokens[0]);
+    if (!carrierHeads.has(head)) continue;
+    hasCarrier = true;
+
+    if (head === 'cmd') {
+      var cmdIndex = tokens.findIndex(function(token) { return /^\/c$/i.test(token); });
+      if (cmdIndex >= 0 && retestCarrierPayload(tokens.slice(cmdIndex + 1).join(' '), depth)) {
+        return true;
+      }
+      continue;
+    }
+
+    if (head === 'powershell' || head === 'pwsh') {
+      var commandIndex = tokens.findIndex(function(token) { return /^-c(?:ommand)?$/i.test(token); });
+      if (commandIndex >= 0 && retestCarrierPayload(tokens.slice(commandIndex + 1).join(' '), depth)) {
+        return true;
+      }
+      continue;
+    }
+
+    if (tokens.length > 1 && retestCarrierPayload(tokens.slice(1).join(' '), depth)) {
+      return true;
+    }
+  }
+
+  if (hasCarrier) {
+    var quoted = extractQuotedStrings(raw);
+    for (var qi = 0; qi < quoted.length; qi++) {
+      if (retestCarrierPayload(quoted[qi], depth)) return true;
+    }
+  }
+
+  var hasScriptBlockCarrier = /(?:^|[;\r\n])\s*(?:&|\.)\s*\{/m.test(raw) ||
+    /\b(?:invoke-command|start-job)\b[^{}]*\{/i.test(raw);
+  if (hasScriptBlockCarrier) {
+    var blocks = extractBraceBlocks(raw);
+    for (var bi = 0; bi < blocks.length; bi++) {
+      if (retestCarrierPayload(blocks[bi], depth)) return true;
+    }
+  }
+
+  return false;
+}
+
 function findGitSubcommand(tokens) {
   if (tokens.length === 0 || commandBasename(tokens[0]) !== 'git') return null;
   var valueConsumingShort = new Set(['-c', '-C']);
@@ -228,7 +417,8 @@ function isDestructiveGit(tokens) {
   return false;
 }
 
-function isDestructiveBash(command) {
+function isDestructiveBash(command, depth) {
+  depth = depth || 0;
   var raw = String(command || '');
   var flattened = explodeSubshells(stripQuotedStrings(raw));
   if (DESTRUCTIVE_SQL_DD.test(flattened)) return true;
@@ -240,8 +430,13 @@ function isDestructiveBash(command) {
 
     var tokens = tokenize(segment);
     if (isDestructiveRm(tokens)) return true;
+    if (isDestructivePowerShellRemove(tokens)) return true;
+    if (isDestructiveCmdDelete(tokens)) return true;
+    if (isClearContent(tokens)) return true;
     if (isDestructiveGit(tokens)) return true;
   }
+
+  if (isDestructiveCarrier(raw, segments, depth)) return true;
 
   // Quoted-SQL check, on the RAW command.
   //

@@ -1,5 +1,6 @@
 ---
 name: apex-wave-reviewer
+tools: Read, Glob, Grep
 description: >
   Reviews code output from a completed build wave against the spec's acceptance criteria and
   baseline coding principles. Returns BLOCK / FLAG / CLEAN findings cited to concrete evidence.

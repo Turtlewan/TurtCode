@@ -68,7 +68,7 @@ function handlePreToolUse(data) {
     return null;
   }
 
-  if (data.tool_name !== 'Bash') {
+  if (data.tool_name !== 'Bash' && data.tool_name !== 'PowerShell') {
     return null;
   }
 
