@@ -23,6 +23,21 @@ if (-not (Test-Path -LiteralPath $template -PathType Leaf)) {
     throw "Hook template not found: $template"
 }
 
+# A missing verify recipe makes the installed hook a silent no-op. Probe with the same checker the
+# hook uses, in a child PowerShell process so its contract exit code can be inspected here. Only
+# NO_RECIPE blocks installation: red and unparseable recipes are deliberately left for the hook to
+# enforce at commit time.
+$checker = Join-Path $PSScriptRoot 'apex-baseline-check.ps1'
+if (-not (Test-Path -LiteralPath $checker -PathType Leaf)) {
+    throw "Baseline checker not found: $checker"
+}
+& powershell.exe -NoProfile -ExecutionPolicy Bypass -File $checker -Full -Worktree $Repo
+$recipeExit = $LASTEXITCODE
+if ($recipeExit -eq 4) {
+    Write-Host "install-baseline-hook: refusing -- $Repo has no verify recipe; write AGENTS.md ## Verify commands first" -ForegroundColor Red
+    exit 1
+}
+
 # Ask git where hooks live -- honours linked worktrees and core.hooksPath, which a hardcoded
 # "<repo>/.git/hooks" does not (in a linked worktree .git is a FILE, not a directory).
 $hooksRel = & git -C $Repo rev-parse --git-path hooks 2>$null

@@ -1,8 +1,8 @@
 ---
 skill: apex-code
 backend: claude
-version: 2.3.0
-last_updated: 2026-07-14
+version: 2.6.0
+last_updated: 2026-07-16
 sources:
   - docs/technical/adr/ADR-027-codex-primary-opus-fallback-deepseek-archived.md
   - docs/technical/adr/ADR-028-parallel-codex-dispatch.md
@@ -128,9 +128,10 @@ Four things are load-bearing, and each has already broken a real build when done
 | 66 | bad `-Authorized` list | The task wrote several files and *none* is on the list — the **list** is wrong, not the coder. |
 | 67 | **blocked** | **HARD STOP.** Do not commit. Do not build a dependent spec on top. Clear every `unresolved` item with a host re-verify first. Outranks every other code. |
 | 68 | done_with_concerns | The coder finished but flagged doubts. Read them; carry them into the review. |
-| 69 | **tree moved under a gate** | The verdict is **VOID** — it describes a tree that no longer exists. Find the writer, let it finish, re-run the gate. |
-| 73 | **double-encoded text (mojibake)** | Codex-on-Windows corrupted non-ASCII it wrote (em-dash → `â€"`). **Do not commit — the suite is green and wrong.** The coder writes the same bad bytes into the *expected* string, so the assertion compares corrupt to corrupt and passes. Fix the bytes, re-verify. |
+| 69 | **tree moved under a gate or at the launch boundary** | The verdict is **VOID** — it describes a tree that no longer exists. This also fires when the tree moves between the pre-flight pin and the launch boundary. By then the reservation **HAS occurred**, so the ledger row **EXISTS** and is updated `failed` / `tree-moved` (unlike exit 72, which refuses before reservation and creates no row). Find the writer, let it finish, re-run the gate. |
 | 71 | shared worktree refused | A coder is already live here. `git worktree add` one per concurrent task, or go serial. |
+| 72 | refused: red baseline | The pre-dispatch pre-flight found a red/unparseable/recipe-less baseline (or a failing in-tree spec validation). NOTHING was launched and NO ledger row exists. Fix the baseline (or the spec), or `-SkipBaselineCheck` for a bootstrap. |
+| 73 | **double-encoded text (mojibake)** | Codex-on-Windows corrupted non-ASCII it wrote (em-dash → `â€"`). **Do not commit — the suite is green and wrong.** The coder writes the same bad bytes into the *expected* string, so the assertion compares corrupt to corrupt and passes. Fix the bytes, re-verify. |
 | 75 | still running | Your *call* died; the coder did **not**. Wait for `.final`. |
 | 124 | stalled (no output) | The watchdog fired. The child is deliberately **not** killed — you decide. |
 
@@ -211,17 +212,25 @@ judging its own output** (evaluator independence).
 `ultra` → **Opus** (fresh worker). `ultra` is the only place it fires automatically, and it is
 un-evaled — first rung to cut if the eval disappoints (see status.md).
 
-### Baseline-green commit hook (M2a)
+### Baseline-green commit hook and dispatch pre-flight (M2a/M2b)
 
 A repo can carry a **pre-commit hook** that runs its full verify quad and **blocks the commit on red**
 — so a file-scoped "green" over a whole-project-red baseline can't be committed and then wedge the
 *next* dispatch (the recurring `host-verify-full-mypy` failure, now mechanised). The hook is the
-higher-value half of the baseline-green gate; the pre-dispatch pre-flight (exit 72) is M2b, not built.
+higher-value half of the baseline-green gate. The M2b pre-dispatch pre-flight is now **built**: before
+reservation or launch, the wrapper calls `scripts/apex-baseline-check.ps1 -Preflight -Worktree <repo>`.
+It runs the dedicated `AGENTS.md → ## Preflight commands` block when present, otherwise the full
+`## Verify commands` recipe; it never substitutes a heuristic subset.
 
 - `scripts/apex-baseline-check.ps1 -Full -Worktree <repo>` runs the recipe (`AGENTS.md → ## Verify
   commands`) in the repo; exit **0** green · **1** red · **3** recipe heading present but unparseable ·
-  **0** + notice when there is no recipe. This is the single shared parser — M2b's pre-flight will call
-  it, never re-match the heading.
+  **4** `NO_RECIPE`. This is the single shared parser; M2b calls it rather than re-matching headings.
+- Exit **72** means the pre-flight refused a red, unparseable, or recipe-less baseline (or failed
+  in-tree spec validation) before reservation, so nothing launched and no ledger row exists.
+  `-SkipBaselineCheck` is the single bootstrap escape for the whole pre-flight.
+- The wrapper pins the tree for pre-flight and verifies that pin again at the launch boundary. If the
+  tree moved, it fails with exit **69** after reservation and updates the existing ledger row to
+  `failed` / `tree-moved`.
 - Install per consumer repo: `scripts/install-baseline-hook.ps1 -Repo <repo>` (linked-worktree- and
   `core.hooksPath`-safe; backs a differing hook up to `pre-commit.bak`, overwrite only with `-Force`).
 - It verifies the **staged snapshot** (stashes unstaged/untracked, checks, restores). If a file is

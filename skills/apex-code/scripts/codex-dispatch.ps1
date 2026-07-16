@@ -28,6 +28,8 @@ param(
     # Read-only gates (review, end-gate) auto-pin the tree and VOID their verdict if it moves under
     # them. This disables that. You almost never want it.
     [switch]$NoTreePin,
+    # Bootstrap/emergency escape: bypass the dispatch pre-flight, recorded loudly and in the ledger row.
+    [switch]$SkipBaselineCheck,
     [string]$Prompt,
     # Selects the --output-schema codex is constrained to. A review/end-gate pass returns
     # findings, not a build completion; constraining it to the build schema (whose
@@ -625,6 +627,83 @@ if (($Phase -eq 'review' -or $Schema -eq 'review' -or $Schema -eq 'endgate') -an
     $Sandbox = 'read-only'
 }
 
+$baselineSkipped = $false
+$preflightPinLabel = $null
+$preflightPinArmed = $false
+$preflightTreePinScript = $null
+
+# The pre-flight pin spans every pre-launch operation, including the shared-worktree reservation and
+# scope snapshot. The outer finally at the end of the script removes this invocation's pin on every
+# exit or throw in that span; the successful path disarms it immediately before starting the child.
+try {
+    if ($Phase -eq 'build' -and $Sandbox -eq 'workspace-write') {
+        if ($SkipBaselineCheck) {
+            Write-Host '[dispatch] -SkipBaselineCheck: baseline/spec pre-flight BYPASSED (bootstrap/emergency)' -ForegroundColor Yellow
+            $baselineSkipped = $true
+        }
+        else {
+            $preflightBaselineScript = Join-Path $PSScriptRoot 'apex-baseline-check.ps1'
+            $preflightTreePinScript = Join-Path $PSScriptRoot 'tree-pin.ps1'
+            $preflightSpecValidateScript = Join-Path $PSScriptRoot 'apex-spec-validate.ps1'
+
+            foreach ($helper in @($preflightBaselineScript, $preflightTreePinScript, $preflightSpecValidateScript)) {
+                if (-not (Test-Path -LiteralPath $helper -PathType Leaf)) {
+                    Write-Host "[dispatch] REFUSED (exit 72): $helper missing -- cannot run the baseline/spec pre-flight" -ForegroundColor Red
+                    # Exit 72 = required pre-flight gate refused the dispatch before reservation.
+                    exit 72
+                }
+            }
+
+            # Spec/task components are glob-safe by construction; cleanup's only wildcard is its
+            # deliberately appended trailing '*', so it cannot remove a sibling dispatch's pin.
+            $specSafe = ($Spec -replace '[^A-Za-z0-9._-]', '_')
+            $taskSafe = ($Task -replace '[^A-Za-z0-9._-]', '_')
+            $preflightPinLabel = "preflight-$specSafe-$taskSafe-$PID-" + [guid]::NewGuid().ToString('N').Substring(0, 8)
+            & $preflightTreePinScript -Pin -Worktree $Worktree -Label $preflightPinLabel -PinDirectory $harnessStateDir | Write-Host
+            $preflightPinArmed = ($LASTEXITCODE -eq 0)
+            if (-not $preflightPinArmed) {
+                Write-Host "[dispatch] REFUSED (exit 72): tree-pin failed to arm -- cannot guarantee the pre-flight tree" -ForegroundColor Red
+                # Exit 72 = required pre-flight gate refused the dispatch before reservation.
+                exit 72
+            }
+
+            & $preflightBaselineScript -Preflight -Worktree $Worktree
+            $baselineExit = $LASTEXITCODE
+            if ($baselineExit -in @(1, 3, 4)) {
+                Write-Host "[dispatch] REFUSED (exit 72): red baseline -- apex-baseline-check exit $baselineExit" -ForegroundColor Red
+                # Exit 72 = required pre-flight gate refused the dispatch before reservation.
+                exit 72
+            }
+            if ($baselineExit -ne 0) {
+                throw "apex-baseline-check returned unexpected exit code $baselineExit"
+            }
+
+            # Nested Join-Path calls preserve Windows PowerShell 5.1 compatibility.
+            $specDirectory = Join-Path $Worktree 'docs\changes'
+            $specFile = Join-Path $specDirectory "$Spec.md"
+            if (Test-Path -LiteralPath $specFile -PathType Leaf) {
+                $specFindings = @(& $preflightSpecValidateScript -SpecPath $specFile)
+                $specValidateExit = $LASTEXITCODE
+                foreach ($finding in $specFindings) { Write-Host $finding }
+                if ($specValidateExit -eq 1) {
+                    $findingText = if ($specFindings.Count -gt 0) { $specFindings -join '; ' } else { 'validator returned exit 1' }
+                    Write-Host "[dispatch] REFUSED (exit 72): spec validation failed -- $findingText" -ForegroundColor Red
+                    # Exit 72 = required pre-flight gate refused the dispatch before reservation.
+                    exit 72
+                }
+                if ($specValidateExit -ne 0) {
+                    throw "apex-spec-validate returned unexpected exit code $specValidateExit"
+                }
+            }
+            else {
+                Write-Host "[dispatch] pre-flight: spec docs/changes/$Spec.md not under this worktree -- validator skipped (cross-tree build)" -ForegroundColor DarkGray
+            }
+        }
+    }
+    else {
+        Write-Host '[dispatch] pre-flight skipped (phase/sandbox)' -ForegroundColor DarkGray
+    }
+
 $worktreeKey = Get-WorktreeKey $Worktree
 
 # Logs and pins are keyed by WORKTREE as well as spec/task. Concurrent dispatches in different
@@ -705,6 +784,7 @@ $ledgerRow = [ordered]@{
     final_path = $finalPath
     schema = $schemaFile
     sandbox = $Sandbox
+    baseline_skipped = [bool]$baselineSkipped
     # What this run ARMED, so -Adopt can run the gates the dead wrapper never reached.
     scope_armed = ($Authorized.Count -gt 0 -and -not $SkipScopeCheck)
     scope_task = $gateKey
@@ -885,6 +965,22 @@ $appendLogText = {
     if ($Text.Length -gt 0) {
         [System.IO.File]::AppendAllText($logPath, $Text, [System.Text.UTF8Encoding]::new($false))
     }
+}
+
+if ($preflightPinArmed) {
+    & $preflightTreePinScript -Verify -Worktree $Worktree -Label $preflightPinLabel -PinDirectory $harnessStateDir | Write-Host
+    $preflightVerifyExit = $LASTEXITCODE
+    if ($preflightVerifyExit -ne 0) {
+        Update-LedgerRow -RunId $runId -Changes @{ status = 'failed'; ended = (Get-UtcTimestamp); error = 'tree moved under the pre-flight pin' }
+        Write-Host '[dispatch] REFUSED (exit 69): tree moved between pre-flight and launch -- the verified tree is not the tree the coder would get' -ForegroundColor Red
+        # Exit 69 = the pinned tree moved, so the launch-boundary verdict is void.
+        exit 69
+    }
+
+    $safe = ($preflightPinLabel -replace '[<>:"/\\|?*]', '_')
+    $preflightPinGlob = Join-Path $harnessStateDir "apex-treepin-$safe-*.txt"
+    Remove-Item -Path $preflightPinGlob -Force -ErrorAction SilentlyContinue
+    $preflightPinArmed = $false
 }
 
 try {
@@ -1294,4 +1390,12 @@ try {
     # throw out of this finally and mask the exit code.
     try { $process.Dispose() } catch {}
     $ledgerMutex.Dispose()
+}
+} finally {
+    if ($preflightPinArmed) {
+        $safe = ($preflightPinLabel -replace '[<>:"/\\|?*]', '_')
+        $preflightPinGlob = Join-Path $harnessStateDir "apex-treepin-$safe-*.txt"
+        Remove-Item -Path $preflightPinGlob -Force -ErrorAction SilentlyContinue
+        $preflightPinArmed = $false
+    }
 }

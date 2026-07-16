@@ -23,6 +23,13 @@ git config user.email 't@t.t'; git config user.name 't'
 'orig'       | Out-File -Encoding ascii src/a.py
 'orig'       | Out-File -Encoding ascii src/b.py
 'HOST STATE' | Out-File -Encoding ascii docs/status.md
+@(
+    '## Verify commands'
+    ''
+    '```'
+    'exit 0'
+    '```'
+) | Out-File -Encoding ascii AGENTS.md
 git add -A; git commit -q -m init
 
 # The host is editing status.md RIGHT NOW, in the same tree. This must survive.

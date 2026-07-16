@@ -1,8 +1,8 @@
 ---
 skill: apex-plan
 backend: claude
-version: 2.0.0
-last_updated: 2026-07-14
+version: 2.1.0
+last_updated: 2026-07-16
 sources:
   - docs/technical/adr/ADR-010-multi-pass-review.md
   - docs/technical/adr/ADR-011-instinct-loop-no-engine.md
@@ -183,6 +183,8 @@ Every BLOCK resolved in the spec; every FLAG resolved or explicitly accepted wit
 The model already checks for vague paths, "maybe"/"TBD", missing done-when clauses, and unrequested
 scope (RED-confirmed). **These are the items it does not reliably check.** Every one must pass; if
 any fails, fix in place and re-run from the top.
+
+As the deterministic backstop to the prose Files-to-Change / Coverage / structure checkboxes (which retain judgment depth), on draft->changes promotion run `powershell.exe -NoProfile -File "$env:USERPROFILE\.claude\skills\apex-code\scripts\apex-spec-validate.ps1" -SpecPath <draft>`; a `FAIL` (exit 1) **BLOCKS** promotion.
 
 ```
 [ ] Coverage      — every acceptance criterion maps to ≥1 task, every task to ≥1 criterion.
