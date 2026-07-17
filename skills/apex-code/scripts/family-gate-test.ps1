@@ -6,6 +6,7 @@ $ErrorActionPreference = 'Stop'
 
 $gatePath = Join-Path -Path $PSScriptRoot -ChildPath 'apex-family-gate.ps1'
 $fixturePath = Join-Path -Path $env:TEMP -ChildPath ("apex-family-gate-test-{0}.jsonl" -f [Guid]::NewGuid().ToString('N'))
+$legacyReserializedPath = Join-Path -Path $env:TEMP -ChildPath ("apex-family-gate-legacy-reserialized-{0}.jsonl" -f [Guid]::NewGuid().ToString('N'))
 $suiteExitCode = 1
 
 function New-FixtureRow {
@@ -20,10 +21,11 @@ function New-FixtureRow {
         [AllowEmptyString()][string]$ReviewedRunId = '',
         [bool]$Attended = $false,
         [Parameter(Mandatory = $true)][string]$Status,
-        [Parameter(Mandatory = $true)][string]$Started
+        [Parameter(Mandatory = $true)][string]$Started,
+        [System.Collections.IDictionary]$ExtraFields
     )
 
-    [pscustomobject][ordered]@{
+    $row = [ordered]@{
         spec = $Spec
         task = $Task
         worktree_key = $WorktreeKey
@@ -36,6 +38,29 @@ function New-FixtureRow {
         status = $Status
         started = $Started
     }
+
+    if ($PSBoundParameters.ContainsKey('ExtraFields')) {
+        foreach ($key in $ExtraFields.Keys) {
+            $row[$key] = $ExtraFields[$key]
+        }
+    }
+
+    [pscustomobject]$row
+}
+
+function ConvertTo-FixtureJsonLines {
+    param(
+        [Parameter(Mandatory = $true)][object[]]$Rows
+    )
+
+    @($Rows | ForEach-Object {
+        if ($_ -is [string]) {
+            $_
+        }
+        else {
+            $_ | ConvertTo-Json -Compress -Depth 4
+        }
+    })
 }
 
 function New-TestCase {
@@ -60,7 +85,7 @@ try {
         throw "Gate script was not found at '$gatePath'."
     }
 
-    $cases = @(
+    $legacyCases = @(
         New-TestCase -Name 'cross-family-bound' -ExpectedExitCode 0 -Rows @(
             New-FixtureRow -Spec 'family-gate-test/cross-family-bound' -Task 'task-cross-family-bound' -WorktreeKey 'worktree-cross-family-bound' -Phase 'build' -RunId 'build-cross-family' -BuilderFamily 'openai' -ReviewerFamily '' -ReviewedRunId '' -Attended $false -Status 'done' -Started '2026-01-01T00:00:00Z'
             New-FixtureRow -Spec 'family-gate-test/cross-family-bound' -Task 'task-cross-family-bound' -WorktreeKey 'worktree-cross-family-bound' -Phase 'review' -RunId 'review-cross-family' -BuilderFamily '' -ReviewerFamily 'anthropic' -ReviewedRunId 'build-cross-family' -Attended $false -Status 'done' -Started '2026-01-01T00:01:00Z'
@@ -159,23 +184,105 @@ try {
         )
     )
 
-    $fixtureRows = @($cases | ForEach-Object { $_.Rows })
-    # Preserve intentionally malformed raw lines so the gate's scoped parse-failure behavior is exercised.
-    $jsonLines = @($fixtureRows | ForEach-Object {
-        if ($_ -is [string]) {
-            $_
+    $newCases = @(
+        New-TestCase -Name 'tree-moved-true-review' -ExpectedExitCode 12 -Rows @(
+            New-FixtureRow -Spec 'family-gate-test/tree-moved-true-review' -Task 'task-tree-moved-true-review' -WorktreeKey 'worktree-tree-moved-true-review' -Phase 'build' -RunId 'build-tree-moved-true' -BuilderFamily 'openai' -Status 'done' -Started '2026-01-19T00:00:00Z'
+            New-FixtureRow -Spec 'family-gate-test/tree-moved-true-review' -Task 'task-tree-moved-true-review' -WorktreeKey 'worktree-tree-moved-true-review' -Phase 'review' -RunId 'review-tree-moved-true' -ReviewerFamily 'anthropic' -ReviewedRunId 'build-tree-moved-true' -Status 'done' -Started '2026-01-19T00:01:00Z' -ExtraFields ([ordered]@{ tree_moved = $true })
+        )
+        New-TestCase -Name 'scope-violation-true-review' -ExpectedExitCode 12 -Rows @(
+            New-FixtureRow -Spec 'family-gate-test/scope-violation-true-review' -Task 'task-scope-violation-true-review' -WorktreeKey 'worktree-scope-violation-true-review' -Phase 'build' -RunId 'build-scope-violation-true' -BuilderFamily 'openai' -Status 'done' -Started '2026-01-20T00:00:00Z'
+            New-FixtureRow -Spec 'family-gate-test/scope-violation-true-review' -Task 'task-scope-violation-true-review' -WorktreeKey 'worktree-scope-violation-true-review' -Phase 'review' -RunId 'review-scope-violation-true' -ReviewerFamily 'anthropic' -ReviewedRunId 'build-scope-violation-true' -Status 'done' -Started '2026-01-20T00:01:00Z' -ExtraFields ([ordered]@{ scopeViolation = $true })
+        )
+        New-TestCase -Name 'encoding-violation-true-review' -ExpectedExitCode 0 -Rows @(
+            New-FixtureRow -Spec 'family-gate-test/encoding-violation-true-review' -Task 'task-encoding-violation-true-review' -WorktreeKey 'worktree-encoding-violation-true-review' -Phase 'build' -RunId 'build-encoding-violation-true' -BuilderFamily 'openai' -Status 'done' -Started '2026-01-21T00:00:00Z'
+            New-FixtureRow -Spec 'family-gate-test/encoding-violation-true-review' -Task 'task-encoding-violation-true-review' -WorktreeKey 'worktree-encoding-violation-true-review' -Phase 'review' -RunId 'review-encoding-violation-true' -ReviewerFamily 'anthropic' -ReviewedRunId 'build-encoding-violation-true' -Status 'done' -Started '2026-01-21T00:01:00Z' -ExtraFields ([ordered]@{ encoding_violation = $true })
+        )
+        New-TestCase -Name 'void-markers-false-review' -ExpectedExitCode 0 -Rows @(
+            New-FixtureRow -Spec 'family-gate-test/void-markers-false-review' -Task 'task-void-markers-false-review' -WorktreeKey 'worktree-void-markers-false-review' -Phase 'build' -RunId 'build-void-markers-false' -BuilderFamily 'openai' -Status 'done' -Started '2026-01-22T00:00:00Z'
+            New-FixtureRow -Spec 'family-gate-test/void-markers-false-review' -Task 'task-void-markers-false-review' -WorktreeKey 'worktree-void-markers-false-review' -Phase 'review' -RunId 'review-void-markers-false' -ReviewerFamily 'anthropic' -ReviewedRunId 'build-void-markers-false' -Status 'done' -Started '2026-01-22T00:01:00Z' -ExtraFields ([ordered]@{ tree_moved = $false; scopeViolation = $false })
+        )
+        New-TestCase -Name 'tree-moved-null-review' -ExpectedExitCode 0 -Rows @(
+            New-FixtureRow -Spec 'family-gate-test/tree-moved-null-review' -Task 'task-tree-moved-null-review' -WorktreeKey 'worktree-tree-moved-null-review' -Phase 'build' -RunId 'build-tree-moved-null' -BuilderFamily 'openai' -Status 'done' -Started '2026-01-23T00:00:00Z'
+            New-FixtureRow -Spec 'family-gate-test/tree-moved-null-review' -Task 'task-tree-moved-null-review' -WorktreeKey 'worktree-tree-moved-null-review' -Phase 'review' -RunId 'review-tree-moved-null' -ReviewerFamily 'anthropic' -ReviewedRunId 'build-tree-moved-null' -Status 'done' -Started '2026-01-23T00:01:00Z' -ExtraFields ([ordered]@{ tree_moved = $null })
+        )
+        New-TestCase -Name 'scope-violation-null-review' -ExpectedExitCode 0 -Rows @(
+            New-FixtureRow -Spec 'family-gate-test/scope-violation-null-review' -Task 'task-scope-violation-null-review' -WorktreeKey 'worktree-scope-violation-null-review' -Phase 'build' -RunId 'build-scope-violation-null' -BuilderFamily 'openai' -Status 'done' -Started '2026-01-24T00:00:00Z'
+            New-FixtureRow -Spec 'family-gate-test/scope-violation-null-review' -Task 'task-scope-violation-null-review' -WorktreeKey 'worktree-scope-violation-null-review' -Phase 'review' -RunId 'review-scope-violation-null' -ReviewerFamily 'anthropic' -ReviewedRunId 'build-scope-violation-null' -Status 'done' -Started '2026-01-24T00:01:00Z' -ExtraFields ([ordered]@{ scopeViolation = $null })
+        )
+        New-TestCase -Name 'marked-plus-clean-review' -ExpectedExitCode 0 -Rows @(
+            New-FixtureRow -Spec 'family-gate-test/marked-plus-clean-review' -Task 'task-marked-plus-clean-review' -WorktreeKey 'worktree-marked-plus-clean-review' -Phase 'build' -RunId 'build-marked-plus-clean' -BuilderFamily 'openai' -Status 'done' -Started '2026-01-25T00:00:00Z'
+            New-FixtureRow -Spec 'family-gate-test/marked-plus-clean-review' -Task 'task-marked-plus-clean-review' -WorktreeKey 'worktree-marked-plus-clean-review' -Phase 'review' -RunId 'review-marked' -ReviewerFamily 'anthropic' -ReviewedRunId 'build-marked-plus-clean' -Status 'done' -Started '2026-01-25T00:01:00Z' -ExtraFields ([ordered]@{ tree_moved = $true })
+            New-FixtureRow -Spec 'family-gate-test/marked-plus-clean-review' -Task 'task-marked-plus-clean-review' -WorktreeKey 'worktree-marked-plus-clean-review' -Phase 'review' -RunId 'review-clean' -ReviewerFamily 'anthropic' -ReviewedRunId 'build-marked-plus-clean' -Status 'done' -Started '2026-01-25T00:02:00Z'
+        )
+        New-TestCase -Name 'marked-plus-human-review' -ExpectedExitCode 0 -Rows @(
+            New-FixtureRow -Spec 'family-gate-test/marked-plus-human-review' -Task 'task-marked-plus-human-review' -WorktreeKey 'worktree-marked-plus-human-review' -Phase 'build' -RunId 'build-marked-plus-human' -BuilderFamily 'openai' -Status 'done' -Started '2026-01-26T00:00:00Z'
+            New-FixtureRow -Spec 'family-gate-test/marked-plus-human-review' -Task 'task-marked-plus-human-review' -WorktreeKey 'worktree-marked-plus-human-review' -Phase 'review' -RunId 'review-marked-human-case' -ReviewerFamily 'anthropic' -ReviewedRunId 'build-marked-plus-human' -Status 'done' -Started '2026-01-26T00:01:00Z' -ExtraFields ([ordered]@{ tree_moved = $true })
+            New-FixtureRow -Spec 'family-gate-test/marked-plus-human-review' -Task 'task-marked-plus-human-review' -WorktreeKey 'worktree-marked-plus-human-review' -Phase 'human-review' -RunId 'human-review-after-marked' -ReviewedRunId 'build-marked-plus-human' -Attended $true -Status 'done' -Started '2026-01-26T00:02:00Z'
+        )
+    )
+    $cases = @($legacyCases) + @($newCases)
+
+    $legacyFixtureRows = @($legacyCases | ForEach-Object { $_.Rows })
+    $legacyJsonLines = ConvertTo-FixtureJsonLines -Rows $legacyFixtureRows
+    $utf8NoBom = [System.Text.UTF8Encoding]::new($false)
+    [System.IO.File]::WriteAllLines($legacyReserializedPath, [string[]]$legacyJsonLines, $utf8NoBom)
+
+    $failures = @()
+    $expectedLegacySerializationHash = '5B5802C3ABC47D948F583A2D930946BCF718037AB69502616161631829AF13F4'
+    $actualLegacySerializationHash = (Get-FileHash -Algorithm SHA256 -LiteralPath $legacyReserializedPath).Hash
+    if ($actualLegacySerializationHash -ceq $expectedLegacySerializationHash) {
+        Write-Output "PASS legacy-byte-compat -- reserialization matches the canonical SHA-256."
+    }
+    else {
+        $failures += [pscustomobject]@{
+            Name = 'legacy-byte-compat'
+            Expected = $expectedLegacySerializationHash
+            Actual = $actualLegacySerializationHash
+            Output = ''
+        }
+        Write-Output ("FAIL legacy-byte-compat -- expected SHA-256 {0}, got {1}" -f $expectedLegacySerializationHash, $actualLegacySerializationHash)
+    }
+
+    $markers = @('tree_moved', 'scopeViolation', 'encoding_violation')
+    $states = @(
+        [pscustomobject]@{ Name = 'true'; Value = $true; Expected = 'true' }
+        [pscustomobject]@{ Name = 'false'; Value = $false; Expected = 'false' }
+        [pscustomobject]@{ Name = 'null'; Value = $null; Expected = 'null' }
+    )
+    foreach ($marker in $markers) {
+        foreach ($state in $states) {
+            $extraFields = [ordered]@{}
+            $extraFields[$marker] = $state.Value
+            $emissionRow = New-FixtureRow -Spec 'family-gate-test/emission' -Task 'task-emission' -WorktreeKey 'worktree-emission' -Phase 'review' -Status 'done' -Started '2026-01-27T00:00:00Z' -ExtraFields $extraFields
+            $normalizedJson = (($emissionRow | ConvertTo-Json -Compress -Depth 4) -replace '\s', '')
+            $expectedFragment = '"{0}":{1}' -f $marker, $state.Expected
+            if ($normalizedJson.Contains($expectedFragment)) {
+                Write-Output ("PASS emission-{0}-{1} -- contains {2}" -f $marker, $state.Name, $expectedFragment)
+            }
+            else {
+                $failures += [pscustomobject]@{ Name = "emission-$marker-$($state.Name)"; Expected = $expectedFragment; Actual = $normalizedJson; Output = '' }
+            }
+        }
+
+        $omittedRow = New-FixtureRow -Spec 'family-gate-test/emission' -Task 'task-emission' -WorktreeKey 'worktree-emission' -Phase 'review' -Status 'done' -Started '2026-01-27T00:00:00Z'
+        $normalizedOmittedJson = (($omittedRow | ConvertTo-Json -Compress -Depth 4) -replace '\s', '')
+        if (-not $normalizedOmittedJson.Contains(('"{0}":' -f $marker))) {
+            Write-Output ("PASS emission-{0}-omitted -- key is absent" -f $marker)
         }
         else {
-            $_ | ConvertTo-Json -Compress -Depth 4
+            $failures += [pscustomobject]@{ Name = "emission-$marker-omitted"; Expected = 'key absent'; Actual = $normalizedOmittedJson; Output = '' }
         }
-    })
+    }
+
+    $fixtureRows = @($cases | ForEach-Object { $_.Rows })
+    # Preserve intentionally malformed raw lines so the gate's scoped parse-failure behavior is exercised.
+    $jsonLines = ConvertTo-FixtureJsonLines -Rows $fixtureRows
     $utf8NoBom = [System.Text.UTF8Encoding]::new($false)
     [System.IO.File]::WriteAllLines($fixturePath, [string[]]$jsonLines, $utf8NoBom)
 
     Write-Output "Using one shared fixture ledger under TEMP with unique spec, task, and worktree_key values per case."
     Write-Output "Fixture ledger: $fixturePath"
 
-    $failures = @()
     foreach ($case in $cases) {
         $gateOutput = @(
             & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $gatePath `
@@ -224,6 +331,15 @@ finally {
         }
         catch {
             Write-Output ("FATAL -- could not remove temporary fixture ledger: {0}" -f $_.Exception.Message)
+            $suiteExitCode = 1
+        }
+    }
+    if (Test-Path -LiteralPath $legacyReserializedPath -PathType Leaf) {
+        try {
+            Remove-Item -LiteralPath $legacyReserializedPath -Force -ErrorAction Stop
+        }
+        catch {
+            Write-Output ("FATAL -- could not remove temporary legacy reserialization: {0}" -f $_.Exception.Message)
             $suiteExitCode = 1
         }
     }

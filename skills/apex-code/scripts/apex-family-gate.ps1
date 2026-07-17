@@ -9,6 +9,11 @@ acceptable review exists; 13 means the gate cannot vouch because no valid
 selected build exists. Unknown or empty families and empty run_id values can
 NEVER satisfy this gate under any circumstance.
 
+A review-phase row does not vouch when tree_moved or scopeViolation is present
+and true. This trust-marker rule is scoped to phase 'review', so attended human
+review remains unaffected. encoding_violation deliberately still vouches; its
+adopt-path guard is queued to Wave B.
+
 This script reads recorded FACTS bound to the selected build through
 reviewed_run_id. It is never a live self-check and never trusts a caller-chosen
 diff or SHA. This prevents a motivated caller from pointing the gate at a
@@ -195,6 +200,15 @@ foreach ($row in $terminalRows) {
     }
 
     if ($row.phase -ceq 'review') {
+        $reviewPropertyNames = @($row.PSObject.Properties.Name)
+        $hasVoidTrustMarker =
+            (($reviewPropertyNames -ccontains 'tree_moved') -and ($row.tree_moved -eq $true)) -or
+            (($reviewPropertyNames -ccontains 'scopeViolation') -and ($row.scopeViolation -eq $true))
+
+        if ($hasVoidTrustMarker) {
+            continue
+        }
+
         $reviewerFamily = [string]$row.reviewer_family
         $isKnownReviewerFamily = ($reviewerFamily -ceq 'openai') -or
             ($reviewerFamily -ceq 'anthropic')
