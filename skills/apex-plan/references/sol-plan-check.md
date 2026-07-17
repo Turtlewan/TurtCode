@@ -6,11 +6,15 @@ rule as dispatched domain review). Light / Bug Fix modes skip entirely.
 
 ## The cold read (the gate)
 
-```
-printf '%s' "<prompt below + the full spec text>" | codex exec -c approval_policy="never" \
-  --sandbox read-only -m gpt-5.6-sol -c model_reasoning_effort=max \
-  --output-schema ~/.claude/skills/apex-code/references/codex-review-schema.json \
-  -o /tmp/sol-plan-check-<spec>.json --color never -C <project-repo>
+```powershell
+# Raw `codex exec` is guard-blocked (W2, 2026-07-17) — dispatch through the wrapper:
+$prompt = "<prompt below>" + "`n`n---`nSPEC:`n`n" + (Get-Content -Raw <spec-path>)
+& "$env:USERPROFILE\.claude\skills\apex-code\scripts\codex-dispatch.ps1" `
+  -Spec <spec-name> -Task 'plan-check' -Phase review -Worktree <project-repo> `
+  -BaseSha <repo HEAD> -Schema review -Effort max -SkipScopeCheck -Prompt $prompt
+# Exit 67 = BLOCK verdict (findings in the printed .final report path); 0 = CLEAN/FLAG-only.
+# Concurrent read-only checks into one repo: add -AllowSharedWorktree
+#   -AllowSharedWorktreeReason 'concurrent read-only plan-checks; no writes possible'.
 ```
 
 Prompt shape: *"You are an independent plan reviewer. Review this APEX spec against the repo
