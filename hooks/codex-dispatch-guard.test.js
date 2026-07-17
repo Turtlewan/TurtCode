@@ -13,6 +13,8 @@
 'use strict';
 
 var cp = require('child_process');
+var fs = require('fs');
+var os = require('os');
 var path = require('path');
 
 var GUARD = path.join(__dirname, 'codex-dispatch-guard.js');
@@ -61,6 +63,11 @@ var CASES = [
   ['BLOCK', 'Start-Process codex exec'],
   ['BLOCK', 'Start-Process -FilePath codex -ArgumentList exec'],
 
+  // --- must BLOCK: round-8 (string evaluator + joined Start-Process argument carrier) ---
+  ['BLOCK', "eval 'codex exec'"],
+  ['BLOCK', 'eval "codex exec --json"'],
+  ['BLOCK', "Start-Process codex -ArgumentList 'exec -m gpt-5.6-sol'"],
+
   // --- must ALLOW: the wrapper, and anything that merely MENTIONS the command ---
   ['ALLOW', "powershell -File C:/Users/User/.claude/skills/apex-code/scripts/codex-dispatch.ps1 -Spec s -Task t"],
   ['ALLOW', 'codex --version'],
@@ -82,21 +89,169 @@ var CASES = [
 ];
 
 var failures = 0;
+var assertions = 0;
+
+function childEnv(overrides) {
+  var env = Object.assign({}, process.env);
+  delete env.APEX_CODEX_GUARD;
+  delete env.APEX_GUARD_DISABLE_REASON;
+  delete env.APEX_GUARD_AUDIT_LOG;
+  delete env.APEX_GUARD_STDIN_TIMEOUT_MS;
+  return Object.assign(env, overrides || {});
+}
+
+function runGuard(payload, env) {
+  var result = cp.spawnSync(process.execPath, [GUARD], {
+    input: payload,
+    encoding: 'utf8',
+    env: childEnv(env)
+  });
+  if (result.error) throw result.error;
+  if (result.status !== 0) {
+    throw new Error('guard exited ' + result.status + ': ' + result.stderr);
+  }
+  return result.stdout;
+}
+
+function decisionFrom(stdout) {
+  if (!stdout.trim()) return null;
+  var parsed = JSON.parse(stdout);
+  return parsed && parsed.hookSpecificOutput && parsed.hookSpecificOutput.permissionDecision;
+}
+
+function record(ok, label) {
+  assertions += 1;
+  if (!ok) failures += 1;
+  console.log((ok ? '  ok    ' : '  FAIL  ') + label);
+}
+
+function assertDeny(label, payload, env) {
+  var decision = null;
+  try {
+    decision = decisionFrom(runGuard(payload, env));
+  } catch (e) {
+    record(false, '[ERROR] ' + label + ' (' + e.message + ')');
+    return;
+  }
+  record(decision === 'deny', '[' + (decision === 'deny' ? 'BLOCK' : 'ALLOW') + '] ' + label);
+}
+
+function readAuditRows(file) {
+  if (!fs.existsSync(file)) return [];
+  var content = fs.readFileSync(file, 'utf8').trim();
+  return content ? content.split(/\r?\n/).map(JSON.parse) : [];
+}
+
 CASES.forEach(function(c) {
   var want = c[0];
   var cmd = c[1];
   var payload = JSON.stringify({ tool_name: 'Bash', tool_input: { command: cmd } });
-  var out = cp.execSync('node "' + GUARD + '"', { input: payload }).toString();
-  var got = out.indexOf('"deny"') >= 0 ? 'BLOCK' : 'ALLOW';
-  var ok = got === want;
-  if (!ok) failures += 1;
-  console.log((ok ? '  ok    ' : '  FAIL  ') + '[' + got + '] ' + cmd.slice(0, 62));
+  var got = 'ERROR';
+  try {
+    got = decisionFrom(runGuard(payload)) === 'deny' ? 'BLOCK' : 'ALLOW';
+  } catch (e) {
+    record(false, '[ERROR] ' + cmd.slice(0, 62) + ' (' + e.message + ')');
+    return;
+  }
+  record(got === want, '[' + got + '] ' + cmd.slice(0, 62));
 });
 
-console.log('');
-if (failures === 0) {
-  console.log('ALL ' + CASES.length + ' CASES PASS — no bypass, no false positive.');
-  process.exit(0);
+// Fail closed on input that was not received or could not be validated.
+assertDeny('malformed JSON stdin', '{');
+assertDeny('empty stdin', '');
+assertDeny(
+  'malformed shape: command is an object',
+  JSON.stringify({ tool_name: 'Bash', tool_input: { command: { raw: 'codex exec' } } })
+);
+
+// The kill-switch requires a reason, audits every recognized disable attempt, and fails closed if
+// its audit record cannot be appended.
+var auditRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'codex-dispatch-guard-'));
+var auditLog = path.join(auditRoot, 'guard-audit.log');
+var rawPayload = JSON.stringify({
+  tool_name: 'Bash',
+  tool_input: { command: 'codex exec --json' }
+});
+
+assertDeny('kill-switch without reason', rawPayload, {
+  APEX_CODEX_GUARD: 'off',
+  APEX_GUARD_DISABLE_REASON: '',
+  APEX_GUARD_AUDIT_LOG: auditLog
+});
+var auditRows = readAuditRows(auditLog);
+record(
+  auditRows.length === 1 && auditRows[0].guard === 'codex-dispatch-guard' &&
+    auditRows[0].reason === null && auditRows[0].honored === false &&
+    auditRows[0].subject === 'codex exec --json',
+  '[AUDIT] reasonless disable attempt records honored:false'
+);
+
+var reasonedOut = runGuard(rawPayload, {
+  APEX_CODEX_GUARD: 'off',
+  APEX_GUARD_DISABLE_REASON: 'maintenance window',
+  APEX_GUARD_AUDIT_LOG: auditLog
+});
+auditRows = readAuditRows(auditLog);
+record(
+  decisionFrom(reasonedOut) !== 'deny' && auditRows.length === 2 &&
+    auditRows[1].guard === 'codex-dispatch-guard' &&
+    auditRows[1].reason === 'maintenance window' && auditRows[1].honored === true &&
+    auditRows[1].subject === 'codex exec --json',
+  '[ALLOW+AUDIT] reasoned disable attempt records honored:true'
+);
+
+assertDeny('kill-switch audit append failure', rawPayload, {
+  APEX_CODEX_GUARD: 'off',
+  APEX_GUARD_DISABLE_REASON: 'maintenance window',
+  APEX_GUARD_AUDIT_LOG: auditRoot
+});
+
+function finish() {
+  fs.rmSync(auditRoot, { recursive: true, force: true });
+  console.log('');
+  if (failures === 0) {
+    console.log('ALL ' + assertions + ' ASSERTIONS PASS — no bypass, false positive, or fail-open path.');
+    process.exit(0);
+  }
+  console.log(failures + ' FAILURE(S)');
+  process.exit(1);
 }
-console.log(failures + ' FAILURE(S)');
-process.exit(1);
+
+// Leave stdin open: only the guard's own timeout may close this child with a deny decision.
+var heldOpen = cp.spawn(process.execPath, [GUARD], {
+  env: childEnv({ APEX_GUARD_STDIN_TIMEOUT_MS: '40' }),
+  stdio: ['pipe', 'pipe', 'pipe']
+});
+var heldStdout = '';
+var heldStderr = '';
+var heldFinished = false;
+var heldWatchdog = setTimeout(function() {
+  if (heldFinished) return;
+  heldFinished = true;
+  heldOpen.kill();
+  record(false, '[TIMEOUT] held-open stdin did not produce a timely decision');
+  finish();
+}, 2000);
+heldOpen.stdout.setEncoding('utf8');
+heldOpen.stderr.setEncoding('utf8');
+heldOpen.stdout.on('data', function(chunk) { heldStdout += chunk; });
+heldOpen.stderr.on('data', function(chunk) { heldStderr += chunk; });
+heldOpen.on('close', function(code) {
+  if (heldFinished) return;
+  heldFinished = true;
+  clearTimeout(heldWatchdog);
+  var decision = null;
+  try {
+    decision = decisionFrom(heldStdout);
+  } catch (e) {
+    record(false, '[ERROR] held-open stdin output (' + e.message + ')');
+    finish();
+    return;
+  }
+  record(
+    code === 0 && decision === 'deny',
+    '[' + (decision === 'deny' ? 'BLOCK' : 'ALLOW') + '] held-open stdin timeout' +
+      (heldStderr ? ' (' + heldStderr.trim() + ')' : '')
+  );
+  finish();
+});

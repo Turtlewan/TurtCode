@@ -1,6 +1,13 @@
 'use strict';
 
-const DESTRUCTIVE_SQL_DD = /\b(drop\s+(table|schema|database)|delete\s+from|truncate|dd\s+if=)\b/i;
+const DESTRUCTIVE_SQL_DD = /\b(drop\s+(table|schema|database)|delete\s+from|truncate)\b/i;
+
+// Keep this vocabulary aligned with codex-dispatch-guard.js's TRANSPARENT_RUNNERS. `nice` is
+// included because it is also a transparent command prefix for destructive-command detection.
+const TRANSPARENT_RUNNERS = new Set([
+  'npx', 'bunx', 'env', 'xargs', 'nohup', 'time', 'command', 'sudo', 'doas', 'start', 'winpty',
+  'nice'
+]);
 
 // Heads that only READ. A destructive-looking string in their arguments is data, not an action --
 // `grep "<sql>" migrations/` must not be blocked. Anything NOT on this list gets its RAW
@@ -95,6 +102,54 @@ function commandBasename(token) {
   return token.replace(/^.*[\\/]/, '').replace(/\.exe$/i, '').toLowerCase();
 }
 
+function unwrapTransparentRunners(tokens) {
+  var i = 0;
+
+  while (i < tokens.length) {
+    var runner = commandBasename(tokens[i]);
+    if (!TRANSPARENT_RUNNERS.has(runner)) break;
+    i += 1;
+
+    if (runner === 'env') {
+      while (i < tokens.length) {
+        var envToken = tokens[i];
+        if (/^[A-Za-z_][A-Za-z0-9_]*=/.test(envToken)) {
+          i += 1;
+        } else if (envToken === '-i' || envToken === '--ignore-environment') {
+          i += 1;
+        } else if (envToken === '-u' || envToken === '--unset') {
+          i += 2;
+        } else if (/^(?:-u[^-].*|--unset=.+)$/.test(envToken)) {
+          i += 1;
+        } else if (envToken === '--') {
+          i += 1;
+          break;
+        } else {
+          break;
+        }
+      }
+      continue;
+    }
+
+    if (runner === 'nice') {
+      if (i < tokens.length && (tokens[i] === '-n' || tokens[i] === '--adjustment')) {
+        i += 2;
+      } else if (i < tokens.length && /^(?:-n.+|--adjustment=.+)$/.test(tokens[i])) {
+        i += 1;
+      }
+      continue;
+    }
+
+    // Match the dispatch guard's treatment of runner-owned switches. Operand-taking runner
+    // options beyond env/nice are outside this careless-operator threat model.
+    while (i < tokens.length && /^(?:-{1,2}[A-Za-z0-9][^\s]*|\/[A-Za-z])$/.test(tokens[i])) {
+      i += 1;
+    }
+  }
+
+  return tokens.slice(i);
+}
+
 function isDestructiveRm(tokens) {
   if (tokens.length === 0 || commandBasename(tokens[0]) !== 'rm') return false;
   var hasR = false;
@@ -145,6 +200,11 @@ function isDestructiveCmdDelete(tokens) {
 
 function isClearContent(tokens) {
   return tokens.length > 1 && commandBasename(tokens[0]) === 'clear-content';
+}
+
+function isDestructiveDd(tokens) {
+  return tokens.length > 1 && commandBasename(tokens[0]) === 'dd' &&
+    tokens.slice(1).some(function(token) { return token.startsWith('if='); });
 }
 
 function unwrapOuterQuotes(input) {
@@ -254,7 +314,7 @@ function isDestructiveCarrier(command, segments, depth) {
   var hasCarrier = false;
 
   for (var si = 0; si < segments.length; si++) {
-    var tokens = tokenize(segments[si]);
+    var tokens = unwrapTransparentRunners(tokenize(segments[si]));
     if (tokens.length === 0) continue;
     var head = commandBasename(tokens[0]);
     if (!carrierHeads.has(head)) continue;
@@ -348,7 +408,10 @@ function isDestructiveGit(tokens) {
   }
 
   if (command === 'checkout') {
-    return rest.indexOf('--') >= 0;
+    return rest.indexOf('--') >= 0 || rest.some(function(t) {
+      if (t === '--force') return true;
+      return t.startsWith('-') && !t.startsWith('--') && t.slice(1).indexOf('f') >= 0;
+    });
   }
 
   if (command === 'clean') {
@@ -374,13 +437,14 @@ function isDestructiveGit(tokens) {
       } else if (t.startsWith('-') && !t.startsWith('--') && t.slice(1).indexOf('f') >= 0) {
         bareForce = true;
       } else if (t.startsWith('+') && t.length > 1 && /^\+(?:[a-zA-Z_/.:]|HEAD)/.test(t)) {
+        plusRefspecForce = true;
         var refNoPlus = t.slice(1);
         var ci = refNoPlus.indexOf(':');
-        var dst = ci >= 0 ? refNoPlus.slice(ci + 1) : refNoPlus;
+        var dst = (ci >= 0 ? refNoPlus.slice(ci + 1) : refNoPlus).replace(/^refs\/heads\//, '');
         if (dst === 'main' || dst === 'master') mainOrMaster = true;
       } else if (!t.startsWith('-')) {
         var colonIdx = t.indexOf(':');
-        var target = colonIdx >= 0 ? t.slice(colonIdx + 1) : t;
+        var target = (colonIdx >= 0 ? t.slice(colonIdx + 1) : t).replace(/^refs\/heads\//, '');
         if (target === 'main' || target === 'master') {
           mainOrMaster = true;
         }
@@ -428,12 +492,13 @@ function isDestructiveBash(command, depth) {
     var segment = segments[si];
     if (DESTRUCTIVE_SQL_DD.test(stripQuotedStrings(segment))) return true;
 
-    var tokens = tokenize(segment);
+    var tokens = unwrapTransparentRunners(tokenize(segment));
     if (isDestructiveRm(tokens)) return true;
     if (isDestructivePowerShellRemove(tokens)) return true;
     if (isDestructiveCmdDelete(tokens)) return true;
     if (isClearContent(tokens)) return true;
     if (isDestructiveGit(tokens)) return true;
+    if (isDestructiveDd(tokens)) return true;
   }
 
   if (isDestructiveCarrier(raw, segments, depth)) return true;
@@ -448,7 +513,7 @@ function isDestructiveBash(command, depth) {
   // Gate on the command heads so that READING about a statement stays legal (`grep`, `cat`, `echo`,
   // `git log -S`). If any head could actually execute it, test the raw string.
   var executes = segments.some(function(seg) {
-    var tk = tokenize(seg);
+    var tk = unwrapTransparentRunners(tokenize(seg));
     return tk.length > 0 && !READONLY_HEADS.has(commandBasename(tk[0]));
   });
   if (executes && DESTRUCTIVE_SQL_DD.test(raw)) return true;

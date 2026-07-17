@@ -36,26 +36,50 @@ var detection = require('./lib/destructive-detect');
 var splitCommandSegments = detection.splitCommandSegments;
 var tokenize = detection.tokenize;
 var commandBasename = detection.commandBasename;
+var resolveDisable = require('./lib/guard-disable');
 
 var input = '';
-var stdinTimeout = setTimeout(function() { process.exit(0); }, 3000);
-process.stdin.setEncoding('utf8');
-process.stdin.on('data', function(chunk) { input += chunk; });
-process.stdin.on('end', function() {
+var finished = false;
+var stdinTimeout;
+
+function inputFailureReason() {
+  return 'Codex dispatch guard input was not received or validated; denying fail closed.';
+}
+
+function finish(decision) {
+  if (finished) return;
+  finished = true;
   clearTimeout(stdinTimeout);
-
-  var data;
-  try {
-    data = JSON.parse(input);
-  } catch (e) {
-    process.exit(0);
-  }
-
-  var decision = handlePreToolUse(data);
   if (decision) {
     process.stdout.write(JSON.stringify(decision));
   }
   process.exit(0);
+}
+
+function configuredStdinTimeoutMs() {
+  var raw = String(process.env.APEX_GUARD_STDIN_TIMEOUT_MS || '').trim();
+  if (/^[1-9]\d*$/.test(raw)) {
+    var parsed = Number(raw);
+    if (Number.isSafeInteger(parsed)) return parsed;
+  }
+  return 3000;
+}
+
+stdinTimeout = setTimeout(function() {
+  finish(deny(inputFailureReason()));
+}, configuredStdinTimeoutMs());
+process.stdin.setEncoding('utf8');
+process.stdin.on('data', function(chunk) { input += chunk; });
+process.stdin.on('end', function() {
+  try {
+    var data = JSON.parse(input);
+    finish(handlePreToolUse(data));
+  } catch (e) {
+    finish(deny(inputFailureReason()));
+  }
+});
+process.stdin.on('error', function() {
+  finish(deny(inputFailureReason()));
 });
 
 function deny(reason) {
@@ -95,7 +119,7 @@ var TRANSPARENT_RUNNERS = /^(?:npx|bunx|env|xargs|nohup|time|command|sudo|doas|s
 // These take a COMMAND STRING as an argument -- `iex 'codex exec'`. Listing them as transparent
 // prefixes meant the guard skipped the runner and then looked at the QUOTED STRING as if it were an
 // executable, found no match, and allowed it. Their argument must be re-parsed as a command.
-var STRING_EVALUATORS = /^(?:iex|invoke-expression)$/;
+var STRING_EVALUATORS = /^(?:iex|invoke-expression|eval)$/;
 
 // Launchers: the command they run is an ARGUMENT. `Start-Process codex exec` and its explicit
 // spelling `Start-Process -FilePath codex -ArgumentList exec` both launch a raw dispatch.
@@ -153,6 +177,7 @@ function tokensAreCodexExec(tokens, depth) {
       launched.push(rest[q]);
     }
     if (launched.length && tokensAreCodexExec(launched, depth + 1)) return true;
+    if (launched.length && isRawCodexExec(launched.join(' '), depth + 1)) return true;
     return false;
   }
 
@@ -386,16 +411,29 @@ function decodeEncodedCommands(raw) {
 }
 
 function handlePreToolUse(data) {
-  var disableVal = String(process.env.APEX_CODEX_GUARD || '').trim().toLowerCase();
-  if (disableVal === 'off' || disableVal === '0' || disableVal === 'false') {
-    return null;
+  if (!data || typeof data !== 'object' || Array.isArray(data) ||
+      !data.tool_input || typeof data.tool_input !== 'object' || Array.isArray(data.tool_input)) {
+    return deny(inputFailureReason());
   }
+
+  var commandValue = data.tool_input.command;
+  if (commandValue !== undefined && typeof commandValue !== 'string') {
+    return deny(inputFailureReason());
+  }
+  var command = commandValue || '';
+
+  var disable = resolveDisable({
+    guard: 'codex-dispatch-guard',
+    disableValue: process.env.APEX_CODEX_GUARD,
+    reason: process.env.APEX_GUARD_DISABLE_REASON,
+    subject: command
+  });
+  if (disable.disabled) return null;
 
   if (data.tool_name !== 'Bash' && data.tool_name !== 'PowerShell') {
     return null;
   }
 
-  var command = (data.tool_input && data.tool_input.command) || '';
   if (!command) {
     return null;
   }

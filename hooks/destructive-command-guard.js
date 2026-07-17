@@ -26,30 +26,49 @@
 'use strict';
 
 var detection = require('./lib/destructive-detect');
+var resolveDisable = require('./lib/guard-disable');
 var isDestructiveBash = detection.isDestructiveBash;
 var isReadOnlyGitIntrospection = detection.isReadOnlyGitIntrospection;
 var isExfiltrationBash = detection.isExfiltrationBash;
 var isRemoteCodeExec = detection.isRemoteCodeExec;
 
 var input = '';
-var stdinTimeout = setTimeout(function() { process.exit(0); }, 3000);
+var timeoutSetting = String(process.env.APEX_GUARD_STDIN_TIMEOUT_MS || '').trim();
+var parsedTimeout = Number(timeoutSetting);
+var stdinTimeoutMs = /^[1-9][0-9]*$/.test(timeoutSetting) && Number.isSafeInteger(parsedTimeout)
+  ? parsedTimeout
+  : 3000;
+var finished = false;
+var stdinTimeout = setTimeout(function() {
+  finish(deny('The destructive-command guard timed out while reading tool input and failed closed.'));
+}, stdinTimeoutMs);
 process.stdin.setEncoding('utf8');
 process.stdin.on('data', function(chunk) { input += chunk; });
+process.stdin.on('error', function() {
+  finish(deny('The destructive-command guard could not read tool input and failed closed.'));
+});
 process.stdin.on('end', function() {
+  if (finished) return;
   clearTimeout(stdinTimeout);
 
   try {
     var data = JSON.parse(input);
-    var result = handlePreToolUse(data);
-    if (result) {
-      process.stdout.write(JSON.stringify(result));
-    }
+    finish(handlePreToolUse(data));
   } catch (_) {
-    // Parse error or unexpected input — allow the tool call
+    finish(deny('The destructive-command guard could not validate the tool input and failed closed.'));
   }
-
-  process.exit(0);
 });
+
+function finish(result) {
+  if (finished) return;
+  finished = true;
+  clearTimeout(stdinTimeout);
+  if (result) {
+    process.stdout.write(JSON.stringify(result), function() { process.exit(0); });
+    return;
+  }
+  process.exit(0);
+}
 
 function deny(reason) {
   return {
@@ -57,14 +76,26 @@ function deny(reason) {
       hookEventName: 'PreToolUse',
       permissionDecision: 'deny',
       permissionDecisionReason: reason +
-        ' To run it deliberately, restart with APEX_DESTRUCT_GUARD=off in the environment.'
+        ' To run it deliberately, restart with APEX_DESTRUCT_GUARD=off and set ' +
+        'APEX_GUARD_DISABLE_REASON; the disable takes effect only when its audit entry is written.'
     }
   };
 }
 
 function handlePreToolUse(data) {
-  var disableVal = String(process.env.APEX_DESTRUCT_GUARD || '').trim().toLowerCase();
-  if (disableVal === '0' || disableVal === 'false' || disableVal === 'off' || disableVal === 'disabled') {
+  if (!data || typeof data !== 'object' || Array.isArray(data)) {
+    return deny('The destructive-command guard received malformed tool input and failed closed.');
+  }
+  if (!data.tool_input || typeof data.tool_input !== 'object' || Array.isArray(data.tool_input)) {
+    return deny('The destructive-command guard received malformed tool input and failed closed.');
+  }
+
+  var hasCommand = Object.prototype.hasOwnProperty.call(data.tool_input, 'command');
+  var command = data.tool_input.command;
+  if (hasCommand && typeof command !== 'string') {
+    return deny('The destructive-command guard received a non-string command and failed closed.');
+  }
+  if (!command) {
     return null;
   }
 
@@ -72,8 +103,13 @@ function handlePreToolUse(data) {
     return null;
   }
 
-  var command = (data.tool_input && data.tool_input.command) || '';
-  if (!command) {
+  var disable = resolveDisable({
+    guard: 'destructive-command-guard',
+    disableValue: process.env.APEX_DESTRUCT_GUARD,
+    reason: process.env.APEX_GUARD_DISABLE_REASON,
+    subject: command
+  });
+  if (disable.disabled) {
     return null;
   }
 

@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * context-cap-guard - blocking PreToolUse gate for Write|Edit. ADR-037, refined by ADR-041.
+ * context-cap-guard - blocking PreToolUse gate for Write|Edit|MultiEdit. ADR-037, refined by ADR-041.
  *
  * Deterministically projects the size of a capped context file before the tool runs and denies
  * growth past its inclusive cap. An edit whose projected size does not exceed the on-disk size is
@@ -22,6 +22,8 @@
 
 const fs = require('fs');
 const path = require('path');
+
+const DEFAULT_STDIN_TIMEOUT_MS = 3000;
 
 const CAPS = [
   { match: /(^|[\\/])status\.md$/i, unit: 'lines', limit: 100,
@@ -53,24 +55,88 @@ function countOccurrences(content, needle) {
   }
 }
 
-function main() {
-  let raw = '';
-  try {
-    raw = fs.readFileSync(0, 'utf8');
-  } catch {
-    process.exit(0);
+function isNonArrayObject(value) {
+  return value !== null && typeof value === 'object' && !Array.isArray(value);
+}
+
+function deny(reason) {
+  return {
+    hookSpecificOutput: {
+      hookEventName: 'PreToolUse',
+      permissionDecision: 'deny',
+      permissionDecisionReason: reason,
+    },
+  };
+}
+
+function exitDenied(reason) {
+  process.stdout.write(JSON.stringify(deny(reason)), () => process.exit(0));
+}
+
+function configuredStdinTimeout() {
+  const raw = String(process.env.APEX_GUARD_STDIN_TIMEOUT_MS || '').trim();
+  if (!/^[1-9]\d*$/.test(raw)) return DEFAULT_STDIN_TIMEOUT_MS;
+
+  const milliseconds = Number(raw);
+  return Number.isSafeInteger(milliseconds) && milliseconds <= 2147483647
+    ? milliseconds
+    : DEFAULT_STDIN_TIMEOUT_MS;
+}
+
+function projectMultiEdit(currentContent, edits, sizeOf) {
+  let running = currentContent;
+
+  for (const edit of edits) {
+    if (!isNonArrayObject(edit) || typeof edit.old_string !== 'string' ||
+        typeof edit.new_string !== 'string') {
+      return null;
+    }
+
+    const occurrences = edit.replace_all
+      ? countOccurrences(running, edit.old_string)
+      : 1;
+
+    // Claude Code treats an empty old_string as one insertion, even though there are no
+    // non-overlapping occurrences to count.
+    if (edit.old_string.length === 0) {
+      running = edit.new_string + running;
+    } else if (occurrences > 0) {
+      running = edit.replace_all
+        ? running.split(edit.old_string).join(edit.new_string)
+        : running.replace(edit.old_string, edit.new_string);
+    }
   }
 
+  return sizeOf(running);
+}
+
+function main(raw) {
   let ev;
   try {
     ev = JSON.parse(raw);
   } catch {
-    process.exit(0);
+    exitDenied('Context cap guard blocked the tool call because its input was not validated.');
+    return;
   }
 
-  const input = ev?.tool_input;
-  const file = input?.file_path;
-  if (!file) process.exit(0);
+  if (!isNonArrayObject(ev)) {
+    exitDenied('Context cap guard blocked the tool call because its input was not validated.');
+    return;
+  }
+
+  if (!Object.prototype.hasOwnProperty.call(ev, 'tool_input')) process.exit(0);
+  if (!isNonArrayObject(ev.tool_input)) {
+    exitDenied('Context cap guard blocked the tool call because its input was not validated.');
+    return;
+  }
+
+  const input = ev.tool_input;
+  const file = input.file_path;
+  if (file === undefined || file === null || file === '') process.exit(0);
+  if (typeof file !== 'string') {
+    exitDenied('Context cap guard blocked the tool call because its input was not validated.');
+    return;
+  }
 
   const base = path.basename(file);
   const cap = CAPS.find((candidate) => candidate.match.test(base));
@@ -79,7 +145,14 @@ function main() {
   let currentContent = '';
   try {
     currentContent = fs.readFileSync(file, 'utf8');
-  } catch {}
+  } catch (error) {
+    if (error?.code !== 'ENOENT') {
+      exitDenied(
+        `Context cap guard blocked the tool call because ${base} could not be read and validated.`
+      );
+      return;
+    }
+  }
 
   const sizeOf = (content) => cap.unit === 'lines'
     ? newlineCount(content)
@@ -87,15 +160,32 @@ function main() {
   const current = sizeOf(currentContent);
 
   let projected;
-  if (Object.prototype.hasOwnProperty.call(input, 'content') &&
-      typeof input.content === 'string') {
+  const hasContent = Object.prototype.hasOwnProperty.call(input, 'content');
+  const hasOldString = Object.prototype.hasOwnProperty.call(input, 'old_string');
+  const hasNewString = Object.prototype.hasOwnProperty.call(input, 'new_string');
+  const hasEdits = Object.prototype.hasOwnProperty.call(input, 'edits');
+
+  if ((hasContent && typeof input.content !== 'string') ||
+      ((hasOldString || hasNewString) &&
+       (typeof input.old_string !== 'string' || typeof input.new_string !== 'string')) ||
+      (hasEdits && !Array.isArray(input.edits))) {
+    exitDenied('Context cap guard blocked the tool call because its input was not validated.');
+    return;
+  }
+
+  if (hasContent) {
     projected = sizeOf(input.content);
-  } else if (typeof input.old_string === 'string' &&
-             typeof input.new_string === 'string') {
+  } else if (hasOldString || hasNewString) {
     const occurrences = input.replace_all
       ? countOccurrences(currentContent, input.old_string)
       : 1;
     projected = current + occurrences * (sizeOf(input.new_string) - sizeOf(input.old_string));
+  } else if (hasEdits) {
+    projected = projectMultiEdit(currentContent, input.edits, sizeOf);
+    if (projected === null) {
+      exitDenied('Context cap guard blocked the tool call because its input was not validated.');
+      return;
+    }
   } else {
     process.exit(0);
   }
@@ -107,15 +197,29 @@ function main() {
     ? `${projected} bytes (cap ${cap.limit}, over by ${over})`
     : `${projected} lines (cap ${cap.limit}, over by ${over})`;
 
-  console.log(JSON.stringify({
-    hookSpecificOutput: {
-      hookEventName: 'PreToolUse',
-      permissionDecision: 'deny',
-      permissionDecisionReason:
-        `CONTEXT CAP BLOCKED - ${base} projects to ${label}.\n\n${cap.fix}`,
-    },
-  }));
-  process.exit(0);
+  exitDenied(`CONTEXT CAP BLOCKED - ${base} projects to ${label}.\n\n${cap.fix}`);
 }
 
-main();
+let rawInput = '';
+let stdinSettled = false;
+const stdinTimeout = setTimeout(() => {
+  stdinSettled = true;
+  exitDenied(
+    'Context cap guard blocked the tool call because input was not received or validated before the stdin timeout.'
+  );
+}, configuredStdinTimeout());
+
+process.stdin.setEncoding('utf8');
+process.stdin.on('data', (chunk) => { rawInput += chunk; });
+process.stdin.on('error', () => {
+  if (stdinSettled) return;
+  stdinSettled = true;
+  clearTimeout(stdinTimeout);
+  exitDenied('Context cap guard blocked the tool call because its input was not validated.');
+});
+process.stdin.on('end', () => {
+  if (stdinSettled) return;
+  stdinSettled = true;
+  clearTimeout(stdinTimeout);
+  main(rawInput);
+});
