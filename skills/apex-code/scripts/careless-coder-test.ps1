@@ -21,7 +21,7 @@ function Assert-Ok {
     if (-not $Condition) { $script:failures += 1 }
 }
 
-function New-Repo([string]$Path) {
+function New-Repo([string]$Path, [switch]$GreenBaseline) {
     if (Test-Path $Path) { Remove-Item -Recurse -Force $Path }
     New-Item -ItemType Directory -Force -Path (Join-Path $Path 'src') | Out-Null
     Push-Location $Path
@@ -30,6 +30,15 @@ function New-Repo([string]$Path) {
     'orig' | Out-File -Encoding ascii src/a.py
     'secret' | Out-File -Encoding ascii src/secret.txt
     'node_modules/' | Out-File -Encoding ascii .gitignore
+    if ($GreenBaseline) {
+        @(
+            '## Verify commands'
+            ''
+            '```'
+            'exit 0'
+            '```'
+        ) | Out-File -Encoding ascii AGENTS.md
+    }
     git add -A; git commit -q -m init
     Pop-Location
 }
@@ -89,7 +98,7 @@ $env:FAKE_CODEX_REPO = $repo; $env:FAKE_CODEX_NO_REPORT = '0'
 $env:FAKE_CODEX_STATUS = 'done'
 $env:FAKE_CODEX_VERDICT = 'P1: block handoff'      # schema-valid, unrecognised
 & $dispatch -Spec 'v' -Task 'gate' -Phase 'review' -Worktree $repo -BaseSha $sha -Prompt 'go' `
-    -Schema review -SkipScopeCheck -NoTreePin `
+    -Schema review -SkipScopeCheck -NoTreePin -NoTreePinReason 'verdict-only review fixture' `
     -CodexExecutable 'powershell.exe' `
     -CodexExecutableArgumentPrefix @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $fakeCodex) *> $null
 Assert-Ok ($LASTEXITCODE -eq 67) 'an unrecognised verdict blocks (67), never passes' "exit $LASTEXITCODE (want 67)"
@@ -102,7 +111,7 @@ Write-Host "`n--- #1  A CLEAN, IN-SCOPE BUILD MUST EXIT 0 ---" -ForegroundColor 
 # tree it is judging. Nothing in the suite caught it: the one test that would have was already
 # expecting a 65 for a different reason. This is the test that would have.
 $repo = Join-Path $root 'clean'
-New-Repo $repo
+New-Repo $repo -GreenBaseline
 Push-Location $repo; $sha = (git rev-parse HEAD); Pop-Location
 $env:FAKE_CODEX_REPO = $repo
 $env:FAKE_CODEX_STATUS = 'done'

@@ -27,11 +27,16 @@ param(
     # Records why the deliberate escape disabled the scope lock in the ledger row.
     [string]$ScopeUnlockedReason,
     # Two Codex workers in one working tree is a data race with a delete in it (see the guard below).
-    # Wave-parallel dispatch requires ONE WORKTREE PER CONCURRENT TASK. This overrides the refusal.
+    # Wave-parallel dispatch requires ONE WORKTREE PER CONCURRENT TASK. This overrides the refusal
+    # only when the caller also records why the unsafe sharing is deliberate.
     [switch]$AllowSharedWorktree,
+    # Records why the live-worker refusal was deliberately overridden in the ledger row.
+    [string]$AllowSharedWorktreeReason,
     # Read-only gates (review, end-gate) auto-pin the tree and VOID their verdict if it moves under
-    # them. This disables that. You almost never want it.
+    # them. This disables that only when the caller records why the verdict may proceed unpinned.
     [switch]$NoTreePin,
+    # Records why the read-only tree pin was deliberately disabled in the ledger row.
+    [string]$NoTreePinReason,
     # Bootstrap/emergency escape: bypass the dispatch pre-flight, recorded loudly and in the ledger row.
     [switch]$SkipBaselineCheck,
     # -CriticalFilesConfirmed is set ONLY by the apex-code skill's Layer A step after a real attended
@@ -65,6 +70,12 @@ param(
 $ErrorActionPreference = 'Stop'
 
 # Exit 74 = caller-contract error, refused before any I/O; no state dir touched.
+# -Phase cannot use ValidateSet: Windows PowerShell rejects an unknown value before this body runs
+# and reports exit 1, which is already the wrapper's child-failure meaning.
+if (@('build', 'review') -cnotcontains $Phase) {
+    Write-Host "[dispatch] REFUSED (exit 74): -Phase must be exactly 'build' or 'review' (got '$Phase')" -ForegroundColor Red
+    exit 74
+}
 if ($ScopeUnlocked -and $Authorized.Count -gt 0) {
     Write-Host '[dispatch] REFUSED (exit 74): -ScopeUnlocked and -Authorized are mutually exclusive — pass one, not both' -ForegroundColor Red
     exit 74
@@ -72,6 +83,34 @@ if ($ScopeUnlocked -and $Authorized.Count -gt 0) {
 if ($ScopeUnlocked -and [string]::IsNullOrWhiteSpace($ScopeUnlockedReason)) {
     Write-Host '[dispatch] REFUSED (exit 74): -ScopeUnlocked requires -ScopeUnlockedReason' -ForegroundColor Red
     exit 74
+}
+if ($AllowSharedWorktree -and [string]::IsNullOrWhiteSpace($AllowSharedWorktreeReason)) {
+    Write-Host '[dispatch] REFUSED (exit 74): -AllowSharedWorktree requires -AllowSharedWorktreeReason' -ForegroundColor Red
+    exit 74
+}
+if ($NoTreePin -and [string]::IsNullOrWhiteSpace($NoTreePinReason)) {
+    Write-Host '[dispatch] REFUSED (exit 74): -NoTreePin requires -NoTreePinReason' -ForegroundColor Red
+    exit 74
+}
+
+# Phase, report schema, and sandbox are one caller contract. A build-shaped review can manufacture a
+# review row without a verdict; a review-shaped build can manufacture a successful builder row while
+# skipping the build gates. Refuse either report shape before shared state is even initialized, and
+# preserve the existing safety normalization that forces a real review into read-only. Adoption
+# replays an existing row and therefore does not create either kind of reservation.
+if (-not $Adopt -and $Phase -ceq 'build' -and
+        (($Schema -cne 'completion') -or ($Sandbox -cne 'workspace-write'))) {
+    Write-Host "[dispatch] REFUSED (exit 74): -Phase build requires -Schema completion and -Sandbox workspace-write (got '$Schema/$Sandbox')" -ForegroundColor Red
+    exit 74
+}
+if (-not $Adopt -and $Phase -ceq 'review' -and
+        (@('review', 'endgate') -cnotcontains $Schema)) {
+    Write-Host "[dispatch] REFUSED (exit 74): -Phase review requires -Schema review or endgate (got '$Schema')" -ForegroundColor Red
+    exit 74
+}
+if (-not $Adopt -and $Phase -ceq 'review' -and $Sandbox -cne 'read-only') {
+    Write-Host "[dispatch] -Phase/-Schema '$Phase/$Schema' forces -Sandbox read-only (a reviewer must not edit what it judges)." -ForegroundColor DarkGray
+    $Sandbox = 'read-only'
 }
 
 function Get-UtcTimestamp {
@@ -209,7 +248,16 @@ function Update-LedgerRow {
         $updated = $false
         $outputLines = foreach ($line in [System.IO.File]::ReadAllLines($ledgerPath)) {
             if ([string]::IsNullOrWhiteSpace($line)) { continue }
-            $row = $line | ConvertFrom-Json
+            try {
+                $row = $line | ConvertFrom-Json
+            } catch {
+                # The reservation scan already refuses fresh/unknown corruption. A TTL-expired
+                # corpse must not make every later update impossible, so preserve its raw bytes while
+                # updating a different, parseable row. If the requested row is the damaged one,
+                # `$updated` remains false and the operation still fails closed below.
+                $line
+                continue
+            }
             if ($row.run_id -eq $RunId) {
                 foreach ($change in $Changes.GetEnumerator()) {
                     $row | Add-Member -NotePropertyName $change.Key -NotePropertyValue $change.Value -Force
@@ -345,6 +393,43 @@ function Test-LedgerRowLive {
 # excluding by name meant two dispatches of the SAME task name into one tree each ignored the other
 # and both launched -- the precise collision the guard exists to prevent. This is only ever called
 # BEFORE this run's own row is written, so there is nothing of ours to exclude.
+function Test-MalformedLedgerLineExpired {
+    param([Parameter(Mandatory)][string]$Line)
+
+    # Use the same 12-hour corpse ceiling as Test-LedgerRowLive. Only a timestamp positively
+    # recovered from the damaged text may expire the uncertainty; missing or invalid evidence stays
+    # live and therefore refuses.
+    if ($Line -notmatch '"started"\s*:\s*"(?<ledgerStarted>[^"]+)"') { return $false }
+    try {
+        $age = (Get-Date).ToUniversalTime() - ([datetime]$Matches.ledgerStarted).ToUniversalTime()
+        return ($age.TotalHours -gt 12)
+    } catch {
+        return $false
+    }
+}
+
+function Test-MalformedLedgerLineCouldBelongToWorktree {
+    param(
+        [Parameter(Mandatory)][string]$Line,
+        [Parameter(Mandatory)][string]$WorktreeKey
+    )
+
+    # A recovered different key proves the damaged row belongs to another tree. With no recoverable
+    # identity it could be ours, so uncertainty fails closed. Legacy rows may have only `worktree`.
+    if ($Line -match '"worktree_key"\s*:\s*"(?<ledgerWorktreeKey>[^"]*)"') {
+        return ([string]$Matches.ledgerWorktreeKey -eq $WorktreeKey)
+    }
+    if ($Line -match '"worktree"\s*:\s*"(?<ledgerWorktree>(?:\\.|[^"\\])*)"') {
+        try {
+            $decodedWorktree = ConvertFrom-Json -InputObject ('"' + $Matches.ledgerWorktree + '"')
+            return ((Get-WorktreeKey ([string]$decodedWorktree)) -eq $WorktreeKey)
+        } catch {
+            return $true
+        }
+    }
+    return $true
+}
+
 function Get-LiveDispatches {
     param([Parameter(Mandatory)][string]$WorktreeKey)
 
@@ -352,7 +437,17 @@ function Get-LiveDispatches {
     $live = @()
     foreach ($line in [System.IO.File]::ReadAllLines($ledgerPath)) {
         if ([string]::IsNullOrWhiteSpace($line)) { continue }
-        try { $row = $line | ConvertFrom-Json } catch { continue }
+        try {
+            $row = $line | ConvertFrom-Json
+        } catch {
+            if ((Test-MalformedLedgerLineCouldBelongToWorktree -Line $line -WorktreeKey $WorktreeKey) -and
+                    -not (Test-MalformedLedgerLineExpired -Line $line)) {
+                # Kept OUT of $live: -AllowSharedWorktree may override a known live worker, never an
+                # unreadable reservation whose ownership and liveness cannot be established.
+                if (-not $script:malformedLiveLedgerLine) { $script:malformedLiveLedgerLine = $line }
+            }
+            continue
+        }
         # 'stalled' is STILL LIVE: the watchdog flags a quiet run and deliberately does NOT kill it.
         # 'adopting' is LIVE: adoption is still running that run's gates. Treating it as terminal
         # freed the worktree mid-adoption -- and if adoption then threw (a missing helper), the row
@@ -379,6 +474,7 @@ function Invoke-Adopt {
         throw "Codex run ledger does not exist: $ledgerPath"
     }
 
+    $script:adoptLiveMatch = $null
     $match = Invoke-WithLedgerLock {
         $adoptKey = if ($Worktree) { Get-WorktreeKey $Worktree } else { $null }
         $matches = foreach ($line in [System.IO.File]::ReadAllLines($ledgerPath)) {
@@ -400,7 +496,28 @@ function Invoke-Adopt {
             if ($rowKey -ne $adoptKey) { continue }
             $row
         }
-        $matches | Sort-Object { [datetime]$_.started } -Descending | Select-Object -First 1
+        $selected = $matches | Sort-Object { [datetime]$_.started } -Descending | Select-Object -First 1
+        if ($null -eq $selected) { return $null }
+
+        # Test and claim under this SAME selection lock. Releasing it with the dead launcher/coder
+        # PIDs still in place let a dispatcher launch into the tree and let a second adopter select
+        # the same row. An adopting row is live too: another adopter is already running its gates.
+        if (($selected.status -eq 'running' -or $selected.status -eq 'stalled' -or $selected.status -eq 'adopting') -and
+                (Test-LedgerRowLive -Row $selected)) {
+            $script:adoptLiveMatch = $selected
+            return $selected
+        }
+
+        $adopterStamp = Get-ProcessStamp $PID
+        $adopterIdentity = @{
+            launcher_pid = $PID; launcher_start = $adopterStamp
+            pid = $PID; pid_start = $adopterStamp
+        }
+        Update-LedgerRow -RunId ([string]$selected.run_id) -Changes $adopterIdentity
+        foreach ($identityPart in $adopterIdentity.GetEnumerator()) {
+            $selected | Add-Member -NotePropertyName $identityPart.Key -NotePropertyValue $identityPart.Value -Force
+        }
+        $selected
     }
 
     if ($null -eq $match) {
@@ -413,13 +530,10 @@ function Invoke-Adopt {
     # tree that is still being written. On cap-deps-1b (2026-07-14) the coder kept writing for
     # 3.5 minutes after it was declared dead. Adopting a half-written tree is worse than waiting:
     # you verify and commit a torn build. So before showing anything, ask whether it is still alive.
-    # 'stalled' is NOT dead. The watchdog flags a run with no output and deliberately does NOT kill
-    # the child (process ownership stays with the caller). Checking liveness only for 'running' let
-    # -Adopt hand back a half-written tree for a coder that was demonstrably still alive -- exactly
-    # the failure this guard exists to prevent, reachable through the one status that means
-    # "quiet, and still going".
-    if (($match.status -eq 'running' -or $match.status -eq 'stalled') -and (Test-LedgerRowLive -Row $match)) {
-        Write-Host "[adopt] THE CODER IS STILL RUNNING -- pid $($match.pid), status '$($match.status)'. Nothing to adopt." -ForegroundColor Yellow
+    # This decision was made under the selection lock above. In particular, `adopting` means a first
+    # adopter owns the row; treating only running/stalled as live let a second adopter race its gates.
+    if ($script:adoptLiveMatch) {
+        Write-Host "[adopt] THE CODER OR ADOPTER IS STILL RUNNING -- pid $($match.pid), status '$($match.status)'. Nothing to adopt." -ForegroundColor Yellow
         Write-Host "[adopt] Your dispatch CALL died; the coder did not. Do not verify, do not commit: the tree is still being written." -ForegroundColor Yellow
         Write-Host "[adopt] The completion signal is the report file, and only that file:" -ForegroundColor Yellow
         Write-Host "[adopt]   $($match.final_path)" -ForegroundColor Yellow
@@ -440,10 +554,29 @@ function Invoke-Adopt {
     Write-Output $match.worktree
 
     $adoptStatus = 'unknown'
+    $adoptSchemaName = [string]$match.schema
+    $adoptCompletionSchema = @('completion', 'codex-completion-schema.json') -ccontains $adoptSchemaName
+    $adoptReviewSchema = @('review', 'codex-review-schema.json', 'endgate', 'afk-endgate-schema.json') -ccontains $adoptSchemaName
     if ($match.final_path -and (Test-Path -LiteralPath $match.final_path -PathType Leaf)) {
         try {
             $adoptReport = Get-Content -LiteralPath $match.final_path -Raw | ConvertFrom-Json
-            $adoptStatus = if ($adoptReport.status) { [string]$adoptReport.status } else { 'unknown' }
+            $reportedAdoptStatus = [string]$adoptReport.status
+
+            # Completion status is an exact, case-sensitive schema token. Review schemas carry no
+            # status at all; applying this allowlist to them would block every legitimate CLEAN.
+            if ($adoptCompletionSchema) {
+                if (@('done', 'done_with_concerns', 'blocked') -ccontains $reportedAdoptStatus) {
+                    $adoptStatus = $reportedAdoptStatus
+                }
+                else {
+                    $adoptStatus = 'blocked'
+                    Write-Host "[adopt] Invalid completion status '$reportedAdoptStatus'. Treating as blocked." -ForegroundColor Red
+                }
+            }
+            else {
+                $adoptStatus = 'unknown'
+            }
+
             # A report saying `done` does not undo a process that FAILED. The main path records
             # status:'failed' with the child's exit code; adoption used to derive `done` from the
             # report alone and rewrite the row as adopted-done, exiting 0 on a run that had failed.
@@ -451,10 +584,7 @@ function Invoke-Adopt {
                 Write-Host "[adopt] The report says 'done' but the run FAILED (exit $($match.error)). The process outranks the claim." -ForegroundColor Red
                 $adoptStatus = 'blocked'
             }
-            # Same coupling as the main path: a blocker or unresolved work contradicts `done`.
-            if ($adoptReport.blocker -and $adoptStatus -eq 'done') { $adoptStatus = 'blocked' }
-            elseif (@($adoptReport.unresolved).Count -gt 0 -and $adoptStatus -eq 'done') { $adoptStatus = 'done_with_concerns' }
-            if ($adoptReport.PSObject.Properties.Name -contains 'verdict') {
+            if ($adoptReviewSchema -and $adoptReport.PSObject.Properties.Name -contains 'verdict') {
                 # Match the MAIN path's rules exactly. This used to test `BLOCK*` (prefix) while the
                 # main path tested `*BLOCK*` (substring), so an end-gate verdict of "P1: block
                 # handoff" was unmatched here, left $adoptStatus 'unknown', and adopted as EXIT 0.
@@ -484,6 +614,20 @@ function Invoke-Adopt {
                 elseif ($v -eq 'CLEAN' -or $v -eq 'PASS' -or $v -eq 'OK') { if ($adoptStatus -eq 'unknown') { $adoptStatus = 'done' } }
                 else { $adoptStatus = 'blocked' }   # unrecognised verdict: fail closed
             }
+            elseif ($adoptReviewSchema) {
+                # A review/end-gate status is not a verdict. Without verdict evidence the gate did
+                # not run, even if a stray `status: done` property is present.
+                $adoptStatus = 'blocked'
+                Write-Host '[adopt] The review report carried no verdict. Treating as blocked.' -ForegroundColor Red
+            }
+            elseif (-not $adoptCompletionSchema) {
+                $adoptStatus = 'blocked'
+                Write-Host "[adopt] Unrecognised ledger schema '$adoptSchemaName'. Treating as blocked." -ForegroundColor Red
+            }
+
+            # Same coupling as the main path: a blocker or unresolved work contradicts `done`.
+            if ($adoptReport.blocker -and $adoptStatus -eq 'done') { $adoptStatus = 'blocked' }
+            elseif ($adoptReport.unresolved -and @($adoptReport.unresolved).Count -gt 0 -and $adoptStatus -eq 'done') { $adoptStatus = 'done_with_concerns' }
             foreach ($u in @($adoptReport.unresolved)) { if ($u) { Write-Host "[adopt] UNRESOLVED: $u" -ForegroundColor Yellow } }
             if ($adoptReport.blocker) { Write-Host "[adopt] BLOCKER: $($adoptReport.blocker)" -ForegroundColor Red }
         } catch {
@@ -505,7 +649,9 @@ function Invoke-Adopt {
         Update-LedgerRow -RunId ([string]$match.run_id) -Changes @{
             status = 'adopting'; adopted = $true; report_status = $adoptStatus
         }
-    } catch { Write-Host "[adopt] WARNING: could not update the ledger row: $($_.Exception.Message)" -ForegroundColor Yellow }
+    } catch {
+        throw "[adopt] Could not durably mark the ledger row adopting: $($_.Exception.Message)"
+    }
 
     # The working tree, not just commits: the coder leaves its work UNCOMMITTED by contract.
     & git -C $match.worktree --no-pager diff $match.base_sha
@@ -558,7 +704,9 @@ function Invoke-Adopt {
             Write-Host "[adopt] The tree MOVED while this gate was open -- the adopted verdict is VOID." -ForegroundColor Red
             try {
                 Update-LedgerRow -RunId ([string]$match.run_id) -Changes @{ status = 'adopted-void'; ended = (Get-UtcTimestamp); adopted = $true }
-            } catch { }
+            } catch {
+                throw "[adopt] Could not durably close the moved-tree ledger row: $($_.Exception.Message)"
+            }
             # `blocked` outranks a void tree, exactly as on the main path. Exiting 69 first meant an
             # orphaned run that reported BLOCK *and* whose tree moved came back 69, and the caller
             # never learned it was blocked. Same contract, two implementations -- and they disagreed.
@@ -594,7 +742,9 @@ function Invoke-Adopt {
             scopeViolation = ($adoptScopeExit -ne 0); scope_exit = $adoptScopeExit
             encoding_violation = $adoptEncodingViolation
         }
-    } catch { Write-Host "[adopt] WARNING: could not close the ledger row: $($_.Exception.Message)" -ForegroundColor Yellow }
+    } catch {
+        throw "[adopt] Could not durably close the ledger row: $($_.Exception.Message)"
+    }
 
     Write-Host "[adopt] reported status: $adoptStatus" -ForegroundColor DarkGray
     if ($adoptStatus -eq 'blocked') {
@@ -648,15 +798,8 @@ if (-not (Test-Path -LiteralPath $schemaPath -PathType Leaf)) {
 # The scan and the ledger reservation are ONE ATOMIC OPERATION, under the same named mutex the
 # ledger already uses. Scanning and then writing as two steps is a race in its own right: two
 # dispatches can both complete the scan before either records a row, and both then launch into the
-# tree the check was supposed to keep exclusive.
-if (($Phase -eq 'review' -or $Schema -eq 'review' -or $Schema -eq 'endgate') -and $Sandbox -ne 'read-only') {
-    # A review/end-gate must not be able to EDIT the tree it is judging. Making the caller remember
-    # -Sandbox read-only is exactly the kind of instruction this harness keeps learning not to trust:
-    # the standing end-gate ran with repo write access for months despite a runbook promising it
-    # "never auto-edits anything". Force it.
-    Write-Host "[dispatch] -Phase/-Schema '$Phase/$Schema' forces -Sandbox read-only (a reviewer must not edit what it judges)." -ForegroundColor DarkGray
-    $Sandbox = 'read-only'
-}
+# tree the check was supposed to keep exclusive. Phase/schema/sandbox compatibility was already
+# validated (and review write access normalized) at the no-I/O caller-contract boundary above.
 
 # Exit 74 = refused before reservation; NO ledger row/log for this run (shared state dirs already exist, as with exit 72).
 if ($Phase -eq 'build' -and $Sandbox -eq 'workspace-write' -and $Authorized.Count -eq 0 -and -not $ScopeUnlocked) {
@@ -788,10 +931,11 @@ try {
 
 $worktreeKey = Get-WorktreeKey $Worktree
 
-# Logs and pins are keyed by WORKTREE as well as spec/task. Concurrent dispatches in different
-# worktrees are not just allowed, they are the prescribed way to run a wave -- and they were sharing
-# one log file: the second dispatch truncated the first, and each watchdog watched the other's
-# LastWriteTime, so a genuinely silent run could be kept "alive" by its sibling's output.
+# Logs and pins are keyed by WORKTREE as well as spec/task, and each log also carries its run id.
+# Concurrent dispatches in different worktrees are not just allowed, they are the prescribed way to
+# run a wave -- and they were sharing one log file. Worse, a refused same-tree dispatch truncated the
+# live run's log and reset its watchdog before the reservation check could stop it. A per-run path
+# means this invocation can only ever truncate its own new log.
 $wtSha = [System.Security.Cryptography.SHA256]::Create()
 try {
     $worktreeTag = [System.BitConverter]::ToString(
@@ -821,11 +965,11 @@ Assert-NotInsideRepo -Path $ScratchDirectory -What 'The -ScratchDirectory (which
 [System.IO.Directory]::CreateDirectory($ScratchDirectory) | Out-Null
 $safeSpec = ConvertTo-SafeFileName $Spec
 $safeTask = ConvertTo-SafeFileName $Task
-$logPath = Join-Path $logDirectory "codex-$safeSpec-$safeTask-$($worktreeTag).log"
+$runId = [guid]::NewGuid().ToString('N')
+$logPath = Join-Path $logDirectory "codex-$safeSpec-$safeTask-$($worktreeTag)-$($runId.Substring(0,8)).log"
 
 [System.IO.File]::WriteAllText($logPath, [string]::Empty, [System.Text.UTF8Encoding]::new($false))
 
-$runId = [guid]::NewGuid().ToString('N')
 # The key under which this run's GATE EVIDENCE is filed. It carries the run id, so no two runs can
 # ever read or overwrite each other's snapshot or pin -- however their spec/task names collapse.
 $gateKey = "$safeSpec-$safeTask-$($runId.Substring(0,8))"
@@ -869,11 +1013,15 @@ $ledgerRow = [ordered]@{
     sandbox = $Sandbox
     baseline_skipped = [bool]$baselineSkipped
     # What this run ARMED, so -Adopt can run the gates the dead wrapper never reached.
-    scope_armed = ($Authorized.Count -gt 0 -and -not $SkipScopeCheck)
+    scope_armed = ($Authorized.Count -gt 0)
     scope_task = $gateKey
     authorized = @($Authorized)
     scope_unlocked = [bool]$ScopeUnlocked
     scope_unlocked_reason = $(if ($ScopeUnlocked) { $ScopeUnlockedReason } else { '' })
+    shared_worktree = [bool]$AllowSharedWorktree
+    shared_worktree_reason = $(if ($AllowSharedWorktree) { $AllowSharedWorktreeReason } else { '' })
+    tree_pin_disabled = [bool]$NoTreePin
+    tree_pin_disabled_reason = $(if ($NoTreePin) { $NoTreePinReason } else { '' })
     critical_files_confirmed = [bool]$CriticalFilesConfirmed
     critical_files_confirmed_note = $(if ($CriticalFilesConfirmed) { $CriticalFilesConfirmedNote } else { '' })
     builder_family = $(if ($Phase -eq 'build') { Get-ModelFamily $coderModel } else { '' })
@@ -898,18 +1046,42 @@ $ledgerRow = [ordered]@{
 # Wave-parallel dispatch (ADR-028) is still correct. It just requires ONE WORKTREE PER CONCURRENT
 # TASK (`git worktree add`), which is what -Worktree is for.
 $refused = $null
+$script:malformedRefusal = $null
 Invoke-WithLedgerLock {
+    $script:malformedLiveLedgerLine = $null
     $liveHere = @(Get-LiveDispatches -WorktreeKey $worktreeKey)
+    if ($script:malformedLiveLedgerLine) {
+        $script:malformedRefusal = $script:malformedLiveLedgerLine
+        return
+    }
     if ($liveHere.Count -gt 0 -and -not $AllowSharedWorktree) {
         $script:refused = $liveHere
         return
     }
     [System.IO.Directory]::CreateDirectory($ledgerDirectory) | Out-Null
+    # A killed append may leave the expired malformed corpse without its trailing newline. If this
+    # reservation is concatenated directly onto it, our brand-new row becomes part of the same bad
+    # line and can never be updated. Keep the corpse, but terminate its line before appending ours.
+    $ledgerSeparator = ''
+    if ((Test-Path -LiteralPath $ledgerPath) -and (Get-Item -LiteralPath $ledgerPath).Length -gt 0) {
+        $ledgerText = [System.IO.File]::ReadAllText($ledgerPath)
+        if (-not $ledgerText.EndsWith("`n") -and -not $ledgerText.EndsWith("`r")) {
+            $ledgerSeparator = [Environment]::NewLine
+        }
+    }
     [System.IO.File]::AppendAllText(
         $ledgerPath,
-        ($ledgerRow | ConvertTo-Json -Compress -Depth 8) + [Environment]::NewLine,
+        $ledgerSeparator + ($ledgerRow | ConvertTo-Json -Compress -Depth 8) + [Environment]::NewLine,
         [System.Text.UTF8Encoding]::new($false)
     )
+}
+
+if ($script:malformedRefusal) {
+    $badLedgerLine = [string]$script:malformedRefusal
+    if ($badLedgerLine.Length -gt 240) { $badLedgerLine = $badLedgerLine.Substring(0, 240) + '...' }
+    Write-Host "[dispatch] REFUSED (exit 71): a ledger line could not be parsed: $badLedgerLine" -ForegroundColor Red
+    Write-Host '[dispatch] Its reservation may still be live. Repair or expire the row before dispatching into this worktree.' -ForegroundColor Red
+    exit 71
 }
 
 if ($refused) {
@@ -922,9 +1094,16 @@ if ($refused) {
     Write-Host ''
     Write-Host "[dispatch] Give each concurrent task its OWN worktree:" -ForegroundColor Yellow
     Write-Host "[dispatch]     git worktree add ../wt-$safeTask $BaseSha" -ForegroundColor Yellow
-    Write-Host "[dispatch] then pass it as -Worktree. Or dispatch serially. -AllowSharedWorktree overrides." -ForegroundColor Yellow
+    Write-Host "[dispatch] then pass it as -Worktree. Or dispatch serially. -AllowSharedWorktree with a recorded reason overrides." -ForegroundColor Yellow
     Write-Host ''
     exit 71
+}
+
+if ($AllowSharedWorktree) {
+    Write-Host "[dispatch] -AllowSharedWorktree: LIVE-WORKER REFUSAL DELIBERATELY OVERRIDDEN -- reason: $AllowSharedWorktreeReason" -ForegroundColor Yellow
+}
+if ($NoTreePin) {
+    Write-Host "[dispatch] -NoTreePin: READ-ONLY TREE PIN DELIBERATELY DISABLED -- reason: $NoTreePinReason" -ForegroundColor Yellow
 }
 
 # --- Host-side scope enforcement (snapshot) -------------------------------------------------------
@@ -972,7 +1151,7 @@ $treePinLabel = $gateKey
 $treePinArmed = $false
 if ((-not $NoTreePin) -and ($Sandbox -eq 'read-only' -or $Phase -eq 'review') -and -not (Test-Path $treePinScript)) {
     Update-LedgerRow -RunId $runId -Changes @{ status = 'failed'; ended = (Get-UtcTimestamp); error = 'tree-pin.ps1 missing' }
-    throw "A read-only gate must be pinned, but tree-pin.ps1 is missing ($treePinScript). Refusing: an unpinned gate can bless a tree that moved under it. Pass -NoTreePin to opt out deliberately."
+    throw "A read-only gate must be pinned, but tree-pin.ps1 is missing ($treePinScript). Refusing: an unpinned gate can bless a tree that moved under it. Pass -NoTreePin -NoTreePinReason '<why>' to opt out deliberately."
 }
 if ((-not $NoTreePin) -and ($Sandbox -eq 'read-only' -or $Phase -eq 'review') -and (Test-Path $treePinScript)) {
     & $treePinScript -Pin -Worktree $Worktree -Label $treePinLabel -PinDirectory $harnessStateDir | Write-Host
@@ -1215,7 +1394,23 @@ try {
     if (Test-Path -LiteralPath $finalPath -PathType Leaf) {
         try {
             $report = Get-Content -LiteralPath $finalPath -Raw | ConvertFrom-Json
-            $reportStatus = [string]$report.status
+            $reportedCompletionStatus = [string]$report.status
+            if ($Schema -ceq 'completion') {
+                # The completion schema has exactly three status tokens. PowerShell's normal
+                # membership operators are case-insensitive, so use -ccontains deliberately: DONE
+                # is not the schema token `done`, and an empty or invented status is not success.
+                if (@('done', 'done_with_concerns', 'blocked') -ccontains $reportedCompletionStatus) {
+                    $reportStatus = $reportedCompletionStatus
+                }
+                else {
+                    $reportStatus = 'blocked'
+                    $blocker = "Invalid completion status '$reportedCompletionStatus'. Failing closed."
+                }
+            }
+            else {
+                # A stray status on a review is not gate evidence. Only its verdict may close it.
+                $reportStatus = $null
+            }
 
             # A REVIEW report has no `status` -- it has `verdict` (BLOCK / FLAG / CLEAN), and its
             # findings live in `findings`. Reading only `status` left it empty, so $status stayed
@@ -1225,7 +1420,7 @@ try {
             # returned BLOCK and both exited 0. The only reason the findings were acted on is that
             # the host read the report by hand. A mechanism built to stop people trusting exit codes
             # was itself trusting an exit code. (Found by the second of those reviews.)
-            if ($report.PSObject.Properties.Name -contains 'verdict') {
+            if ($Schema -cne 'completion' -and ($report.PSObject.Properties.Name -contains 'verdict')) {
                 $reviewVerdict = [string]$report.verdict
                 # Count only findings that ACTUALLY flag something. codex-review.md tells a clean
                 # reviewer to return a single CLEAN finding -- counting that as a concern made exit 0
@@ -1274,10 +1469,11 @@ try {
                     $blocker = "Unrecognised review verdict '$reviewVerdict' ($findingCount finding(s)). Failing closed: an unknown gate state is not a pass."
                 }
             }
-            elseif ($Schema -ne 'completion' -and -not $reportStatus) {
-                # A review/end-gate schema report with NO verdict and NO status says nothing at all.
+            elseif ($Schema -cne 'completion') {
+                # A review/end-gate report with NO verdict says nothing at all. A stray status field
+                # cannot substitute for the verdict that the family gate is meant to consume.
                 $reportStatus = 'blocked'
-                $blocker = 'The review report carried neither a verdict nor a status. A gate that said nothing did not pass.'
+                $blocker = 'The review report carried no verdict. A gate that said nothing did not pass.'
             }
 
             if ($report.unresolved) { $unresolved += @($report.unresolved) }

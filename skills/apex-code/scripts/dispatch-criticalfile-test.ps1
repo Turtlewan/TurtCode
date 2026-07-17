@@ -288,6 +288,7 @@ try {
             Schema = 'review'
             ReviewedRunId = 'sentinel-123'
             NoTreePin = $true
+            NoTreePinReason = 'review ledger fixture'
         } -FakeEnvironment @{ FAKE_CODEX_VERDICT = 'CLEAN' }
     $row = @($result.Rows) | Select-Object -First 1
     Assert-Case -Label 'case 10 review bypasses critical gate and records review linkage' `

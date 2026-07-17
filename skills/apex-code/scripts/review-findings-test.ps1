@@ -24,13 +24,22 @@ function Assert-Ok {
     if (-not $Condition) { $script:failures += 1 }
 }
 
-function New-Repo([string]$Path) {
+function New-Repo([string]$Path, [switch]$GreenBaseline) {
     if (Test-Path $Path) { Remove-Item -Recurse -Force $Path }
     New-Item -ItemType Directory -Force -Path (Join-Path $Path 'src') | Out-Null
     Push-Location $Path
     git init -q
     git config user.email 't@t.t'; git config user.name 't'
     'orig' | Out-File -Encoding ascii src/a.py
+    if ($GreenBaseline) {
+        @(
+            '## Verify commands'
+            ''
+            '```'
+            'exit 0'
+            '```'
+        ) | Out-File -Encoding ascii AGENTS.md
+    }
     git add -A; git commit -q -m init
     Pop-Location
 }
@@ -139,7 +148,7 @@ Write-Host "`n--- #5  a scope result must NOT swallow the `blocked` hard stop --
 # 'scope-violation' and exited 65 -- so the host read "reverted, carry on" and committed
 # code the coder had never verified.
 $repo = Join-Path $root 'f5'
-New-Repo $repo
+New-Repo $repo -GreenBaseline
 $env:FAKE_CODEX_REPO = $repo
 $env:FAKE_CODEX_STATUS = 'blocked'
 $env:FAKE_CODEX_NO_REPORT = '0'
@@ -155,13 +164,15 @@ Write-Host "`n--- #11  two runs must not collide on one report file ---" -Foregr
 # spec=a-b/task=c and spec=a/task=b-c both produced codex-a-b-c.final. And the dispatcher DELETED any
 # pre-existing report at launch -- so one run could destroy another's live verdict.
 $repo = Join-Path $root 'f11'
-New-Repo $repo
+New-Repo $repo -GreenBaseline
 Push-Location $repo; $sha = (git rev-parse HEAD); Pop-Location
 $env:FAKE_CODEX_REPO = $repo; $env:FAKE_CODEX_STATUS = 'done'; $env:FAKE_CODEX_NO_REPORT = '0'
 $before = @(Get-ChildItem $env:TEMP -Filter 'codex-a*-*.final' -ErrorAction SilentlyContinue).Count
 & $dispatch -Spec 'a-b' -Task 'c' -Phase 'build' -Worktree $repo -BaseSha $sha -Prompt 'go' -SkipScopeCheck `
+    -Authorized @('src/a.py', 'src/b.py', 'src/rogue.py') `
     -CodexExecutable 'powershell.exe' -CodexExecutableArgumentPrefix @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $fakeCodex) *> $null
 & $dispatch -Spec 'a' -Task 'b-c' -Phase 'build' -Worktree $repo -BaseSha $sha -Prompt 'go' -SkipScopeCheck `
+    -Authorized @('src/a.py', 'src/b.py', 'src/rogue.py') `
     -CodexExecutable 'powershell.exe' -CodexExecutableArgumentPrefix @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $fakeCodex) *> $null
 $after = @(Get-ChildItem $env:TEMP -Filter 'codex-a*-*.final' -ErrorAction SilentlyContinue).Count
 Assert-Ok (($after - $before) -ge 2) 'the two ambiguous spec/task pairs wrote SEPARATE reports' "$($after - $before) new report(s)"
@@ -173,10 +184,29 @@ $repo = Join-Path $root 'f10'
 New-Repo $repo
 Push-Location $repo; $sha = (git rev-parse HEAD); Pop-Location
 # The fake coder WRITES to the tree; under a read-only review gate that must void the verdict.
+$reviewFakeCodex = Join-Path $root 'f10-review-fakecodex.ps1'
+@'
+$prompt = [Console]::In.ReadToEnd()
+if ([string]::IsNullOrWhiteSpace($prompt)) { exit 1 }
+Set-Location $env:FAKE_CODEX_REPO
+Add-Content -Path 'src/a.py' -Value 'review moved the tree'
+$finalPath = $null
+for ($i = 0; $i -lt $args.Count - 1; $i++) {
+    if ($args[$i] -eq '-o') { $finalPath = $args[$i + 1]; break }
+}
+$report = [ordered]@{
+    verdict = 'CLEAN'
+    findings = @(
+        [ordered]@{ severity = 'CLEAN'; file = ''; line = $null; criterion = $null; rationale = 'No findings.' }
+    )
+}
+[System.IO.File]::WriteAllText($finalPath, ($report | ConvertTo-Json -Depth 8), [System.Text.UTF8Encoding]::new($false))
+exit 0
+'@ | Out-File -LiteralPath $reviewFakeCodex -Encoding ascii
 $env:FAKE_CODEX_REPO = $repo; $env:FAKE_CODEX_STATUS = 'done'; $env:FAKE_CODEX_NO_REPORT = '0'
 & $dispatch -Spec 'f10' -Task 'rev' -Phase 'review' -Worktree $repo -BaseSha $sha -Prompt 'review it' `
-    -Sandbox 'read-only' -SkipScopeCheck `
-    -CodexExecutable 'powershell.exe' -CodexExecutableArgumentPrefix @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $fakeCodex) *> $null
+    -Schema 'review' -Sandbox 'read-only' -SkipScopeCheck `
+    -CodexExecutable 'powershell.exe' -CodexExecutableArgumentPrefix @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $reviewFakeCodex) *> $null
 Assert-Ok ($LASTEXITCODE -eq 69) 'a review whose tree moved returns VOID (69), not its verdict' "exit $LASTEXITCODE (want 69)"
 Remove-Item Env:\FAKE_CODEX_STATUS, Env:\FAKE_CODEX_NO_REPORT, Env:\FAKE_CODEX_REPO -ErrorAction SilentlyContinue
 

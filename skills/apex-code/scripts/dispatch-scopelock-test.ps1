@@ -247,6 +247,7 @@ try {
     $result = Invoke-DispatchCase -CaseName 'deliberately unlocked build' -Spec $spec -Repo $repo -ExtraParameters @{
         ScopeUnlocked = $true
         ScopeUnlockedReason = 'bootstrap alpha'
+        CriticalFilesConfirmed = $true
     } -FakeEnvironment @{ FAKE_CODEX_INSCOPE_ONLY = '1' }
     $row = if ($result.Rows.Count -eq 1) { $result.Rows[0] } else { $null }
     $fakeLogText = if ($result.Logs.Count -gt 0) { Get-Content -LiteralPath $result.Logs[0].FullName -Raw } else { '' }
@@ -261,7 +262,9 @@ try {
     $repo = New-FixtureRepo -Name 'review-exempt'
     $result = Invoke-DispatchCase -CaseName 'review without scope flags' -Spec $spec -Repo $repo -ExtraParameters @{
         Phase = 'review'
+        Schema = 'review'
         NoTreePin = $true
+        NoTreePinReason = 'scope exemption fixture'
     } -FakeEnvironment @{ FAKE_CODEX_INSCOPE_ONLY = '1' }
     Assert-Case -Label 'review no-scope exempt' -Condition ($result.ExitCode -ne 74) -Detail "expected not 74, got $($result.ExitCode)"
     Assert-Case -Label 'review forced read-only' -Condition ($result.Rows.Count -eq 1 -and $result.Rows[0].sandbox -eq 'read-only') -Detail "sandbox=$($result.Rows[0].sandbox)"
