@@ -13,8 +13,14 @@ printf '%s' "<dispatch pack>" | codex exec -p apex-coder --sandbox workspace-wri
   -C <repo-or-worktree> --json \
   --output-schema ~/.claude/skills/apex-code/references/codex-completion-schema.json \
   -o <scratch>/codex-<task>.final --color never \
-  > docs/progress/codex-<task>.log 2>&1
+  > <ledgerDir>/codex-logs/codex-<spec>-<task>-<worktreeTag>-<runId8>.log 2>&1
 ```
+
+The log lives **outside the target repo**, beside the ledger — `<ledgerDirectory>\codex-logs\`, i.e.
+`%LOCALAPPDATA%\apex\progress\codex-logs\` (or `%APEX_STATE_DIR%\progress\codex-logs\`). The wrapper
+moved it out of the tree because the harness must not write into the tree it is judging (a log inside
+`docs/progress/` read as an unauthorized write and failed every clean build). Never write it into the
+worktree.
 
 - `-c model_reasoning_effort="<effort>"` → the spec's `coder_effort` frontmatter (`{low|medium|high|xhigh|max|ultra}`,
   default `medium`; ADR-030). Omit the flag when the spec is at `medium` to keep the default behaviour.
@@ -40,7 +46,7 @@ printf '%s' "<dispatch pack>" | codex exec -p apex-coder --sandbox workspace-wri
 The old Sol model rung (ADR-032) is **gone**: `gpt-5.6-sol` *is* the coder now (ADR-034), so there is no
 higher Codex model to escalate to — the dial is the whole ladder.
 - `--json` → Codex's event stream (reasoning, every shell command it runs, and per-turn `usage` token
-  counts) as JSONL to `docs/progress/codex-<task>.log`. **This is the live feed** — both the user's
+  counts) as JSONL to the external `codex-logs\` log (path above). **This is the live feed** — both the user's
   deep-inspection file and the host's pulse source (below). The `usage` events make the log a live
   Codex-cost/quota meter.
 - `-o <…>.final` → the schema-constrained completion JSON (ADR-031: status / changed_files /
@@ -57,7 +63,8 @@ backgrounded dispatch runs, **the host emits a one-line progress pulse to chat a
 (when you poll the background shell, and at most ~every 60–90s — never busy-loop):
 
 1. Read only the **tail** of the background output (Bash `BashOutput` on the bg shell, or the last lines of
-   `docs/progress/codex-<task>.log`) — never the whole log.
+   the external `codex-logs\` log, `%LOCALAPPDATA%\apex\progress\codex-logs\codex-<spec>-<task>-<worktreeTag>-<runId8>.log`
+   — or `%APEX_STATE_DIR%\progress\codex-logs\...`) — never the whole log.
 2. Extract three things from the newest events: the latest shell command / file Codex touched, the latest
    test/verify result if any, and the most recent `usage` total.
 3. Emit **one line**, then discard the read — do not keep log text in context:
@@ -78,8 +85,9 @@ also why the ADR-029 supervision gate's foreground specs were never truly "watch
 for every spec; the gate's real reason is host *supervision/intervention*, not raw visibility.
 
 ## Teardown
-The log is a transient build artifact — remove `docs/progress/codex-<task>.log` at worktree/spec
-teardown, or add `docs/progress/*.log` to the project `.gitignore` once. Never commit it.
+The log is a transient build artifact living in the external state dir (`<ledgerDirectory>\codex-logs\`),
+not in the repo — so it never needs `.gitignore` and can never be committed. Prune old
+`codex-logs\*.log` files at worktree/spec teardown.
 
 ## Durable dispatcher (ADR-033 A4)
 
@@ -99,7 +107,8 @@ dispatch — `references/dispatch-pack.md`).
 **Mechanics:**
 - Launches Codex via `System.Diagnostics.Process` (not `Start-Process`), writes the dispatch pack
   to the child's redirected stdin, then **immediately closes it** — this is the load-bearing fix.
-- Appends a row to `docs/progress/codex-run-ledger.jsonl` (JSONL, one object per line) **before**
+- Appends a row to the external ledger `<ledgerDirectory>\codex-run-ledger.jsonl` =
+  `%LOCALAPPDATA%\apex\progress\codex-run-ledger.jsonl` (JSONL, one object per line) **before**
   launch: `{run_id, pid, worktree, spec, task, base_sha, phase, started, log_path, status:
   "running"}`. On exit, the same row is rewritten in place (temp-file + atomic replace, mutex-
   serialized across concurrent wrappers) with `status: "done"|"failed"` + `ended`.
@@ -113,5 +122,6 @@ dispatch — `references/dispatch-pack.md`).
 - Windows npm-shim note: `codex` resolves to a `.ps1`/`.cmd` shim that `UseShellExecute=$false`
   cannot execute directly; the wrapper resolves the real `node.exe` + `codex.js` entry point and
   invokes that instead.
-- The ledger is runtime state, not source — do not hand-edit it; `docs/progress/` already holds
-  the per-task `--json` logs the ledger's `log_path` field points at.
+- The ledger is runtime state, not source — do not hand-edit it; the external
+  `<ledgerDirectory>\codex-logs\` already holds the per-task `--json` logs the ledger's `log_path`
+  field points at.

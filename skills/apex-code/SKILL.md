@@ -1,7 +1,7 @@
 ---
 skill: apex-code
 backend: claude
-version: 2.8.0
+version: 2.8.1
 last_updated: 2026-07-17
 sources:
   - docs/technical/adr/ADR-027-codex-primary-opus-fallback-deepseek-archived.md
@@ -192,7 +192,10 @@ nothing, and then *every authorized file reads as a violation*. The wrapper spli
 defensively, but pass it properly.
 
 - Omit `-Effort` at `medium`.
-- The run streams to a tailable `docs/progress/codex-<spec>-<task>.log`. **Post a one-line progress
+- The run streams to a tailable log **outside the target repo**, beside the ledger:
+  `<ledgerDirectory>\codex-logs\codex-<spec>-<task>-<worktreeTag>-<runId8>.log` (i.e.
+  `%LOCALAPPDATA%\apex\progress\codex-logs\...`, or `%APEX_STATE_DIR%\progress\codex-logs\...`).
+  **Post a one-line progress
   pulse to chat per check-in** — a backgrounded Codex is otherwise invisible until it exits.
   Recipe → `references/codex-observability.md`.
 - **Read the completion from `<scratch>/codex-<spec>-<task>.final`** (what `-o` captures — the final
@@ -339,8 +342,23 @@ never changed, only what was inside it, so a `git status` check would have seen 
    - Human review: `phase:"human-review"`, `attended:true`, and `reviewed_run_id` equal to the
      selected build's `run_id`.
 
-   Append with `Add-Content -LiteralPath <ledger> -Encoding utf8 -Value <json-line>`. For a
-   cross-family Codex review dispatched through the wrapper, pass
+   Append **under the same named mutex the wrapper uses** — a bare `Add-Content` races the
+   wrapper's `Update-LedgerRow` rewrite: if the append lands after the wrapper reads the ledger but
+   before its `[System.IO.File]::Replace`, the row is silently dropped, and a lost newer build row
+   lets `apex-family-gate` pass an older reviewed build. The append MUST serialize with the rewrite:
+
+   ```powershell
+   $m = [System.Threading.Mutex]::new($false, 'ApexCodexRunLedger')
+   $held = $false
+   try {
+     try { $held = $m.WaitOne([TimeSpan]::FromSeconds(30)) }
+     catch [System.Threading.AbandonedMutexException] { $held = $true }
+     Add-Content -LiteralPath <ledger> -Encoding utf8 -Value <json-line>
+   } finally { if ($held) { $m.ReleaseMutex() }; $m.Dispose() }
+   ```
+
+   (Same mutex name, 30 s wait, and AbandonedMutexException handling as
+   `codex-dispatch.ps1`.) For a cross-family Codex review dispatched through the wrapper, pass
    `-ReviewedRunId <build run_id>` to `codex-dispatch.ps1`; the wrapper records the binding.
 5. **Completion gate -- run it; do not eyeball the ledger:**
 
