@@ -54,7 +54,7 @@ $state1 = Join-Path $parent 'utf8-state'; New-Item -ItemType Directory -Force -P
 $marker = Join-Path $parent 'utf8-marker.txt'
 $emDash = [char]0x2014
 $env:APEX_STATE_DIR = $state1; $env:UTF8_MARKER = $marker
-& $dispatch -Spec 'utf8' -Task 't' -Phase 'build' -Worktree $repo1 -BaseSha $sha1 -Prompt ("Implement it $emDash with an em-dash.") -SkipScopeCheck `
+& $dispatch -Spec 'utf8' -Task 't' -Phase 'build' -Worktree $repo1 -BaseSha $sha1 -Prompt ("Implement it $emDash with an em-dash.") -Authorized @('src/a.py') -SkipScopeCheck -SkipBaselineCheck `
     -CodexExecutable 'powershell.exe' -CodexExecutableArgumentPrefix @('-NoProfile','-ExecutionPolicy','Bypass','-File',$utf8Fake) -ScratchDirectory $state1 *> $null
 $markerVal = if (Test-Path $marker) { [System.IO.File]::ReadAllText($marker) } else { '(none)' }
 Check 'non-ASCII prompt reaches child as valid UTF-8' ($markerVal -eq 'UTF8-OK') "marker=$markerVal"

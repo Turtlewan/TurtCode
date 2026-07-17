@@ -44,7 +44,7 @@ $job = Start-Job -ScriptBlock {
     param($dispatch, $fakeCodex, $repo, $baseSha, $prompt, $stateDir)
     $env:APEX_STATE_DIR = $stateDir
     & $dispatch -Spec 'deadlock' -Task 'pipe' -Phase 'build' -Worktree $repo -BaseSha $baseSha `
-        -Prompt $prompt -SkipScopeCheck -ScratchDirectory $stateDir `
+        -Prompt $prompt -Authorized @('src/a.py') -SkipScopeCheck -SkipBaselineCheck -ScratchDirectory $stateDir `
         -CodexExecutable 'powershell.exe' `
         -CodexExecutableArgumentPrefix @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $fakeCodex)
     $LASTEXITCODE
