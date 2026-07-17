@@ -1,8 +1,8 @@
 ---
 skill: apex-governance
 backend: claude
-version: 2.0.0
-last_updated: 2026-07-14
+version: 2.1.0
+last_updated: 2026-07-17
 sources:
   - docs/technical/adr/ADR-010-multi-pass-review.md
   - docs/technical/adr/ADR-027-codex-primary-opus-fallback-deepseek-archived.md
@@ -102,6 +102,17 @@ source and middleware · `.github/workflows/**` and any CI config · dependency 
 lockfiles** (a one-line change executes arbitrary code) · infra-as-code · anything with `secret` or
 `credential` in its path · **the permission settings, the hooks, and the audit log themselves**.
 
+The set is mechanised in one executable script, `apex-critical-files.ps1`; this is its single
+executable home, and no second copy of the pattern list exists. It has **two tiers**: the
+`docs/audit/` entry listed above is TIER-1, refused outright and never confirmable by any switch;
+every other entry in the category list is TIER-2, confirmable. It is enforced in **two layers**:
+`apex-code` Layer A is interactive -- it refuses a hard-block task outright, confirms a critical
+task only after a live attended "yes", and parks an unattended/AFK critical task; the dispatch
+wrapper Layer B is a mechanical backstop (exit 76) that fails closed if the classifier is missing or
+returns an invalid result. "An authorising spec does not settle it" is enforced concretely by the
+dispatch wrapper's `-CriticalFilesConfirmed` switch, which ONLY Layer A may set, and only after that
+live attended human "yes" (ADR-042).
+
 Common property: **a small, plausible-looking diff has effects far outside the diff** — including on
 the agent's own leash. These are exactly the files a confused or compromised agent would touch.
 
@@ -141,10 +152,17 @@ the coder that built the run**; why the host runs the verify loop rather than th
 judging itself; and why a cross-model reviewer never sees the first reviewer's findings.
 
 **Cross-model review** (`cross_model_review: true`; auto for auth / security / data / `risk: high`).
-Invariant: **reviewer family ≠ builder family** (ADR-032).
+Policy: use **cross-family review when both model families are available** (ADR-032, ADR-042).
 - **Codex built** (the default) → **Claude** reviews, always fresh context; `model: opus` for the
   high-risk set.
-- **Opus built** (the fallback) → **Codex** reviews, headless and read-only. Advisory only.
+- **Opus built** (the fallback) → **Codex** reviews, headless and read-only.
+
+If the other family is unavailable -- for example, Codex quota-out leads Opus to build while Codex
+remains unavailable -- a **diff-bound attended human review** substitutes. A same-family automated
+review in that fallback state is advisory only and cannot by itself satisfy the completion gate.
+`apex-family-gate.ps1` reads the run ledger and enforces this policy mechanically at completion; prose
+or self-report alone cannot satisfy it. An unattended/AFK run in that fallback state parks rather
+than completing (ADR-042).
 
 Give the second reviewer the spec + diff, **never the first's findings**. Both flag it →
 high-confidence, resolve before shipping. Only one → human adjudication, never auto-dismiss.

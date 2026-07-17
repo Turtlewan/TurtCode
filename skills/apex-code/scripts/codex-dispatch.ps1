@@ -34,6 +34,16 @@ param(
     [switch]$NoTreePin,
     # Bootstrap/emergency escape: bypass the dispatch pre-flight, recorded loudly and in the ledger row.
     [switch]$SkipBaselineCheck,
+    # -CriticalFilesConfirmed is set ONLY by the apex-code skill's Layer A step after a real attended
+    # human confirmation -- a spec's `## Permissions` text never sets it.
+    # -CriticalFilesConfirmedNote carries a free-text who/when string for the ledger.
+    # -CriticalFilesScript is a test-only override; empty resolves apex-critical-files.ps1 beside
+    # $PSScriptRoot so tests can dogfood the missing-classifier fail-closed path.
+    # -ReviewedRunId is the run_id of the BUILD that a REVIEW dispatch is reviewing.
+    [switch]$CriticalFilesConfirmed,
+    [string]$CriticalFilesConfirmedNote,
+    [string]$CriticalFilesScript,
+    [string]$ReviewedRunId,
     [string]$Prompt,
     # Selects the --output-schema codex is constrained to. A review/end-gate pass returns
     # findings, not a build completion; constraining it to the build schema (whose
@@ -66,6 +76,13 @@ if ($ScopeUnlocked -and [string]::IsNullOrWhiteSpace($ScopeUnlockedReason)) {
 
 function Get-UtcTimestamp {
     return (Get-Date).ToUniversalTime().ToString('o')
+}
+
+function Get-ModelFamily([string]$model) {
+    $m = $model.ToLowerInvariant()
+    if ($m -match 'codex' -or $m -match '^gpt') { return 'openai' }
+    if ($m -match 'opus' -or $m -match 'sonnet' -or $m -match 'haiku' -or $m -match 'claude') { return 'anthropic' }
+    return 'unknown'
 }
 
 function ConvertTo-SafeFileName {
@@ -657,6 +674,51 @@ $preflightTreePinScript = $null
 # exit or throw in that span; the successful path disarms it immediately before starting the child.
 try {
     if ($Phase -eq 'build' -and $Sandbox -eq 'workspace-write') {
+        # Exit 76 = critical-file gate refused before reservation -- NO ledger row, NO dispatch log.
+        # Known limit: a bare non-critical directory grant (for example, -Authorized src) may contain
+        # a critical descendant; directory-shaped grants are valid and exhaustive expansion is deferred.
+        $criticalScript = if ($CriticalFilesScript) { $CriticalFilesScript } else { Join-Path $PSScriptRoot 'apex-critical-files.ps1' }
+        if (-not (Test-Path -LiteralPath $criticalScript)) {
+            Write-Host '[dispatch] REFUSED (exit 76): apex-critical-files.ps1 missing -- cannot verify critical-file safety' -ForegroundColor Red
+            exit 76
+        }
+
+        if ($ScopeUnlocked) {
+            if (-not $CriticalFilesConfirmed) {
+                Write-Host '[dispatch] REFUSED (exit 76): -ScopeUnlocked build has no declared file set -- critical-file safety is unverifiable, pass -CriticalFilesConfirmed (attended) or park' -ForegroundColor Red
+                exit 76
+            }
+            Write-Host '[dispatch] -ScopeUnlocked build CONFIRMED (attended) -- critical-file safety unverifiable by design, proceeding on human confirmation' -ForegroundColor Yellow
+        }
+        else {
+            $critExit = $null
+            $critLines = @()
+            try {
+                & cmd /c exit 99
+                $critLines = @(& $criticalScript -Test -Paths $Authorized)
+                $critExit = $LASTEXITCODE
+            } catch {
+                $critExit = $null
+            }
+            $critLines | ForEach-Object { Write-Host $_ }
+
+            if ($critExit -eq 11) {
+                Write-Host '[dispatch] REFUSED (exit 76): -Authorized names a permanent hard block (docs/audit) -- not confirmable, cannot build' -ForegroundColor Red
+                exit 76
+            }
+            elseif ($critExit -eq 10 -and -not $CriticalFilesConfirmed) {
+                Write-Host '[dispatch] REFUSED (exit 76): -Authorized names critical file(s) and -CriticalFilesConfirmed is absent -- a spec cannot self-approve; confirm attended (apex-code Layer A) or park' -ForegroundColor Red
+                exit 76
+            }
+            elseif ($critExit -eq 10) {
+                Write-Host "[dispatch] critical-file edit CONFIRMED (attended) -- note: $CriticalFilesConfirmedNote" -ForegroundColor Yellow
+            }
+            elseif ($critExit -ne 0) {
+                Write-Host "[dispatch] REFUSED (exit 76): critical-file classifier failed to return a valid verdict (got '$critExit') -- failing closed" -ForegroundColor Red
+                exit 76
+            }
+        }
+
         if ($SkipBaselineCheck) {
             Write-Host '[dispatch] -SkipBaselineCheck: baseline/spec pre-flight BYPASSED (bootstrap/emergency)' -ForegroundColor Yellow
             $baselineSkipped = $true
@@ -783,6 +845,7 @@ $gateKey = "$safeSpec-$safeTask-$($runId.Substring(0,8))"
 $finalPath = Join-Path $ScratchDirectory "codex-$safeSpec-$safeTask-$($runId.Substring(0,8)).final"
 
 $started = Get-UtcTimestamp
+$coderModel = 'gpt-5.6-sol'
 $ledgerRow = [ordered]@{
     run_id = $runId
     pid = $null
@@ -811,6 +874,11 @@ $ledgerRow = [ordered]@{
     authorized = @($Authorized)
     scope_unlocked = [bool]$ScopeUnlocked
     scope_unlocked_reason = $(if ($ScopeUnlocked) { $ScopeUnlockedReason } else { '' })
+    critical_files_confirmed = [bool]$CriticalFilesConfirmed
+    critical_files_confirmed_note = $(if ($CriticalFilesConfirmed) { $CriticalFilesConfirmedNote } else { '' })
+    builder_family = $(if ($Phase -eq 'build') { Get-ModelFamily $coderModel } else { '' })
+    reviewer_family = $(if ($Phase -eq 'review' -or $Schema -eq 'review' -or $Schema -eq 'endgate') { Get-ModelFamily $coderModel } else { '' })
+    reviewed_run_id = $(if ($Phase -eq 'review' -or $Schema -eq 'review' -or $Schema -eq 'endgate') { $ReviewedRunId } else { '' })
     tree_pin_label = $null
     status = 'running'
 }
@@ -935,7 +1003,7 @@ $Prompt = $Prompt + $scopeLock
 
 
 $arguments = @(
-    'exec', '-p', 'apex-coder', '--sandbox', $Sandbox, '-m', 'gpt-5.6-sol',
+    'exec', '-p', 'apex-coder', '--sandbox', $Sandbox, '-m', $coderModel,
     '-c', "model_reasoning_effort=$Effort", '-C', $Worktree, '--json', '--output-schema',
     $schemaPath, '-o', $finalPath, '--color', 'never'
 ) | ForEach-Object { ConvertTo-ProcessArgument ([string]$_) }

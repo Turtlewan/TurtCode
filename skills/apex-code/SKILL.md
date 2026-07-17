@@ -1,7 +1,7 @@
 ---
 skill: apex-code
 backend: claude
-version: 2.7.0
+version: 2.8.0
 last_updated: 2026-07-17
 sources:
   - docs/technical/adr/ADR-027-codex-primary-opus-fallback-deepseek-archived.md
@@ -80,6 +80,28 @@ Same-tree parallel workers collide on lockfiles, ports, caches and the git index
 
 ## Codex dispatch — the coder
 
+**Layer A -- classify authorized files before every build dispatch:**
+
+```powershell
+powershell.exe -NoProfile -File "$env:USERPROFILE\.claude\skills\apex-code\scripts\apex-critical-files.ps1" -Test -Paths path1 path2 path3
+```
+
+Use the task's `-Authorized` paths, space-separated after `-Paths`. Never use `-Paths a,b,c`: under
+`-File` that arrives as one literal string, classifies nothing, and silently exits 0.
+
+- Exit **0**: no critical path; dispatch normally.
+- Exit **11**: permanent hard block (for example, `docs/audit/`) -- **REFUSE the task entirely**.
+  It must never be built, even with confirmation.
+- Exit **10**: critical path. If **ATTENDED**, run the existing governance approval gate; only the
+  user's real "yes" permits dispatch with `-CriticalFilesConfirmed -CriticalFilesConfirmedNote
+  "attended <who> <when>"`. If AFK, `dontAsk`, or otherwise autonomous with no human present,
+  **PARK** and surface the task instead of dispatching it.
+
+A spec's `## Permissions` text does **not** satisfy Layer A; only a live attended human confirmation
+does. Layer B is the wrapper's exit 76 mechanical backstop: it proves the confirmation switch was
+passed, but cannot prove who supplied it. Layer A owns that provenance check, so unattended work
+must park rather than proceed.
+
 Every task tagged `▸codex` (the default). Assemble the **dispatch pack** — Goal → Context →
 Constraints → Done-when — per `references/dispatch-pack.md`, then **always dispatch through the
 wrapper**:
@@ -134,6 +156,7 @@ Four things are load-bearing, and each has already broken a real build when done
 | 73 | **double-encoded text (mojibake)** | Codex-on-Windows corrupted non-ASCII it wrote (em-dash → `â€"`). **Do not commit — the suite is green and wrong.** The coder writes the same bad bytes into the *expected* string, so the assertion compares corrupt to corrupt and passes. Fix the bytes, re-verify. |
 | 74 | refused: scope lock | A workspace-write build dispatch had an empty -Authorized scope list and no -ScopeUnlocked escape, OR a contradictory/incomplete flag combination. Refused BEFORE reservation, so NO ledger row and NO dispatch log exist for the refused run. Pass the spec's Files-to-change list as -Authorized, or -ScopeUnlocked -ScopeUnlockedReason to bypass (recorded in the row). |
 | 75 | still running | Your *call* died; the coder did **not**. Wait for `.final`. |
+| 76 | refused: critical-file gate | The dispatch's -Authorized named a permanent hard block (docs/audit -- NOT confirmable) or a critical file (migration/auth/CI/lockfile/hook/settings/secret/...) with no -CriticalFilesConfirmed switch, OR a -ScopeUnlocked build passed no confirmation, OR the apex-critical-files.ps1 classifier was missing. Refused BEFORE reservation, so NO ledger row and NO dispatch log exist. Confirm attended via Layer A, or park; a hard block cannot be built at all; spec text cannot self-approve. |
 | 124 | stalled (no output) | The watchdog fired. The child is deliberately **not** killed — you decide. |
 
 **The scope check DETECTS. It never reverts, deletes, or checks anything out.** It used to, and it
@@ -284,18 +307,55 @@ never changed, only what was inside it, so a `git status` check would have seen 
      trades away the one thing that sees what the coder cannot.
    - `apex-docs-product-agent` — files_changed, spec_path, date.
 2. **Cross-family review** (`cross_model_review: true`; auto for auth/security/data/`risk: high`).
-   Derive the reviewer from the builder (ADR-032/034): **Codex built → Claude reviews** (`model:
-   opus` for the high-risk set); **Opus built → Codex reviews** (`references/codex-review.md`).
-   Give it the spec + diff only — **never the other reviewer's findings**. A finding both raise →
-   resolve before "complete"; only one → decisions table, human adjudication ⚠️. Codex unavailable →
-   record it; never skip silently.
+   Use the other model family when both are available: **Codex built -> Claude reviews** (`model:
+   opus` for the high-risk set); **Opus built -> Codex reviews** (`references/codex-review.md`).
+   Give it the spec + diff only -- **never the other reviewer's findings**. A finding both raise ->
+   resolve before "complete"; only one -> decisions table, human adjudication. If Codex is still
+   unavailable after Opus fallback builds, a diff-bound attended human review substitutes for the
+   unavailable cross-family review (ADR-042); a same-family Claude review remains advisory.
+   `apex-family-gate.ps1` enforces this substitution at completion, not prose alone. The wrapper
+   hardwires `gpt-5.6-sol` and has no `-CoderModel` parameter, so every wrapper-dispatched build or
+   review is family `openai`; ledger family fields describe what it launched, not a caller's claim.
 3. **AFK only:** the standing end-of-run **Opus** adversarial pass over `run_base_sha..HEAD` —
    read-only, advisory (`references/afk-endgate.md`). Opus, not Sol: Sol is the coder, and the one
    review that runs with nobody watching must not be self-review. Lenses →
    `references/silent-regression-lenses.md`.
-4. `apex-docs-technical-agent` — writes the handoff, archives the spec to `docs/changes/done/`, and
+4. **Annotate in-session work.** At completion of every in-session worker (Opus fallback build or
+   in-session Claude reviewer), append one compact JSON row with a terminal status to the wrapper's
+   ledger. Human review uses the same row shape. Resolve the ledger as
+   `%APEX_STATE_DIR%\progress\codex-run-ledger.jsonl`, falling back to
+   `%LOCALAPPDATA%\apex\progress\codex-run-ledger.jsonl`, then
+   `%TEMP%\apex\progress\codex-run-ledger.jsonl`, matching the wrapper.
+
+   ```json
+   {"run_id":"insession-<guid>","in_session":true,"spec":"<spec>","task":"<task>","worktree_key":"<git-root>","phase":"build"|"review"|"human-review","builder_family":"<fam>","reviewer_family":"<fam>","builder_model":"<model>","attended":<bool>,"reviewed_run_id":"<the-build-run_id-this-review-covers>","status":"done","started":"<utc-o>"}
+   ```
+
+   - In-session **BUILD** (Opus fallback): `phase:"build"`, fresh `run_id`, and
+     `builder_family:"anthropic"`. That `run_id` is the build identity later reviews cite in
+     `reviewed_run_id`.
+   - In-session **REVIEW** (Claude): `phase:"review"`, `reviewer_family:"anthropic"` for Sonnet or
+     Opus, and `reviewed_run_id` equal to the reviewed build's wrapper or in-session `run_id`.
+   - Human review: `phase:"human-review"`, `attended:true`, and `reviewed_run_id` equal to the
+     selected build's `run_id`.
+
+   Append with `Add-Content -LiteralPath <ledger> -Encoding utf8 -Value <json-line>`. For a
+   cross-family Codex review dispatched through the wrapper, pass
+   `-ReviewedRunId <build run_id>` to `codex-dispatch.ps1`; the wrapper records the binding.
+5. **Completion gate -- run it; do not eyeball the ledger:**
+
+   ```powershell
+   powershell.exe -NoProfile -File "$env:USERPROFILE\.claude\skills\apex-code\scripts\apex-family-gate.ps1" -Spec <s> -Task <t> -WorktreeKey <k>
+   ```
+
+   Run before marking a task or spec complete. There is no base-SHA argument: the gate selects the
+   build and its identity from the ledger, so a caller cannot point it at the wrong diff. Exit 0 --
+   mark complete. Non-zero (12 = same-family refusal; 13 = unverifiable) -- **REFUSE completion**
+   until a cross-family review or build-bound attended human review exists. AFK -- park instead of
+   blocking forever. A same-family automated review is advisory only and cannot satisfy this gate.
+6. `apex-docs-technical-agent` -- writes the handoff, archives the spec to `docs/changes/done/`, and
    folds the shipped capability into `overview.md` as one line (merge-on-archive, ADR-014).
-5. Report: handoff path · reviewer verdict · decisions count.
+7. Report: handoff path; reviewer verdict; decisions count.
 
 ## Autonomy, permissions, hard blocks
 
