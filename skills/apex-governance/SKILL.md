@@ -1,7 +1,7 @@
 ---
 skill: apex-governance
 backend: claude
-version: 2.1.0
+version: 2.2.0
 last_updated: 2026-07-17
 sources:
   - docs/technical/adr/ADR-010-multi-pass-review.md
@@ -105,6 +105,10 @@ lockfiles** (a one-line change executes arbitrary code) · infra-as-code · anyt
 The `keys-certs` category covers `id_rsa`, `id_ed25519`, `*.key`, `*.pem`, `*.pfx`, `*.p12`,
 `*.jks`, and `*.keystore`. Declaring it here closes the fail-open where credential-bearing key and
 certificate files could otherwise be treated as ordinary paths.
+
+The `host-state` category covers `docs/status.md`, root `AGENTS.md`, root `CLAUDE.md`,
+`docs/changes/`, `docs/handoff/`, and the `codex-run-ledger.jsonl` run ledger. Every host-state
+entry is TIER-2 and confirmable.
 
 The set is mechanised in one executable script, `apex-critical-files.ps1`; this is its single
 executable home, and no second copy of the pattern list exists. It has **two tiers**: the

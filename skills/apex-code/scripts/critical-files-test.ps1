@@ -289,6 +289,98 @@ $testCases = @(
     [pscustomobject]@{
         Name = 'Non-match - status document'
         Paths = @('docs/status.md')
+        ExitCode = 10
+        Matches = @(@('CRITICAL', 'host-state'))
+        ExactOutput = 'CRITICAL docs/status.md: host-state'
+    }
+    [pscustomobject]@{
+        Name = 'Host-state positive - root AGENTS'
+        Paths = @('AGENTS.md')
+        ExitCode = 10
+        Matches = @(@('CRITICAL', 'host-state'))
+    }
+    [pscustomobject]@{
+        Name = 'Host-state positive - root CLAUDE'
+        Paths = @('CLAUDE.md')
+        ExitCode = 10
+        Matches = @(@('CRITICAL', 'host-state'))
+    }
+    [pscustomobject]@{
+        Name = 'Host-state positive - changes prefix'
+        Paths = @('docs/changes/x.md')
+        ExitCode = 10
+        Matches = @(@('CRITICAL', 'host-state'))
+    }
+    [pscustomobject]@{
+        Name = 'Host-state positive - handoff prefix'
+        Paths = @('docs/handoff/2026-07-17.md')
+        ExitCode = 10
+        Matches = @(@('CRITICAL', 'host-state'))
+    }
+    [pscustomobject]@{
+        Name = 'Host-state positive - root run ledger basename'
+        Paths = @('codex-run-ledger.jsonl')
+        ExitCode = 10
+        Matches = @(@('CRITICAL', 'host-state'))
+    }
+    [pscustomobject]@{
+        Name = 'Host-state positive - nested run ledger basename'
+        Paths = @('docs/progress/codex-run-ledger.jsonl')
+        ExitCode = 10
+        Matches = @(@('CRITICAL', 'host-state'))
+    }
+    [pscustomobject]@{
+        Name = 'Host-state normalization - repeated leading dot slash'
+        Paths = @('././docs/status.md')
+        ExitCode = 10
+        Matches = @(@('CRITICAL', 'host-state'))
+    }
+    [pscustomobject]@{
+        Name = 'Host-state normalization - trailing slash'
+        Paths = @('docs/status.md/')
+        ExitCode = 10
+        Matches = @(@('CRITICAL', 'host-state'))
+    }
+    [pscustomobject]@{
+        Name = 'Host-state overlap - changes auth path'
+        Paths = @('docs/changes/auth-plan.md')
+        ExitCode = 10
+        Matches = @()
+        AnyCriticalCategory = @('host-state', 'auth')
+    }
+    [pscustomobject]@{
+        Name = 'Host-state anchored negative - status sibling'
+        Paths = @('docs/status-report.md')
+        ExitCode = 0
+        Matches = @()
+    }
+    [pscustomobject]@{
+        Name = 'Host-state anchored negative - nested agents'
+        Paths = @('src/agents.md')
+        ExitCode = 0
+        Matches = @()
+    }
+    [pscustomobject]@{
+        Name = 'Host-state anchored negative - nested claude'
+        Paths = @('sub/claude.md')
+        ExitCode = 0
+        Matches = @()
+    }
+    [pscustomobject]@{
+        Name = 'Host-state anchored negative - changesets near miss'
+        Paths = @('docs/changesets/x')
+        ExitCode = 0
+        Matches = @()
+    }
+    [pscustomobject]@{
+        Name = 'Host-state anchored negative - nested changes prefix'
+        Paths = @('nested/docs/changes/x.md')
+        ExitCode = 0
+        Matches = @()
+    }
+    [pscustomobject]@{
+        Name = 'Host-state anchored negative - nested handoff prefix'
+        Paths = @('x/docs/handoff/y.md')
         ExitCode = 0
         Matches = @()
     }
@@ -347,6 +439,25 @@ foreach ($testCase in $testCases) {
         $pattern = '^{0}\s+.*:\s*{1}\s*$' -f [regex]::Escape($keyword), [regex]::Escape($category)
         if (-not ($output | Where-Object { [string]$_ -match $pattern })) {
             $problems += "output missing $keyword line with category $category"
+        }
+    }
+
+    if ($null -ne $testCase.PSObject.Properties['ExactOutput']) {
+        if (-not ($output -ccontains $testCase.ExactOutput)) {
+            $problems += "output missing exact line '$($testCase.ExactOutput)'"
+        }
+    }
+
+    if ($null -ne $testCase.PSObject.Properties['AnyCriticalCategory']) {
+        $categoryAlternatives = @($testCase.AnyCriticalCategory)
+        $hasAllowedCategory = $output | Where-Object {
+            $line = [string]$_
+            $categoryAlternatives | Where-Object {
+                $line -match ('^CRITICAL\s+.*:\s*{0}\s*$' -f [regex]::Escape($_))
+            }
+        }
+        if (-not $hasAllowedCategory) {
+            $problems += "output missing CRITICAL line with any allowed category: $($categoryAlternatives -join ', ')"
         }
     }
 

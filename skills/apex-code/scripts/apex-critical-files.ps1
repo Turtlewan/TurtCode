@@ -65,9 +65,10 @@ $anyCritical = $false
 foreach ($path in $Paths) {
     $originalPath = [string]$path
     $normalizedPath = $originalPath.Replace('\', '/').ToLowerInvariant()
-    if ($normalizedPath.StartsWith('./')) {
+    while ($normalizedPath.StartsWith('./')) {
         $normalizedPath = $normalizedPath.Substring(2)
     }
+    $normalizedPath = $normalizedPath.TrimEnd('/')
 
     if ($normalizedPath -match '(^|/)docs/audit(/|$)') {
         Write-Output ("HARDBLOCK {0}: audit" -f $originalPath)
@@ -79,21 +80,33 @@ foreach ($path in $Paths) {
     $basename = $components[$components.Count - 1]
     $category = $null
 
+    if (($normalizedPath -eq 'docs/status.md') -or
+        ($normalizedPath -eq 'agents.md') -or
+        ($normalizedPath -eq 'claude.md') -or
+        ($normalizedPath -match '^docs/changes/') -or
+        ($normalizedPath -match '^docs/handoff/') -or
+        ($basename -eq 'codex-run-ledger.jsonl')) {
+        $category = 'host-state'
+    }
+
     # Classify private keys and certificate stores explicitly; omitting them lets
     # credential-bearing files fail open as ordinary paths.
-    if (($basename -eq 'id_rsa') -or
+    if (($null -eq $category) -and
+        (($basename -eq 'id_rsa') -or
         ($basename -eq 'id_ed25519') -or
-        ($basename -match '\.(key|pem|pfx|p12|jks|keystore)$')) {
+        ($basename -match '\.(key|pem|pfx|p12|jks|keystore)$'))) {
         $category = 'keys-certs'
     }
-    elseif ($normalizedPath -match '(^|/)(\.env|[^/]*\.env)(\.[^/]*)?$') {
+    elseif (($null -eq $category) -and
+            ($normalizedPath -match '(^|/)(\.env|[^/]*\.env)(\.[^/]*)?$')) {
         $category = 'secrets-env'
     }
-    elseif (($normalizedPath -match '(^|/)migrations(/|$)') -or
-            ($normalizedPath -match '(^|/)alembic/versions(/|$)')) {
+    elseif (($null -eq $category) -and
+            (($normalizedPath -match '(^|/)migrations(/|$)') -or
+             ($normalizedPath -match '(^|/)alembic/versions(/|$)'))) {
         $category = 'migrations'
     }
-    else {
+    elseif ($null -eq $category) {
         foreach ($component in $components) {
             $lastDot = $component.LastIndexOf('.')
             if ($lastDot -ge 0) {
