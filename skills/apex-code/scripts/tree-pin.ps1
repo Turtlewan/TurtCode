@@ -27,7 +27,8 @@ param(
     # Extra trees pinned/verified in the SAME gate (an APEX change spans ~/apex and ~/.claude).
     [string[]]$PinAlso = @(),
     [Parameter(Mandatory)][string]$Label,
-    [string]$PinDirectory = $env:TEMP
+    [string]$PinDirectory = $env:TEMP,
+    [string]$RuntimeExclusionRoot = (Join-Path $env:USERPROFILE '.claude')
 )
 
 $ErrorActionPreference = 'Stop'
@@ -94,14 +95,16 @@ function Get-PathDigest([string]$Root, [string]$relPath) {
     $full = Join-Path $Root $relPath
 
     if (Test-Path -LiteralPath $full -PathType Container) {
+        # Keep this digest field-for-field aligned with Get-ContentHash in codex-scope-check.ps1.
         $parts = New-Object System.Collections.Generic.List[string]
-        foreach ($file in (Get-ChildItem -LiteralPath $full -Recurse -File -Force -ErrorAction SilentlyContinue |
+        $enumErr = $null
+        foreach ($file in (Get-ChildItem -LiteralPath $full -Recurse -File -Force -ErrorAction SilentlyContinue -ErrorVariable enumErr |
                 Sort-Object FullName)) {
-            $rel = $file.FullName.Substring((Resolve-Path $Root).Path.Length).TrimStart('\', '/') -replace '\\', '/'
-            $h = Invoke-Git $Root hash-object -- $rel
-            if (-not $h) { $h = "size:$($file.Length)" }
-            $parts.Add("$rel $(([string]$h).Trim())")
+            $rel = $file.FullName.Substring($Root.Length).TrimStart([char]92, [char]47) -replace '\\', '/'
+            $parts.Add("$rel|$($file.Length)|$($file.LastWriteTimeUtc.Ticks)")
         }
+        # A subtree we could not read must not fingerprint identically to one we could.
+        if ($enumErr -and $enumErr.Count -gt 0) { $parts.Add("UNREADABLE|$($enumErr.Count)") }
         if ($parts.Count -eq 0) { return 'dir:empty' }
         $sha = [System.Security.Cryptography.SHA256]::Create()
         try {
@@ -134,22 +137,46 @@ function Get-IndexDigest([string]$Root, [string]$relPath) {
     return '-'
 }
 
-function Get-TreeFingerprint([string]$Root) {
+function Get-TreeFingerprint([string]$Root, [bool]$ApplyRuntimeExclusions) {
     $lines = @()
 
     # Committed state matters too: a commit landing mid-gate moves the baseline under the verdict.
     $head = Invoke-Git $Root rev-parse HEAD
     $lines += "HEAD $head"
 
-    $status = Invoke-Git $Root status --porcelain
+    $status = Invoke-Git $Root status --porcelain --ignored=traditional
+    $runtimeExclusions = @(
+        'sessions',
+        'projects',
+        'backups',
+        'jobs',
+        'shell-snapshots',
+        'todos',
+        'file-history',
+        'history.jsonl',
+        '.last-update-result.json'
+    )
     foreach ($entry in ($status | Sort-Object)) {
         if ([string]::IsNullOrWhiteSpace($entry)) { continue }
+        $xy = $entry.Substring(0,2)
         # Residual limit: git C-quoted path unescaping (core.quotePath evasion) remains out of scope;
         # this intentionally preserves the existing trim-only behavior while fixing git failures.
         $path = $entry.Substring(3).Trim().Trim('"')
         # Renames read as "old -> new"; the post-rename path is the one on disk.
         if ($path -match '\s->\s(.+)$') { $path = $Matches[1].Trim().Trim('"') }
-        $lines += "$($entry.Substring(0,2)) $path work:$(Get-PathDigest $Root $path) index:$(Get-IndexDigest $Root $path)"
+        $normalizedPath = ($path -replace '\\', '/').TrimEnd('/')
+        if ($ApplyRuntimeExclusions -and $xy -eq '!!') {
+            $excluded = $false
+            foreach ($prefix in $runtimeExclusions) {
+                if ($normalizedPath.Equals($prefix, [System.StringComparison]::OrdinalIgnoreCase) -or
+                        $normalizedPath.StartsWith($prefix + '/', [System.StringComparison]::OrdinalIgnoreCase)) {
+                    $excluded = $true
+                    break
+                }
+            }
+            if ($excluded) { continue }
+        }
+        $lines += "$xy $path work:$(Get-PathDigest $Root $path) index:$(Get-IndexDigest $Root $path)"
     }
 
     $joined = [string]::Join("`n", $lines)
@@ -163,6 +190,11 @@ function Get-TreeFingerprint([string]$Root) {
     return [pscustomobject]@{ Digest = $digest; Detail = $joined }
 }
 
+$resolvedRuntimeExclusionRoot = $null
+if (Test-Path -LiteralPath $RuntimeExclusionRoot -PathType Container) {
+    $resolvedRuntimeExclusionRoot = (Resolve-Path -LiteralPath $RuntimeExclusionRoot).Path.TrimEnd('\', '/')
+}
+
 $trees = @(foreach ($root in (@($Worktree) + $PinAlso)) {
     $worktreeFull = (Resolve-Path -LiteralPath $root).Path
     $sha = [System.Security.Cryptography.SHA256]::Create()
@@ -174,13 +206,14 @@ $trees = @(foreach ($root in (@($Worktree) + $PinAlso)) {
     [pscustomobject]@{
         Root = $worktreeFull
         PinPath = Join-Path $PinDirectory "apex-treepin-$safeLabel-$worktreeTag.txt"
-        Fingerprint = Get-TreeFingerprint $worktreeFull
+        Fingerprint = Get-TreeFingerprint $worktreeFull ($null -ne $resolvedRuntimeExclusionRoot -and
+            $worktreeFull.TrimEnd('\', '/').Equals($resolvedRuntimeExclusionRoot, [System.StringComparison]::OrdinalIgnoreCase))
     }
 })
 
 if ($Pin) {
     foreach ($tree in $trees) {
-        [System.IO.File]::WriteAllText($tree.PinPath, $tree.Fingerprint.Digest + "`n" + $tree.Fingerprint.Detail,
+        [System.IO.File]::WriteAllText($tree.PinPath, "treepin-v2`n" + $tree.Fingerprint.Digest + "`n" + $tree.Fingerprint.Detail,
             [System.Text.UTF8Encoding]::new($false))
         if ($trees.Count -eq 1) {
             Write-Host "[tree-pin] pinned $($tree.Fingerprint.Digest.Substring(0,12)) for '$Label'" -ForegroundColor DarkGray
@@ -214,7 +247,13 @@ foreach ($tree in $trees) {
         continue
     }
 
-    $pinnedDigest = ([System.IO.File]::ReadAllLines($tree.PinPath))[0]
+    $pinLines = [System.IO.File]::ReadAllLines($tree.PinPath)
+    if ($pinLines.Count -eq 0 -or $pinLines[0] -ne 'treepin-v2') {
+        Write-Host 'pin predates digest scheme v2 — re-pin'
+        $failed = $true
+        continue
+    }
+    $pinnedDigest = $pinLines[1]
     if ($pinnedDigest -eq $tree.Fingerprint.Digest) {
         if ($trees.Count -eq 1) {
             Write-Host "[tree-pin] tree unchanged ($($pinnedDigest.Substring(0,12))) -- the verdict is about this tree." -ForegroundColor DarkGray
@@ -224,7 +263,7 @@ foreach ($tree in $trees) {
         continue
     }
 
-    $pinnedDetail = [string]::Join("`n", ([System.IO.File]::ReadAllLines($tree.PinPath) | Select-Object -Skip 1))
+    $pinnedDetail = [string]::Join("`n", ($pinLines | Select-Object -Skip 2))
     $before = & $parseDetail $pinnedDetail
     $after = & $parseDetail $tree.Fingerprint.Detail
 
