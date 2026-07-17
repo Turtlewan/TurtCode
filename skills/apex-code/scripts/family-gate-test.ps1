@@ -83,7 +83,8 @@ try {
             New-FixtureRow -Spec 'family-gate-test/unbound-review' -Task 'task-unbound-review' -WorktreeKey 'worktree-unbound-review' -Phase 'build' -RunId 'build-unbound' -BuilderFamily 'openai' -ReviewerFamily '' -ReviewedRunId '' -Attended $false -Status 'success' -Started '2026-01-05T00:00:00Z'
             New-FixtureRow -Spec 'family-gate-test/unbound-review' -Task 'task-unbound-review' -WorktreeKey 'worktree-unbound-review' -Phase 'review' -RunId 'review-unbound' -BuilderFamily '' -ReviewerFamily 'anthropic' -ReviewedRunId 'some-other-build' -Attended $false -Status 'done' -Started '2026-01-05T00:01:00Z'
         )
-        New-TestCase -Name 'failed-attempt-build-ignored' -ExpectedExitCode 12 -Rows @(
+        # The prior exit-12 expectation encoded the fail-open fallback to an older successful build.
+        New-TestCase -Name 'failed-attempt-build-ignored' -ExpectedExitCode 13 -Rows @(
             New-FixtureRow -Spec 'family-gate-test/failed-attempt-build-ignored' -Task 'task-failed-attempt-build-ignored' -WorktreeKey 'worktree-failed-attempt-build-ignored' -Phase 'build' -RunId 'build-failed-attempt' -BuilderFamily 'openai' -ReviewerFamily '' -ReviewedRunId '' -Attended $false -Status 'failed' -Started '2026-01-06T01:00:00Z'
             New-FixtureRow -Spec 'family-gate-test/failed-attempt-build-ignored' -Task 'task-failed-attempt-build-ignored' -WorktreeKey 'worktree-failed-attempt-build-ignored' -Phase 'build' -RunId 'build-done-attempt' -BuilderFamily 'anthropic' -ReviewerFamily '' -ReviewedRunId '' -Attended $false -Status 'done_with_concerns' -Started '2026-01-06T00:00:00Z'
             New-FixtureRow -Spec 'family-gate-test/failed-attempt-build-ignored' -Task 'task-failed-attempt-build-ignored' -WorktreeKey 'worktree-failed-attempt-build-ignored' -Phase 'review' -RunId 'review-done-attempt' -BuilderFamily '' -ReviewerFamily 'anthropic' -ReviewedRunId 'build-done-attempt' -Attended $false -Status 'done' -Started '2026-01-06T00:01:00Z'
@@ -113,10 +114,61 @@ try {
             New-FixtureRow -Spec 'family-gate-test/only-non-terminal' -Task 'task-only-non-terminal' -WorktreeKey 'worktree-only-non-terminal' -Phase 'build' -RunId 'build-failed' -BuilderFamily 'anthropic' -ReviewerFamily '' -ReviewedRunId '' -Attended $false -Status 'failed' -Started '2026-01-12T00:03:00Z'
             New-FixtureRow -Spec 'family-gate-test/only-non-terminal' -Task 'task-only-non-terminal' -WorktreeKey 'worktree-only-non-terminal' -Phase 'build' -RunId 'build-blocked' -BuilderFamily 'openai' -ReviewerFamily '' -ReviewedRunId '' -Attended $false -Status 'blocked' -Started '2026-01-12T00:04:00Z'
         )
+        # Closes the fail-open where a newer running build was hidden behind an older reviewed build.
+        New-TestCase -Name 'newest-non-terminal-masking' -ExpectedExitCode 13 -Rows @(
+            New-FixtureRow -Spec 'family-gate-test/newest-non-terminal-masking' -Task 'task-newest-non-terminal-masking' -WorktreeKey 'worktree-newest-non-terminal-masking' -Phase 'build' -RunId 'build-mask-old' -BuilderFamily 'openai' -ReviewerFamily '' -ReviewedRunId '' -Attended $false -Status 'done' -Started '2026-01-13T00:00:00Z'
+            New-FixtureRow -Spec 'family-gate-test/newest-non-terminal-masking' -Task 'task-newest-non-terminal-masking' -WorktreeKey 'worktree-newest-non-terminal-masking' -Phase 'review' -RunId 'review-mask-old' -BuilderFamily '' -ReviewerFamily 'anthropic' -ReviewedRunId 'build-mask-old' -Attended $false -Status 'done' -Started '2026-01-13T00:01:00Z'
+            New-FixtureRow -Spec 'family-gate-test/newest-non-terminal-masking' -Task 'task-newest-non-terminal-masking' -WorktreeKey 'worktree-newest-non-terminal-masking' -Phase 'build' -RunId 'build-mask-new-running' -BuilderFamily 'openai' -ReviewerFamily '' -ReviewedRunId '' -Attended $false -Status 'running' -Started '2026-01-13T01:00:00Z'
+        )
+        # Closes the fail-open where a query-matching row without phase vanished before selection.
+        New-TestCase -Name 'missing-required-field' -ExpectedExitCode 13 -Rows @(
+            New-FixtureRow -Spec 'family-gate-test/missing-required-field' -Task 'task-missing-required-field' -WorktreeKey 'worktree-missing-required-field' -Phase 'build' -RunId 'build-missing-old' -BuilderFamily 'openai' -ReviewerFamily '' -ReviewedRunId '' -Attended $false -Status 'done' -Started '2026-01-14T00:00:00Z'
+            New-FixtureRow -Spec 'family-gate-test/missing-required-field' -Task 'task-missing-required-field' -WorktreeKey 'worktree-missing-required-field' -Phase 'review' -RunId 'review-missing-old' -BuilderFamily '' -ReviewerFamily 'anthropic' -ReviewedRunId 'build-missing-old' -Attended $false -Status 'done' -Started '2026-01-14T00:01:00Z'
+            [pscustomobject][ordered]@{
+                spec = 'family-gate-test/missing-required-field'
+                task = 'task-missing-required-field'
+                worktree_key = 'worktree-missing-required-field'
+                run_id = 'build-missing-phase'
+                builder_family = 'openai'
+                status = 'running'
+                started = '2026-01-14T01:00:00Z'
+            }
+        )
+        # Closes the fail-open where a malformed spec-scoped line was silently skipped.
+        New-TestCase -Name 'malformed-newest-row' -ExpectedExitCode 13 -Rows @(
+            New-FixtureRow -Spec 'family-gate-test/malformed-newest-row' -Task 'task-malformed-newest-row' -WorktreeKey 'worktree-malformed-newest-row' -Phase 'build' -RunId 'build-malformed-old' -BuilderFamily 'openai' -ReviewerFamily '' -ReviewedRunId '' -Attended $false -Status 'done' -Started '2026-01-15T00:00:00Z'
+            New-FixtureRow -Spec 'family-gate-test/malformed-newest-row' -Task 'task-malformed-newest-row' -WorktreeKey 'worktree-malformed-newest-row' -Phase 'review' -RunId 'review-malformed-old' -BuilderFamily '' -ReviewerFamily 'anthropic' -ReviewedRunId 'build-malformed-old' -Attended $false -Status 'done' -Started '2026-01-15T00:01:00Z'
+            '{"spec":"family-gate-test/malformed-newest-row","task":"task-malformed-newest-row"'
+        )
+        # Closes the fail-open where an invalid timestamp sorted behind an older reviewed build.
+        New-TestCase -Name 'invalid-started' -ExpectedExitCode 13 -Rows @(
+            New-FixtureRow -Spec 'family-gate-test/invalid-started' -Task 'task-invalid-started' -WorktreeKey 'worktree-invalid-started' -Phase 'build' -RunId 'build-invalid-old' -BuilderFamily 'openai' -ReviewerFamily '' -ReviewedRunId '' -Attended $false -Status 'done' -Started '2026-01-16T00:00:00Z'
+            New-FixtureRow -Spec 'family-gate-test/invalid-started' -Task 'task-invalid-started' -WorktreeKey 'worktree-invalid-started' -Phase 'review' -RunId 'review-invalid-old' -BuilderFamily '' -ReviewerFamily 'anthropic' -ReviewedRunId 'build-invalid-old' -Attended $false -Status 'done' -Started '2026-01-16T00:01:00Z'
+            New-FixtureRow -Spec 'family-gate-test/invalid-started' -Task 'task-invalid-started' -WorktreeKey 'worktree-invalid-started' -Phase 'build' -RunId 'build-invalid-new' -BuilderFamily 'openai' -ReviewerFamily '' -ReviewedRunId '' -Attended $false -Status 'done' -Started 'invalid'
+        )
+        # Closes the correctness defect where Windows path casing drift produced a false no-build result.
+        New-TestCase -Name 'casing-drift' -ExpectedExitCode 0 -Rows @(
+            New-FixtureRow -Spec 'family-gate-test/casing-drift' -Task 'task-casing-drift' -WorktreeKey 'WORKTREE-CASING-DRIFT' -Phase 'build' -RunId 'build-casing' -BuilderFamily 'openai' -ReviewerFamily '' -ReviewedRunId '' -Attended $false -Status 'done' -Started '2026-01-17T00:00:00Z'
+            New-FixtureRow -Spec 'family-gate-test/casing-drift' -Task 'task-casing-drift' -WorktreeKey 'WORKTREE-CASING-DRIFT' -Phase 'review' -RunId 'review-casing' -BuilderFamily '' -ReviewerFamily 'anthropic' -ReviewedRunId 'build-casing' -Attended $false -Status 'done' -Started '2026-01-17T00:01:00Z'
+        )
+        # Locks equal-timestamp selection to append order rather than a random run_id ordering.
+        New-TestCase -Name 'equal-started-append-order' -ExpectedExitCode 12 -Rows @(
+            New-FixtureRow -Spec 'family-gate-test/equal-started-append-order' -Task 'task-equal-started-append-order' -WorktreeKey 'worktree-equal-started-append-order' -Phase 'build' -RunId 'zzzz-older-build' -BuilderFamily 'openai' -ReviewerFamily '' -ReviewedRunId '' -Attended $false -Status 'done' -Started '2026-01-18T00:00:00Z'
+            New-FixtureRow -Spec 'family-gate-test/equal-started-append-order' -Task 'task-equal-started-append-order' -WorktreeKey 'worktree-equal-started-append-order' -Phase 'review' -RunId 'review-equal-old' -BuilderFamily '' -ReviewerFamily 'anthropic' -ReviewedRunId 'zzzz-older-build' -Attended $false -Status 'done' -Started '2026-01-18T00:01:00Z'
+            New-FixtureRow -Spec 'family-gate-test/equal-started-append-order' -Task 'task-equal-started-append-order' -WorktreeKey 'worktree-equal-started-append-order' -Phase 'build' -RunId 'aaaa-newer-build' -BuilderFamily 'openai' -ReviewerFamily '' -ReviewedRunId '' -Attended $false -Status 'done' -Started '2026-01-18T00:00:00Z'
+        )
     )
 
     $fixtureRows = @($cases | ForEach-Object { $_.Rows })
-    $jsonLines = @($fixtureRows | ForEach-Object { $_ | ConvertTo-Json -Compress -Depth 4 })
+    # Preserve intentionally malformed raw lines so the gate's scoped parse-failure behavior is exercised.
+    $jsonLines = @($fixtureRows | ForEach-Object {
+        if ($_ -is [string]) {
+            $_
+        }
+        else {
+            $_ | ConvertTo-Json -Compress -Depth 4
+        }
+    })
     $utf8NoBom = [System.Text.UTF8Encoding]::new($false)
     [System.IO.File]::WriteAllLines($fixturePath, [string[]]$jsonLines, $utf8NoBom)
 

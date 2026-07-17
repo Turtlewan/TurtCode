@@ -65,7 +65,9 @@ function Get-RecipeBlock {
     # Candidate order has priority over document order. This makes a declared preflight block win
     # even when the full recipe appears earlier in AGENTS.md.
     foreach ($candidate in $CandidateHeadings) {
-        $headingPattern = '^\s{0,3}##\s*' + [regex]::Escape($candidate) + '\b'
+        # Require the complete heading so a deprecated/suffixed decoy cannot shadow the real recipe
+        # and fail open; trailing whitespace is harmless, but trailing heading text is not.
+        $headingPattern = '^\s{0,3}##\s*' + [regex]::Escape($candidate) + '\s*$'
         for ($i = 0; $i -lt $Lines.Count; $i++) {
             if (-not $insideFence[$i] -and $Lines[$i] -match $headingPattern) {
                 $headingIndex = $i
@@ -211,7 +213,9 @@ function Invoke-RecipeBlock {
         switch ($languageTag) {
             { $_ -in @('bash', 'sh') } {
                 $bashWorktree = $TargetWorktree.Replace("'", "'\''")
-                & $bashPath -lc "cd '$bashWorktree' && $cmd"
+                # pipefail closes the bash pipeline false-green. cmd.exe and PowerShell pipelines
+                # remain a documented residual limit because they cannot cheaply propagate it.
+                & $bashPath -lc "set -o pipefail; cd '$bashWorktree' && $cmd"
                 break
             }
             { $_ -in @('powershell', 'pwsh') } {

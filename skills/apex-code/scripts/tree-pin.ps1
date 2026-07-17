@@ -56,9 +56,32 @@ function Invoke-Git {
         [string]$Root,
         [Parameter(ValueFromRemainingArguments = $true)][string[]]$GitArgs
     )
+    # Fail closed if git cannot launch or reports an error. Checking $LASTEXITCODE without first
+    # resetting it leaves a stale 0 in Windows PowerShell 5.1 after a launch failure, which made an
+    # empty fingerprint look valid and allowed Verify to pass without inspecting a repository.
+    $exitCodeSentinel = [int]::MinValue
     $previous = $ErrorActionPreference
+    # Keep native stderr non-terminating so an exit-0 warning is not mistaken for a git failure;
+    # the sentinel catches non-terminating launch failures and the catch handles terminating ones.
     $ErrorActionPreference = 'Continue'
-    try { return (& git -C $Root @GitArgs 2>$null) } finally { $ErrorActionPreference = $previous }
+    # Native processes update the global automatic variable in Windows PowerShell 5.1; assigning
+    # an unqualified name here would create a function-local value that stays at the sentinel.
+    $global:LASTEXITCODE = $exitCodeSentinel
+    try {
+        $output = @(& git -C $Root @GitArgs 2>$null)
+        $exitCode = $global:LASTEXITCODE
+    } catch {
+        throw "git failed or could not launch in '$Root' ($([string]::Join(' ', $GitArgs))): $($_.Exception.Message)"
+    } finally {
+        $ErrorActionPreference = $previous
+    }
+    if ($exitCode -eq $exitCodeSentinel) {
+        throw "git did not report an exit status in '$Root' ($([string]::Join(' ', $GitArgs)))."
+    }
+    if ($exitCode -ne 0) {
+        throw "git exited with status $exitCode in '$Root' ($([string]::Join(' ', $GitArgs)))."
+    }
+    return $output
 }
 
 # A DIRECTORY is hashed by its recursive contents, never written off as unhashable.
@@ -121,6 +144,8 @@ function Get-TreeFingerprint([string]$Root) {
     $status = Invoke-Git $Root status --porcelain
     foreach ($entry in ($status | Sort-Object)) {
         if ([string]::IsNullOrWhiteSpace($entry)) { continue }
+        # Residual limit: git C-quoted path unescaping (core.quotePath evasion) remains out of scope;
+        # this intentionally preserves the existing trim-only behavior while fixing git failures.
         $path = $entry.Substring(3).Trim().Trim('"')
         # Renames read as "old -> new"; the post-rename path is the one on disk.
         if ($path -match '\s->\s(.+)$') { $path = $Matches[1].Trim().Trim('"') }

@@ -33,7 +33,8 @@ $inlineCodeRegex = New-Object System.Text.RegularExpressions.Regex('`+([^`]+?)`+
 $gitRefRegex = New-Object System.Text.RegularExpressions.Regex('^(?:HEAD|[0-9A-Fa-f]{7,40}):', [System.Text.RegularExpressions.RegexOptions]::CultureInvariant)
 $fileExtensionRegex = New-Object System.Text.RegularExpressions.Regex('\.[A-Za-z0-9]{1,5}$', [System.Text.RegularExpressions.RegexOptions]::CultureInvariant)
 $headingRegex = New-Object System.Text.RegularExpressions.Regex('^##\s+(.+?)\s*$', [System.Text.RegularExpressions.RegexOptions]::CultureInvariant)
-$fenceRegex = New-Object System.Text.RegularExpressions.Regex('^\s{0,3}`{3,}', [System.Text.RegularExpressions.RegexOptions]::CultureInvariant)
+# Close the fail-open where tilde fences, mismatched fence characters, and shorter closers exposed fenced structure.
+$fenceRegex = New-Object System.Text.RegularExpressions.Regex('^[ ]{0,3}(?<Fence>`{3,}|~{3,})(?<Trailing>.*)$', [System.Text.RegularExpressions.RegexOptions]::CultureInvariant)
 
 function ConvertTo-NormalizedToken {
     param([string]$Token)
@@ -172,24 +173,36 @@ $lines = [regex]::Split($content, "`r`n|`n|`r")
 $outsideFenceLines = New-Object 'System.Collections.Generic.List[object]'
 $inFence = $false
 $unclosedFenceLine = $null
+$fenceCharacter = $null
+$fenceLength = 0
 $currentSection = ''
 
 for ($index = 0; $index -lt $lines.Count; $index++) {
     $line = $lines[$index]
 
-    if ($fenceRegex.IsMatch($line)) {
-        if ($inFence) {
-            $inFence = $false
-            $unclosedFenceLine = $null
-        }
-        else {
-            $inFence = $true
-            $unclosedFenceLine = $index + 1
+    $fenceMatch = $fenceRegex.Match($line)
+    if ($inFence) {
+        if ($fenceMatch.Success) {
+            $candidateFence = $fenceMatch.Groups['Fence'].Value
+            $hasOnlyTrailingSpaces = [regex]::IsMatch($fenceMatch.Groups['Trailing'].Value, '^ *$')
+            if (($candidateFence[0] -eq $fenceCharacter) -and
+                ($candidateFence.Length -ge $fenceLength) -and
+                $hasOnlyTrailingSpaces) {
+                $inFence = $false
+                $unclosedFenceLine = $null
+                $fenceCharacter = $null
+                $fenceLength = 0
+            }
         }
         continue
     }
 
-    if ($inFence) {
+    if ($fenceMatch.Success) {
+        $openingFence = $fenceMatch.Groups['Fence'].Value
+        $inFence = $true
+        $unclosedFenceLine = $index + 1
+        $fenceCharacter = $openingFence[0]
+        $fenceLength = $openingFence.Length
         continue
     }
 
@@ -273,9 +286,10 @@ foreach ($scanText in $scanTexts) {
 }
 
 # (2) NO-UNRESOLVED-MARKERS
+# Close the fail-open where lowercase spellings of the existing unresolved-marker tokens passed validation.
 $markerRegex = New-Object System.Text.RegularExpressions.Regex(
     '(?<![A-Za-z0-9_])(?:TBD|TODO|FIXME)(?![A-Za-z0-9_])|(?<!\?)\?\?\?(?!\?)|<placeholder>',
-    [System.Text.RegularExpressions.RegexOptions]::CultureInvariant
+    ([System.Text.RegularExpressions.RegexOptions]::CultureInvariant -bor [System.Text.RegularExpressions.RegexOptions]::IgnoreCase)
 )
 foreach ($lineRecord in $outsideFenceLines) {
     foreach ($match in $markerRegex.Matches($lineRecord.Text)) {

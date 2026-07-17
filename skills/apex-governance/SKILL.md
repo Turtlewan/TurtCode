@@ -102,6 +102,10 @@ source and middleware · `.github/workflows/**` and any CI config · dependency 
 lockfiles** (a one-line change executes arbitrary code) · infra-as-code · anything with `secret` or
 `credential` in its path · **the permission settings, the hooks, and the audit log themselves**.
 
+The `keys-certs` category covers `id_rsa`, `id_ed25519`, `*.key`, `*.pem`, `*.pfx`, `*.p12`,
+`*.jks`, and `*.keystore`. Declaring it here closes the fail-open where credential-bearing key and
+certificate files could otherwise be treated as ordinary paths.
+
 The set is mechanised in one executable script, `apex-critical-files.ps1`; this is its single
 executable home, and no second copy of the pattern list exists. It has **two tiers**: the
 `docs/audit/` entry listed above is TIER-1, refused outright and never confirmable by any switch;

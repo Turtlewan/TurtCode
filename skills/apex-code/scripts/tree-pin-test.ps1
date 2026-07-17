@@ -33,12 +33,34 @@ function Initialize-TestTree([string]$Path, [string]$FileName, [string]$Content)
     [System.IO.File]::WriteAllText((Join-Path $Path $FileName), $Content, [System.Text.UTF8Encoding]::new($false))
     & git -C $Path add -- $FileName
     if ($LASTEXITCODE -ne 0) { throw "git add failed for $Path" }
+    # Give every fixture a real HEAD: the fail-closed rev-parse guard must reject unborn HEAD, so
+    # leaving fixtures merely staged would make their intended success paths invalid.
+    $previousAuthorDate = [Environment]::GetEnvironmentVariable('GIT_AUTHOR_DATE', 'Process')
+    $previousCommitterDate = [Environment]::GetEnvironmentVariable('GIT_COMMITTER_DATE', 'Process')
+    try {
+        [Environment]::SetEnvironmentVariable('GIT_AUTHOR_DATE', '2000-01-01T00:00:00Z', 'Process')
+        [Environment]::SetEnvironmentVariable('GIT_COMMITTER_DATE', '2000-01-01T00:00:00Z', 'Process')
+        & git -C $Path -c user.name='APEX tree-pin test' -c user.email='tree-pin-test@example.invalid' commit --quiet -m 'Initialize fixture'
+        if ($LASTEXITCODE -ne 0) { throw "git commit failed for $Path" }
+    } finally {
+        [Environment]::SetEnvironmentVariable('GIT_AUTHOR_DATE', $previousAuthorDate, 'Process')
+        [Environment]::SetEnvironmentVariable('GIT_COMMITTER_DATE', $previousCommitterDate, 'Process')
+    }
 }
 
 function Invoke-TreePin([string[]]$Arguments) {
-    $output = @(& powershell.exe -NoProfile -ExecutionPolicy Bypass -File $scriptPath @Arguments 2>&1)
+    # Expected fail-closed cases write a terminating error to stderr; collect that diagnostic
+    # without letting the harness's Stop preference abort before it can assert the non-zero exit.
+    $previous = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
+    try {
+        $output = @(& powershell.exe -NoProfile -ExecutionPolicy Bypass -File $scriptPath @Arguments 2>&1)
+        $exitCode = $LASTEXITCODE
+    } finally {
+        $ErrorActionPreference = $previous
+    }
     return [pscustomobject]@{
-        ExitCode = $LASTEXITCODE
+        ExitCode = $exitCode
         Output = [string]::Join("`n", ($output | ForEach-Object { [string]$_ }))
     }
 }
@@ -63,6 +85,15 @@ try {
     New-Item -ItemType Directory -Path $multiPins | Out-Null
     Initialize-TestTree $rootOne 'tracked.txt' "root-one`n"
     Initialize-TestTree $rootTwo 'tracked.txt' "root-two`n"
+
+    # Regression: the old empty-output fingerprint made a non-repository Pin exit 0. Any git error
+    # in fingerprint construction must now fail closed with a diagnostic and a non-zero exit.
+    $nonGitRoot = Join-Path $testRoot 'not-a-git-directory'
+    $nonGitPins = Join-Path $testRoot 'non-git-pins'
+    New-Item -ItemType Directory -Path $nonGitRoot, $nonGitPins | Out-Null
+    $result = Invoke-TreePin (@('-Pin', '-Worktree', $nonGitRoot, '-Label', 'non-git', '-PinDirectory', $nonGitPins))
+    Assert-True 'non-git directory fails closed with a non-zero exit' ($result.ExitCode -ne 0)
+    Assert-True 'non-git failure reports the git invocation' ($result.Output -match 'git')
 
     $multiArgs = @('-Worktree', $rootOne, '-PinAlso', $rootTwo, '-Label', 'multi-root', '-PinDirectory', $multiPins)
     $result = Invoke-TreePin (@('-Pin') + $multiArgs)
@@ -98,11 +129,12 @@ try {
     Assert-True 'single-root pin keeps the legacy confirmation format' ($result.Output -match "^\[tree-pin\] pinned [0-9a-f]{12} for 'single-root-byte-fixture'$")
 
     $singlePin = Get-ChildItem -LiteralPath $singlePins -File | Select-Object -First 1
-    # Captured from the pre-refactor script using this exact staged-file fixture and label.
-    # SHA-256 of these fixture bytes: e6a76a1d95395871741bf1c5c36399adf2c50db5d202e2a533c293de86b78286.
-    $legacyPinBase64 = 'M2Y3YWNmNGI3NGRlZWZlOWVlMDlhNjI0NzAzMmYyYmI1ZDkxZGYxN2Y5ZmYyMDYwYjlkMTgzYmMxYWE4YWYwNQpIRUFEIEhFQUQKQSAgdHJhY2tlZC50eHQgd29yazpjZWNmZmJmMzMwNWU3NDg5MjYxZDdmZjJmMzY0NGI3OTRiNjQxYTVhIGluZGV4OjEwMDY0NDpjZWNmZmJmMzMwNWU3NDg5MjYxZDdmZjJmMzY0NGI3OTRiNjQxYTVhOjA='
+    # Frozen bytes for this exact committed fixture and label; the deterministic commit timestamp
+    # keeps the real-HEAD fingerprint stable across runs. Regenerated for fail-closed rev-parse.
+    # SHA-256 of these fixture bytes: 3e631a4050935e36fbcf9cd7f276481f679e468c64efe466ea51d154370be2b1.
+    $committedPinBase64 = 'YmVhNzJkY2IxOTNkOGJkYTlmYTk2ZjM5YTUwZGUxMTFiNjU2NjIzNDM0NDA0MzRjN2U5NWQwOTMxNTRlYjA5NwpIRUFEIDAyOWY0ODJhNzY3ODE1MDdhMzkyOTZiMWRhMmY5ZTZhMjY3OWY4NTA='
     $actualPinBase64 = [Convert]::ToBase64String([System.IO.File]::ReadAllBytes($singlePin.FullName))
-    Assert-Equal 'single-root pin bytes match the pre-refactor fixture' $legacyPinBase64 $actualPinBase64
+    Assert-Equal 'single-root pin bytes match the committed-HEAD fixture' $committedPinBase64 $actualPinBase64
 
     $result = Invoke-TreePin (@('-Verify') + $singleArgs)
     Assert-Equal 'clean single root verifies with exit 0' 0 $result.ExitCode

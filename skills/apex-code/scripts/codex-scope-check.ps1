@@ -79,6 +79,16 @@ param(
 
 $ErrorActionPreference = 'Stop'
 
+# Multiple modes used to run the first matching branch, so -Snapshot -Check overwrote the evidence
+# and exited clean without checking it. Refuse ambiguous mode requests before touching state.
+$selectedModes = @()
+if ($Snapshot) { $selectedModes += '-Snapshot' }
+if ($Check) { $selectedModes += '-Check' }
+if ($EncodingScan) { $selectedModes += '-EncodingScan' }
+if ($selectedModes.Count -gt 1) {
+    throw "Mode switches are mutually exclusive; specify exactly one of -Snapshot, -Check, or -EncodingScan (received $($selectedModes -join ', '))."
+}
+
 if (-not (Test-Path $Worktree)) { throw "Worktree not found: $Worktree" }
 $repo = (Resolve-Path $Worktree).Path
 
@@ -90,7 +100,36 @@ function Invoke-Git {
     param([Parameter(ValueFromRemainingArguments = $true)][string[]]$GitArgs)
     $previous = $ErrorActionPreference
     $ErrorActionPreference = 'Continue'
-    try { return (& git -C $repo @GitArgs 2>$null) } finally { $ErrorActionPreference = $previous }
+    $exitCodeSentinel = -987654
+    $launchException = $null
+    $output = @()
+    try {
+        # A launch failure in Windows PowerShell 5.1 can leave a stale prior zero in LASTEXITCODE.
+        # Reset it and catch terminating launch errors so an unavailable git can never read as clean.
+        $global:LASTEXITCODE = $exitCodeSentinel
+        try {
+            $output = @(& git -C $repo @GitArgs 2>$null)
+        }
+        catch {
+            $launchException = $_.Exception
+        }
+        $exitCode = $global:LASTEXITCODE
+    }
+    finally {
+        $ErrorActionPreference = $previous
+    }
+
+    $command = "git $($GitArgs -join ' ')"
+    if ($launchException) {
+        throw "$command failed to launch in '$repo'. Refusing to report clean: $($launchException.Message)"
+    }
+    if ($exitCode -eq $exitCodeSentinel) {
+        throw "$command failed to launch in '$repo' and did not set an exit code. Refusing to report clean."
+    }
+    if ($exitCode -ne 0) {
+        throw "$command failed in '$repo' (exit $exitCode). Refusing to report clean."
+    }
+    return $output
 }
 
 # Strip a leading "./" -- and ONLY that. `.TrimStart('./')` strips every leading '.' and '/'
@@ -215,8 +254,10 @@ function Get-ContentHash([string]$relPath) {
     }
 
     if (-not (Test-Path -LiteralPath $full -PathType Leaf)) { return '-' }
+    # A present file is not the legitimate absent-file '-' sentinel. Invoke-Git fails closed on
+    # launch/exit errors, and an empty successful hash is still ambiguous, so refuse it too.
     $h = Invoke-Git hash-object -- $relPath
-    if (-not $h) { return '-' }
+    if (-not $h) { throw "git hash-object returned no hash for present file '$relPath'. Refusing to report it absent." }
     return ([string]$h).Trim()
 }
 
@@ -224,6 +265,8 @@ function Get-ContentHash([string]$relPath) {
 # so a check that only looks at the working tree misses an unauthorized change that is already
 # staged -- and `git add` is exactly what a coder does before it thinks it is done.
 function Get-IndexHash([string]$relPath) {
+    # Empty output with a successful ls-files call legitimately means the path is not in the index;
+    # Invoke-Git now throws on launch/exit failure instead of collapsing either error to this '-'.
     $entry = Invoke-Git ls-files -s -- $relPath
     if (-not $entry) { return '-' }
     $fields = ([string]$entry).Split(@(' ', "`t"), [System.StringSplitOptions]::RemoveEmptyEntries)

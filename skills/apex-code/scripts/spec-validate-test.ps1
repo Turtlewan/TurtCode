@@ -5,6 +5,8 @@ $fixtureRoot = Join-Path $env:TEMP ('apex-spec-validate-test-' + [guid]::NewGuid
 $utf8 = New-Object System.Text.UTF8Encoding($false)
 $failures = 0
 $tripleBacktick = (([string][char]96) * 3) -join ''
+$tripleTilde = '~' * 3
+$quadrupleTilde = '~' * 4
 
 function Write-Fixture {
     param(
@@ -153,6 +155,10 @@ try {
     $marker = $good.Replace('No specialist context is required.', 'TBD before implementation.')
     Assert-Case 'unresolved-marker' $marker 1 'FAIL NO-UNRESOLVED-MARKERS'
 
+    # Regression coverage closes the fail-open where lowercase unresolved markers passed validation.
+    $lowercaseMarker = $good.Replace('No specialist context is required.', 'todo before implementation.')
+    Assert-Case 'lowercase-unresolved-marker' $lowercaseMarker 1 'FAIL NO-UNRESOLVED-MARKERS'
+
     $uncoveredTask = $good.Replace('- **Task 1** - files: `src/good.ps1` - Add the implementation.', "- **Task 1** - files: ``src/good.ps1`` - Add the implementation.`r`n- **Task 2** - Review the implementation.")
     Assert-Case 'task-without-criterion' $uncoveredTask 1 'FAIL TASK-CRITERIA-COVERAGE'
 
@@ -178,6 +184,13 @@ try {
     $fencedHeading = $good.Replace("## Permissions`nMay modify ``src/good.ps1``.`n`n", $fencedPermissions)
     Assert-Case 'heading-only-inside-fence' $fencedHeading 1 'FAIL STRUCTURE'
 
+    # Regression coverage closes the fail-open where tilde-fenced structure was counted as real structure.
+    $tildeFencedOnly = $tripleTilde + "`n" + $good + "`n" + $tripleTilde + "`n"
+    Assert-Case 'tilde-fenced-only-structure' $tildeFencedOnly 1 'FAIL STRUCTURE'
+
+    $shortTildeDoesNotClose = $quadrupleTilde + "`n" + $tripleTilde + "`n" + $good + "`n" + $quadrupleTilde + "`n"
+    Assert-Case 'shorter-tilde-does-not-close' $shortTildeDoesNotClose 1 'FAIL STRUCTURE'
+
     $headerOnly = $noNamedFiles.Replace('__FILES_TABLE__', "| File | Change |`n|---|---|")
     Assert-Case 'files-disguise-header-separator-only' $headerOnly 1 'FAIL STRUCTURE'
 
@@ -197,7 +210,7 @@ finally {
 
 Write-Host ''
 if ($failures -eq 0) {
-    Write-Host 'ALL 16 CASES PASS' -ForegroundColor Green
+    Write-Host 'ALL 19 CASES PASS' -ForegroundColor Green
     exit 0
 }
 

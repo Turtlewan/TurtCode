@@ -15,7 +15,19 @@ param(
     [string[]]$AdditionalPaths
 )
 
-$Paths = @($Paths) + @($AdditionalPaths)
+# Split comma-packed arguments before classification. Without this, callers that pass
+# multiple paths in one element fail open because no individual critical path is seen.
+$inputPaths = @($Paths) + @($AdditionalPaths)
+$Paths = @(
+    foreach ($inputPath in $inputPaths) {
+        foreach ($piece in ([string]$inputPath -split ',')) {
+            $trimmedPath = $piece.Trim()
+            if ($trimmedPath) {
+                $trimmedPath
+            }
+        }
+    }
+)
 
 $dependencyBasenames = @{
     'package.json'             = $true
@@ -67,7 +79,14 @@ foreach ($path in $Paths) {
     $basename = $components[$components.Count - 1]
     $category = $null
 
-    if ($normalizedPath -match '(^|/)(\.env|[^/]*\.env)(\.[^/]*)?$') {
+    # Classify private keys and certificate stores explicitly; omitting them lets
+    # credential-bearing files fail open as ordinary paths.
+    if (($basename -eq 'id_rsa') -or
+        ($basename -eq 'id_ed25519') -or
+        ($basename -match '\.(key|pem|pfx|p12|jks|keystore)$')) {
+        $category = 'keys-certs'
+    }
+    elseif ($normalizedPath -match '(^|/)(\.env|[^/]*\.env)(\.[^/]*)?$') {
         $category = 'secrets-env'
     }
     elseif (($normalizedPath -match '(^|/)migrations(/|$)') -or

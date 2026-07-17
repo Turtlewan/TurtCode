@@ -33,7 +33,7 @@ function New-Repo($name, $recipeLines) {
     New-Item -ItemType Directory -Force -Path $repo | Out-Null
     if ($null -ne $recipeLines) {
         $sb = [System.Text.StringBuilder]::new()
-        [void]$sb.AppendLine('# AGENTS'); [void]$sb.AppendLine('## Verify commands (test recipe)')
+        [void]$sb.AppendLine('# AGENTS'); [void]$sb.AppendLine('## Verify commands')
         if ($recipeLines.Count -gt 0) {
             [void]$sb.AppendLine('```'); foreach ($l in $recipeLines) { [void]$sb.AppendLine($l) }; [void]$sb.AppendLine('```')
         }
@@ -71,6 +71,11 @@ $rawHeadingBeforeFence = @('# AGENTS', '## Verify commands', '### Notes', $fence
 Check 'heading before fence -> exit 3 (no fall-through)' ((Invoke-Checker (New-RawRepo 'heading-before' $rawHeadingBeforeFence)) -eq 3) 'no unrelated block grabbed'
 $rawIndented = @('# AGENTS', '   ## Verify commands', $fence, ' echo ok', $fence) -join "`n"
 Check 'indented (<=3sp) heading still found' ((Invoke-Checker (New-RawRepo 'indented' $rawIndented)) -eq 0) 'not a silent skip'
+$deprecatedShadow = @(
+    '# AGENTS', '## Verify commands (deprecated)', $fence, 'exit 0', $fence,
+    '## Verify commands   ', $fence, 'exit 1', $fence
+) -join "`n"
+Check 'deprecated heading cannot shadow real recipe' ((Invoke-Checker (New-RawRepo 'deprecated-shadow' $deprecatedShadow)) -eq 1) 'real failing block -> RED'
 
 # cwd is -Worktree, not the caller's CWD.
 $r = New-Repo 'cwd' @('if not exist cwd-marker.txt exit 1'); Write-File (Join-Path $r 'cwd-marker.txt') 'x'
@@ -80,6 +85,8 @@ Check 'recipe runs in -Worktree not caller CWD' ($cwdExit -eq 0) 'marker found -
 # Fence info strings select the shell. Each command uses syntax that fails in the other shells.
 $rawBash = @('# AGENTS', '## Verify commands', '```bash', '[ -n "$BASH_VERSION" ]', '```') -join "`n"
 Check 'bash fence runs bash-only syntax' ((Invoke-Checker (New-RawRepo 'shell-bash' $rawBash)) -eq 0) 'bash test -> 0'
+$rawBashPipe = @('# AGENTS', '## Verify commands', '```bash', 'false | true', '```') -join "`n"
+Check 'bash pipeline propagates failing command' ((Invoke-Checker (New-RawRepo 'bash-pipefail' $rawBashPipe)) -eq 1) 'left-side failure -> RED'
 $rawPowerShell = @('# AGENTS', '## Verify commands', '```powershell', 'if (-not $PSVersionTable) { exit 1 }', '```') -join "`n"
 Check 'powershell fence runs PowerShell-only syntax' ((Invoke-Checker (New-RawRepo 'shell-powershell' $rawPowerShell)) -eq 0) 'PowerShell conditional -> 0'
 $rawCmd = @('# AGENTS', '## Verify commands', $fence, 'if "%CD%"=="" exit 1', $fence) -join "`n"

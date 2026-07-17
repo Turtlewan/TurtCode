@@ -87,6 +87,12 @@ $testCases = @(
         ExitCode = 10
         Matches = @(@('CRITICAL', 'permission-settings'))
     }
+    [pscustomobject]@{
+        Name = 'TIER-2 positive - keys-certs'
+        Paths = @('certs/service.pem')
+        ExitCode = 10
+        Matches = @(@('CRITICAL', 'keys-certs'))
+    }
 
     [pscustomobject]@{
         Name = 'Auth prefix - authentication'
@@ -254,6 +260,18 @@ $testCases = @(
         Paths = @('Config/.ENV')
         ExitCode = 10
         Matches = @(@('CRITICAL', 'secrets-env'))
+    }
+    [pscustomobject]@{
+        Name = 'Normalization - comma-joined pair'
+        Paths = @('src/main.ts, config/.env')
+        ExitCode = 10
+        Matches = @(@('CRITICAL', 'secrets-env'))
+    }
+    [pscustomobject]@{
+        Name = 'Normalization - trailing comma skips blank piece'
+        Paths = @('src,')
+        ExitCode = 0
+        Matches = @()
     }
 
     [pscustomobject]@{
