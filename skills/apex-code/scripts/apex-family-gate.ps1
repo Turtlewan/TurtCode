@@ -8,6 +8,7 @@ bound attended human review; 12 means a valid selected build exists but neither
 acceptable review exists; 13 means the gate cannot vouch because no valid
 selected build exists. Unknown or empty families and empty run_id values can
 NEVER satisfy this gate under any circumstance.
+When both digest properties are recorded, a bound review vouches only when its reviewed_tree_digest is present, verifiable, and equal to the build's end_tree_digest.
 
 A review-phase row does not vouch when tree_moved or scopeViolation is present
 and true. This trust-marker rule is scoped to phase 'review', so attended human
@@ -209,6 +210,22 @@ foreach ($row in $terminalRows) {
             continue
         }
 
+        $buildPropertyNames = @($selectedBuild.PSObject.Properties.Name)
+        $reviewPropertyNames = @($row.PSObject.Properties.Name)
+        # Skip a review with unusable or disagreeing recorded digests; migration-safe when either property is absent.
+        if (($buildPropertyNames -ccontains 'end_tree_digest') -and
+            ($reviewPropertyNames -ccontains 'reviewed_tree_digest')) {
+            $buildDigest = [string]$selectedBuild.end_tree_digest
+            $reviewDigest = [string]$row.reviewed_tree_digest
+            if ([string]::IsNullOrWhiteSpace($buildDigest) -or
+                [string]::IsNullOrWhiteSpace($reviewDigest) -or
+                ($buildDigest -ceq 'unverifiable') -or
+                ($reviewDigest -ceq 'unverifiable') -or
+                ($buildDigest -cne $reviewDigest)) {
+                continue
+            }
+        }
+
         $reviewerFamily = [string]$row.reviewer_family
         $isKnownReviewerFamily = ($reviewerFamily -ceq 'openai') -or
             ($reviewerFamily -ceq 'anthropic')
@@ -228,5 +245,5 @@ if ($hasCrossFamilyReview -or $hasAttendedHumanReview) {
     exit 0
 }
 
-Write-Output "Refused: selected build '$selRunId' has builder family '$builderFamily' but no bound cross-family review or attended human review."
+Write-Output "Refused: selected build '$selRunId' has builder family '$builderFamily' but no bound cross-family review or attended human review -- or the bound review's tree digest is missing, unverifiable, or disagrees with the build's."
 exit 12

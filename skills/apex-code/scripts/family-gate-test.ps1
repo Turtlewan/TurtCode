@@ -67,7 +67,8 @@ function New-TestCase {
     param(
         [Parameter(Mandatory = $true)][string]$Name,
         [Parameter(Mandatory = $true)][int]$ExpectedExitCode,
-        [Parameter(Mandatory = $true)][object[]]$Rows
+        [Parameter(Mandatory = $true)][object[]]$Rows,
+        [string]$ExpectedOutputSubstring = ''
     )
 
     [pscustomobject]@{
@@ -77,6 +78,7 @@ function New-TestCase {
         Task = "task-$Name"
         WorktreeKey = "worktree-$Name"
         Rows = $Rows
+        ExpectedOutputSubstring = $ExpectedOutputSubstring
     }
 }
 
@@ -219,6 +221,38 @@ try {
             New-FixtureRow -Spec 'family-gate-test/marked-plus-human-review' -Task 'task-marked-plus-human-review' -WorktreeKey 'worktree-marked-plus-human-review' -Phase 'review' -RunId 'review-marked-human-case' -ReviewerFamily 'anthropic' -ReviewedRunId 'build-marked-plus-human' -Status 'done' -Started '2026-01-26T00:01:00Z' -ExtraFields ([ordered]@{ tree_moved = $true })
             New-FixtureRow -Spec 'family-gate-test/marked-plus-human-review' -Task 'task-marked-plus-human-review' -WorktreeKey 'worktree-marked-plus-human-review' -Phase 'human-review' -RunId 'human-review-after-marked' -ReviewedRunId 'build-marked-plus-human' -Attended $true -Status 'done' -Started '2026-01-26T00:02:00Z'
         )
+        New-TestCase -Name 'digest-mismatch' -ExpectedExitCode 12 -ExpectedOutputSubstring "tree digest is missing, unverifiable, or disagrees with the build's" -Rows @(
+            New-FixtureRow -Spec 'family-gate-test/digest-mismatch' -Task 'task-digest-mismatch' -WorktreeKey 'worktree-digest-mismatch' -Phase 'build' -RunId 'build-digest-mismatch' -BuilderFamily 'openai' -Status 'done' -Started '2026-01-28T00:00:00Z' -ExtraFields ([ordered]@{ end_tree_digest = 'digest-build' })
+            New-FixtureRow -Spec 'family-gate-test/digest-mismatch' -Task 'task-digest-mismatch' -WorktreeKey 'worktree-digest-mismatch' -Phase 'review' -RunId 'review-digest-mismatch' -ReviewerFamily 'anthropic' -ReviewedRunId 'build-digest-mismatch' -Status 'done' -Started '2026-01-28T00:01:00Z' -ExtraFields ([ordered]@{ reviewed_tree_digest = 'digest-review' })
+        )
+        New-TestCase -Name 'build-digest-empty' -ExpectedExitCode 12 -Rows @(
+            New-FixtureRow -Spec 'family-gate-test/build-digest-empty' -Task 'task-build-digest-empty' -WorktreeKey 'worktree-build-digest-empty' -Phase 'build' -RunId 'build-digest-empty' -BuilderFamily 'openai' -Status 'done' -Started '2026-01-29T00:00:00Z' -ExtraFields ([ordered]@{ end_tree_digest = '' })
+            New-FixtureRow -Spec 'family-gate-test/build-digest-empty' -Task 'task-build-digest-empty' -WorktreeKey 'worktree-build-digest-empty' -Phase 'review' -RunId 'review-build-digest-empty' -ReviewerFamily 'anthropic' -ReviewedRunId 'build-digest-empty' -Status 'done' -Started '2026-01-29T00:01:00Z' -ExtraFields ([ordered]@{ reviewed_tree_digest = 'digest-match' })
+        )
+        New-TestCase -Name 'review-digest-whitespace' -ExpectedExitCode 12 -Rows @(
+            New-FixtureRow -Spec 'family-gate-test/review-digest-whitespace' -Task 'task-review-digest-whitespace' -WorktreeKey 'worktree-review-digest-whitespace' -Phase 'build' -RunId 'build-review-digest-whitespace' -BuilderFamily 'openai' -Status 'done' -Started '2026-01-30T00:00:00Z' -ExtraFields ([ordered]@{ end_tree_digest = 'digest-match' })
+            New-FixtureRow -Spec 'family-gate-test/review-digest-whitespace' -Task 'task-review-digest-whitespace' -WorktreeKey 'worktree-review-digest-whitespace' -Phase 'review' -RunId 'review-digest-whitespace' -ReviewerFamily 'anthropic' -ReviewedRunId 'build-review-digest-whitespace' -Status 'done' -Started '2026-01-30T00:01:00Z' -ExtraFields ([ordered]@{ reviewed_tree_digest = '   ' })
+        )
+        New-TestCase -Name 'build-digest-unverifiable' -ExpectedExitCode 12 -Rows @(
+            New-FixtureRow -Spec 'family-gate-test/build-digest-unverifiable' -Task 'task-build-digest-unverifiable' -WorktreeKey 'worktree-build-digest-unverifiable' -Phase 'build' -RunId 'build-digest-unverifiable' -BuilderFamily 'openai' -Status 'done' -Started '2026-01-31T00:00:00Z' -ExtraFields ([ordered]@{ end_tree_digest = 'unverifiable' })
+            New-FixtureRow -Spec 'family-gate-test/build-digest-unverifiable' -Task 'task-build-digest-unverifiable' -WorktreeKey 'worktree-build-digest-unverifiable' -Phase 'review' -RunId 'review-build-digest-unverifiable' -ReviewerFamily 'anthropic' -ReviewedRunId 'build-digest-unverifiable' -Status 'done' -Started '2026-01-31T00:01:00Z' -ExtraFields ([ordered]@{ reviewed_tree_digest = 'digest-match' })
+        )
+        New-TestCase -Name 'review-digest-unverifiable' -ExpectedExitCode 12 -Rows @(
+            New-FixtureRow -Spec 'family-gate-test/review-digest-unverifiable' -Task 'task-review-digest-unverifiable' -WorktreeKey 'worktree-review-digest-unverifiable' -Phase 'build' -RunId 'build-review-digest-unverifiable' -BuilderFamily 'openai' -Status 'done' -Started '2026-02-01T00:00:00Z' -ExtraFields ([ordered]@{ end_tree_digest = 'digest-match' })
+            New-FixtureRow -Spec 'family-gate-test/review-digest-unverifiable' -Task 'task-review-digest-unverifiable' -WorktreeKey 'worktree-review-digest-unverifiable' -Phase 'review' -RunId 'review-digest-unverifiable' -ReviewerFamily 'anthropic' -ReviewedRunId 'build-review-digest-unverifiable' -Status 'done' -Started '2026-02-01T00:01:00Z' -ExtraFields ([ordered]@{ reviewed_tree_digest = 'unverifiable' })
+        )
+        New-TestCase -Name 'digest-match' -ExpectedExitCode 0 -Rows @(
+            New-FixtureRow -Spec 'family-gate-test/digest-match' -Task 'task-digest-match' -WorktreeKey 'worktree-digest-match' -Phase 'build' -RunId 'build-digest-match' -BuilderFamily 'openai' -Status 'done' -Started '2026-02-02T00:00:00Z' -ExtraFields ([ordered]@{ end_tree_digest = 'digest-equal' })
+            New-FixtureRow -Spec 'family-gate-test/digest-match' -Task 'task-digest-match' -WorktreeKey 'worktree-digest-match' -Phase 'review' -RunId 'review-digest-match' -ReviewerFamily 'anthropic' -ReviewedRunId 'build-digest-match' -Status 'done' -Started '2026-02-02T00:01:00Z' -ExtraFields ([ordered]@{ reviewed_tree_digest = 'digest-equal' })
+        )
+        New-TestCase -Name 'review-digest-absent' -ExpectedExitCode 0 -Rows @(
+            New-FixtureRow -Spec 'family-gate-test/review-digest-absent' -Task 'task-review-digest-absent' -WorktreeKey 'worktree-review-digest-absent' -Phase 'build' -RunId 'build-review-digest-absent' -BuilderFamily 'openai' -Status 'done' -Started '2026-02-03T00:00:00Z' -ExtraFields ([ordered]@{ end_tree_digest = 'digest-build-only' })
+            New-FixtureRow -Spec 'family-gate-test/review-digest-absent' -Task 'task-review-digest-absent' -WorktreeKey 'worktree-review-digest-absent' -Phase 'review' -RunId 'review-digest-absent' -ReviewerFamily 'anthropic' -ReviewedRunId 'build-review-digest-absent' -Status 'done' -Started '2026-02-03T00:01:00Z'
+        )
+        New-TestCase -Name 'build-digest-absent' -ExpectedExitCode 0 -Rows @(
+            New-FixtureRow -Spec 'family-gate-test/build-digest-absent' -Task 'task-build-digest-absent' -WorktreeKey 'worktree-build-digest-absent' -Phase 'build' -RunId 'build-digest-absent' -BuilderFamily 'openai' -Status 'done' -Started '2026-02-04T00:00:00Z'
+            New-FixtureRow -Spec 'family-gate-test/build-digest-absent' -Task 'task-build-digest-absent' -WorktreeKey 'worktree-build-digest-absent' -Phase 'review' -RunId 'review-build-digest-absent' -ReviewerFamily 'anthropic' -ReviewedRunId 'build-digest-absent' -Status 'done' -Started '2026-02-04T00:01:00Z' -ExtraFields ([ordered]@{ reviewed_tree_digest = 'digest-review-only' })
+        )
     )
     $cases = @($legacyCases) + @($newCases)
 
@@ -292,8 +326,11 @@ try {
                 -LedgerPath $fixturePath 2>&1
         )
         $actualExitCode = $LASTEXITCODE
+        $gateOutputText = $gateOutput -join [Environment]::NewLine
+        $outputMatches = [string]::IsNullOrEmpty($case.ExpectedOutputSubstring) -or
+            ($gateOutputText.IndexOf($case.ExpectedOutputSubstring, [StringComparison]::Ordinal) -ge 0)
 
-        if ($actualExitCode -eq $case.ExpectedExitCode) {
+        if (($actualExitCode -eq $case.ExpectedExitCode) -and $outputMatches) {
             Write-Output ("PASS {0} -- expected {1}, got {2}" -f $case.Name, $case.ExpectedExitCode, $actualExitCode)
         }
         else {
@@ -301,7 +338,7 @@ try {
                 Name = $case.Name
                 Expected = $case.ExpectedExitCode
                 Actual = $actualExitCode
-                Output = ($gateOutput -join [Environment]::NewLine)
+                Output = $gateOutputText
             }
             $failures += $failure
             Write-Output ("FAIL {0} -- expected {1}, got {2}" -f $case.Name, $case.ExpectedExitCode, $actualExitCode)
