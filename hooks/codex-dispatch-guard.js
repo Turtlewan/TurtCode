@@ -447,7 +447,7 @@ function handlePreToolUse(data) {
       'launched it, and keeps writing).\n' +
       'Use: ~/.claude/skills/apex-code/scripts/codex-dispatch.ps1 ' +
       '-Spec <spec> -Task <task> -Worktree <repo> -BaseSha <sha> -Phase build ' +
-      '-Authorized <the spec\'s "Files to change" list> -Prompt <pack>\n' +
+      '-SpecSourcePath <abs> -Authorized <the spec\'s "Files to change" list> -Prompt <pack>\n' +
       'Its exit codes are the contract: 0 done · 65 scope violation · 67 BLOCKED (do not commit) · ' +
       '68 done_with_concerns · 75 still running · 124 stalled.'
     );

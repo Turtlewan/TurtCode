@@ -35,6 +35,40 @@ try {
     'orig'       | Out-File -Encoding ascii src/a.py
     'orig'       | Out-File -Encoding ascii src/b.py
     'HOST STATE' | Out-File -Encoding ascii docs/status.md
+    New-Item -ItemType Directory -Force -Path docs/changes | Out-Null
+    @'
+---
+spec: cap-test
+status: draft
+autonomy_level: L2
+---
+# Spec: fixture placeholder
+## Intent
+- Intent: fixture spec to satisfy pre-flight validation.
+## Assumptions
+- none -> impact: Low
+## Prerequisites
+- none
+## Files to Change
+| File | Operation | Notes |
+|------|-----------|-------|
+| src/a.py | modify | placeholder |
+## Tasks
+- [ ] **Task 1:** placeholder change -- files: src/a.py -- done when: file present.
+## Wave plan
+Wave 1: [Task 1]
+## Permissions
+Approving this spec approves the file operation above.
+## Specialist Context
+### Security
+(none)
+## Documentation
+(none)
+## Acceptance Criteria
+- [ ] **Task 1** -> verify: the placeholder change is present.
+## Progress
+_(coding writes here)_
+'@ | Out-File -Encoding utf8 docs/changes/cap-test.md
     @(
         '## Verify commands'
         ''

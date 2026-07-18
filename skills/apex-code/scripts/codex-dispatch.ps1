@@ -8,6 +8,7 @@
 [CmdletBinding()]
 param(
     [string]$Spec,
+    [string]$SpecSourcePath,
     [string]$Task,
     [string]$Worktree,
     [string]$BaseSha,
@@ -921,7 +922,45 @@ try {
                 }
             }
             else {
-                Write-Host "[dispatch] pre-flight: spec docs/changes/$Spec.md not under this worktree -- validator skipped (cross-tree build)" -ForegroundColor DarkGray
+                if ($PSBoundParameters.ContainsKey('SpecSourcePath')) {
+                    $isDriveAbsolute = $SpecSourcePath -match '^[A-Za-z]:[\\/]'
+                    $isUncPath = $SpecSourcePath -match '^\\\\'
+                    if (-not ($isDriveAbsolute -or $isUncPath)) {
+                        Write-Host "[dispatch] REFUSED (exit 72): -SpecSourcePath '$SpecSourcePath' violates the documented contract: expected a drive-absolute or UNC path" -ForegroundColor Red
+                        # A cross-tree spec must have an unambiguous fully-qualified identity before validation.
+                        exit 72
+                    }
+                    if (-not (Test-Path -LiteralPath $SpecSourcePath -PathType Leaf)) {
+                        Write-Host "[dispatch] REFUSED (exit 72): cross-tree spec source file does not exist: '$SpecSourcePath'" -ForegroundColor Red
+                        # A cross-tree build must validate an existing leaf spec before dispatch.
+                        exit 72
+                    }
+
+                    $specSourceBasename = [System.IO.Path]::GetFileNameWithoutExtension($SpecSourcePath)
+                    if (-not [string]::Equals($specSourceBasename, $Spec, [System.StringComparison]::OrdinalIgnoreCase)) {
+                        Write-Host "[dispatch] REFUSED (exit 72): -Spec '$Spec' does not match cross-tree source basename '$specSourceBasename'" -ForegroundColor Red
+                        # Bind a cross-tree source to the requested spec so another spec cannot be substituted.
+                        exit 72
+                    }
+
+                    $specFindings = @(& $preflightSpecValidateScript -SpecPath $SpecSourcePath)
+                    $specValidateExit = $LASTEXITCODE
+                    foreach ($finding in $specFindings) { Write-Host $finding }
+                    if ($specValidateExit -eq 1) {
+                        $findingText = if ($specFindings.Count -gt 0) { $specFindings -join '; ' } else { 'validator returned exit 1' }
+                        Write-Host "[dispatch] REFUSED (exit 72): spec validation failed -- $findingText" -ForegroundColor Red
+                        # A cross-tree spec that fails validation must refuse before reservation.
+                        exit 72
+                    }
+                    if ($specValidateExit -ne 0) {
+                        throw "apex-spec-validate returned unexpected exit code $specValidateExit"
+                    }
+                }
+                else {
+                    Write-Host "[dispatch] REFUSED (exit 72): no in-worktree spec at docs/changes/$Spec.md; pass -SpecSourcePath <absolute path> for a cross-tree build, or -SkipBaselineCheck for a deliberate bootstrap" -ForegroundColor Red
+                    # A cross-tree build cannot proceed without an explicitly supplied spec to validate.
+                    exit 72
+                }
             }
         }
     }

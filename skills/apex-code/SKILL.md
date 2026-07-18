@@ -1,8 +1,8 @@
 ---
 skill: apex-code
 backend: claude
-version: 2.8.1
-last_updated: 2026-07-17
+version: 2.9.0
+last_updated: 2026-07-18
 sources:
   - docs/technical/adr/ADR-027-codex-primary-opus-fallback-deepseek-archived.md
   - docs/technical/adr/ADR-028-parallel-codex-dispatch.md
@@ -109,6 +109,7 @@ wrapper**:
 ```powershell
 scripts/codex-dispatch.ps1 `
   -Spec <spec> -Task <task> -Phase build -Worktree <repo-root> -BaseSha <sha> `
+  -SpecSourcePath <abs path> `                    # host always passes the spec's real home on cross-tree builds
   -Prompt "<the dispatch pack>" `
   -Authorized @('src/a.py','tests/test_a.py') `   # the spec's ## Files to change, VERBATIM
   -Effort <coder_effort>                          # default medium
@@ -152,7 +153,7 @@ Four things are load-bearing, and each has already broken a real build when done
 | 68 | done_with_concerns | The coder finished but flagged doubts. Read them; carry them into the review. |
 | 69 | **tree moved under a gate or at the launch boundary** | The verdict is **VOID** — it describes a tree that no longer exists. This also fires when the tree moves between the pre-flight pin and the launch boundary. By then the reservation **HAS occurred**, so the ledger row **EXISTS** and is updated `failed` / `tree-moved` (unlike exit 72, which refuses before reservation and creates no row). Find the writer, let it finish, re-run the gate. |
 | 71 | shared worktree refused | A coder is already live here. `git worktree add` one per concurrent task, or go serial. |
-| 72 | refused: red baseline | The pre-dispatch pre-flight found a red/unparseable/recipe-less baseline (or a failing in-tree spec validation). NOTHING was launched and NO ledger row exists. Fix the baseline (or the spec), or `-SkipBaselineCheck` for a bootstrap. |
+| 72 | refused: red baseline | The pre-dispatch pre-flight found a red/unparseable/recipe-less baseline or refused spec validation. NOTHING was launched and NO ledger row exists. Fix the baseline/spec; for cross-tree builds pass `-SpecSourcePath <abs path>`, or use `-SkipBaselineCheck` for a bootstrap. |
 | 73 | **double-encoded text (mojibake)** | Codex-on-Windows corrupted non-ASCII it wrote (em-dash → `â€"`). **Do not commit — the suite is green and wrong.** The coder writes the same bad bytes into the *expected* string, so the assertion compares corrupt to corrupt and passes. Fix the bytes, re-verify. |
 | 74 | refused: scope lock | A workspace-write build dispatch had an empty -Authorized scope list and no -ScopeUnlocked escape, OR a contradictory/incomplete flag combination. Refused BEFORE reservation, so NO ledger row and NO dispatch log exist for the refused run. Pass the spec's Files-to-change list as -Authorized, or -ScopeUnlocked -ScopeUnlockedReason to bypass (recorded in the row). |
 | 75 | still running | Your *call* died; the coder did **not**. Wait for `.final`. |
@@ -252,9 +253,8 @@ It runs the dedicated `AGENTS.md → ## Preflight commands` block when present, 
 - `scripts/apex-baseline-check.ps1 -Full -Worktree <repo>` runs the recipe (`AGENTS.md → ## Verify
   commands`) in the repo; exit **0** green · **1** red · **3** recipe heading present but unparseable ·
   **4** `NO_RECIPE`. This is the single shared parser; M2b calls it rather than re-matching headings.
-- Exit **72** means the pre-flight refused a red, unparseable, or recipe-less baseline (or failed
-  in-tree spec validation) before reservation, so nothing launched and no ledger row exists.
-  `-SkipBaselineCheck` is the single bootstrap escape for the whole pre-flight.
+- Exit **72** means pre-flight refused a red/unparseable/recipe-less baseline, failed in-tree validation, or a cross-tree build with neither an in-worktree spec nor `-SpecSourcePath`; nothing launched and no ledger row exists.
+  A supplied `-SpecSourcePath` must be drive-absolute or UNC, exist, basename-match `-Spec`, and validate cleanly, or exit 72; `-SkipBaselineCheck` is the bootstrap escape for the whole pre-flight.
 - The wrapper pins the tree for pre-flight and verifies that pin again at the launch boundary. If the
   tree moved, it fails with exit **69** after reservation and updates the existing ledger row to
   `failed` / `tree-moved`.

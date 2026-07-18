@@ -42,6 +42,44 @@ function Write-Utf8NoBom {
     [System.IO.File]::WriteAllText($Path, $Content, [System.Text.UTF8Encoding]::new($false))
 }
 
+function New-FixtureSpec {
+    param([Parameter(Mandatory)][string]$Spec)
+
+    return @"
+---
+spec: $Spec
+status: draft
+autonomy_level: L2
+---
+# Spec: fixture placeholder
+## Intent
+- Intent: fixture spec to satisfy pre-flight validation.
+## Assumptions
+- none -> impact: Low
+## Prerequisites
+- none
+## Files to Change
+| File | Operation | Notes |
+|------|-----------|-------|
+| src/a.py | modify | placeholder |
+## Tasks
+- [ ] **Task 1:** placeholder change -- files: src/a.py -- done when: file present.
+## Wave plan
+Wave 1: [Task 1]
+## Permissions
+Approving this spec approves the file operation above.
+## Specialist Context
+### Security
+(none)
+## Documentation
+(none)
+## Acceptance Criteria
+- [ ] **Task 1** -> verify: the placeholder change is present.
+## Progress
+_(coding writes here)_
+"@
+}
+
 function Set-OptionalEnvironmentValue {
     param([Parameter(Mandatory)][string]$Name, [AllowNull()][string]$Value)
 
@@ -75,7 +113,10 @@ function Invoke-FixtureGit {
 }
 
 function New-FixtureRepo {
-    param([Parameter(Mandatory)][string]$Name)
+    param(
+        [Parameter(Mandatory)][string]$Name,
+        [hashtable]$ExtraFiles = @{}
+    )
 
     $repo = Join-Path $repoRoot $Name
     [System.IO.Directory]::CreateDirectory((Join-Path $repo 'src')) | Out-Null
@@ -92,6 +133,9 @@ function New-FixtureRepo {
 exit 0
 ```
 '@
+    foreach ($entry in $ExtraFiles.GetEnumerator()) {
+        Write-Utf8NoBom -Path (Join-Path $repo $entry.Key) -Content ([string]$entry.Value)
+    }
 
     Invoke-FixtureGit -Repo $repo -GitArguments @('init', '-q') | Out-Null
     Invoke-FixtureGit -Repo $repo -GitArguments @('config', 'user.email', 'dispatch-criticalfile-test@example.invalid') | Out-Null
@@ -199,7 +243,14 @@ try {
     # case 3 to case 8 LASTEXITCODE adjacency below.
     $fixtures = @{}
     foreach ($number in 1..10) {
-        $fixtures[$number] = New-FixtureRepo -Name ("case-{0}" -f $number)
+        $extraFiles = @{}
+        if ($number -eq 3) {
+            $extraFiles['docs\changes\critfile-critical-confirmed.md'] = New-FixtureSpec -Spec 'critfile-critical-confirmed'
+        }
+        elseif ($number -eq 9) {
+            $extraFiles['docs\changes\critfile-noncritical-build.md'] = New-FixtureSpec -Spec 'critfile-noncritical-build'
+        }
+        $fixtures[$number] = New-FixtureRepo -Name ("case-{0}" -f $number) -ExtraFiles $extraFiles
     }
     $fakeSink = New-FixtureRepo -Name 'case-3-fake-sink'
 

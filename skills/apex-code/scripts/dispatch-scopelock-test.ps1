@@ -40,6 +40,44 @@ function Write-Utf8NoBom {
     [System.IO.File]::WriteAllText($Path, $Content, [System.Text.UTF8Encoding]::new($false))
 }
 
+function New-FixtureSpec {
+    param([Parameter(Mandatory)][string]$Spec)
+
+    return @"
+---
+spec: $Spec
+status: draft
+autonomy_level: L2
+---
+# Spec: fixture placeholder
+## Intent
+- Intent: fixture spec to satisfy pre-flight validation.
+## Assumptions
+- none -> impact: Low
+## Prerequisites
+- none
+## Files to Change
+| File | Operation | Notes |
+|------|-----------|-------|
+| src/a.py | modify | placeholder |
+## Tasks
+- [ ] **Task 1:** placeholder change -- files: src/a.py -- done when: file present.
+## Wave plan
+Wave 1: [Task 1]
+## Permissions
+Approving this spec approves the file operation above.
+## Specialist Context
+### Security
+(none)
+## Documentation
+(none)
+## Acceptance Criteria
+- [ ] **Task 1** -> verify: the placeholder change is present.
+## Progress
+_(coding writes here)_
+"@
+}
+
 function Set-OptionalEnvironmentValue {
     param([Parameter(Mandatory)][string]$Name, [AllowNull()][string]$Value)
 
@@ -75,7 +113,8 @@ function Invoke-FixtureGit {
 function New-FixtureRepo {
     param(
         [Parameter(Mandatory)][string]$Name,
-        [switch]$GreenBaseline
+        [switch]$GreenBaseline,
+        [hashtable]$ExtraFiles = @{}
     )
 
     $repo = Join-Path $repoRoot $Name
@@ -91,6 +130,9 @@ exit 0
 ```
 '@
         Write-Utf8NoBom -Path (Join-Path $repo 'AGENTS.md') -Content $greenRecipe
+    }
+    foreach ($entry in $ExtraFiles.GetEnumerator()) {
+        Write-Utf8NoBom -Path (Join-Path $repo $entry.Key) -Content ([string]$entry.Value)
     }
 
     Invoke-FixtureGit -Repo $repo -GitArguments @('init', '-q') | Out-Null
@@ -243,7 +285,9 @@ try {
     Assert-Case -Label 'review both-flags ledger' -Condition ($result.Rows.Count -eq 0) -Detail "expected zero rows, got $($result.Rows.Count)"
 
     $spec = New-UniqueSpec -CaseName 'unlocked'
-    $repo = New-FixtureRepo -Name 'unlocked' -GreenBaseline
+    $repo = New-FixtureRepo -Name 'unlocked' -GreenBaseline -ExtraFiles @{
+        "docs\changes\$spec.md" = (New-FixtureSpec -Spec $spec)
+    }
     $result = Invoke-DispatchCase -CaseName 'deliberately unlocked build' -Spec $spec -Repo $repo -ExtraParameters @{
         ScopeUnlocked = $true
         ScopeUnlockedReason = 'bootstrap alpha'

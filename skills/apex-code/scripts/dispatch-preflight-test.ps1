@@ -115,6 +115,44 @@ function New-UniqueSpec {
     return ("preflight-{0}-{1}" -f $CaseName, [guid]::NewGuid().ToString('N'))
 }
 
+function New-GreenFixtureSpec {
+    param([Parameter(Mandatory)][string]$Spec)
+
+    return @"
+---
+spec: $Spec
+status: draft
+autonomy_level: L2
+---
+# Spec: fixture placeholder
+## Intent
+- Intent: fixture spec to satisfy pre-flight validation.
+## Assumptions
+- none -> impact: Low
+## Prerequisites
+- none
+## Files to Change
+| File | Operation | Notes |
+|------|-----------|-------|
+| src/a.py | modify | placeholder |
+## Tasks
+- [ ] **Task 1:** placeholder change -- files: src/a.py -- done when: file present.
+## Wave plan
+Wave 1: [Task 1]
+## Permissions
+Approving this spec approves the file operation above.
+## Specialist Context
+### Security
+(none)
+## Documentation
+(none)
+## Acceptance Criteria
+- [ ] **Task 1** -> verify: the placeholder change is present.
+## Progress
+_(coding writes here)_
+"@
+}
+
 function Get-LedgerRowsForSpec {
     param([Parameter(Mandatory)][string]$Spec)
 
@@ -157,6 +195,21 @@ function Assert-PreflightPinCleaned {
         $leftovers = @(Get-ChildItem -LiteralPath $gatesRoot -Filter "apex-treepin-preflight-$specSafe-*" -File -ErrorAction SilentlyContinue)
     }
     Assert-Case -Label "$CaseName pin cleanup" -Condition ($leftovers.Count -eq 0) -Detail ("{0} preflight pin file(s) remain" -f $leftovers.Count)
+}
+
+function Assert-NoCodexLog {
+    param(
+        [Parameter(Mandatory)][string]$CaseName,
+        [Parameter(Mandatory)][string]$Spec
+    )
+
+    $specSafe = $Spec -replace '[^A-Za-z0-9._-]', '_'
+    $logDirectory = Join-Path (Split-Path $ledgerPath -Parent) 'codex-logs'
+    $logs = @()
+    if (Test-Path -LiteralPath $logDirectory -PathType Container) {
+        $logs = @(Get-ChildItem -LiteralPath $logDirectory -Filter "codex-$specSafe-*" -File -ErrorAction SilentlyContinue)
+    }
+    Assert-Case -Label "$CaseName codex log" -Condition ($logs.Count -eq 0) -Detail ("{0} matching codex log file(s) found" -f $logs.Count)
 }
 
 function Invoke-DispatchCase {
@@ -306,7 +359,8 @@ Not started.
     Assert-PreflightPinCleaned -CaseName 'validator-fail' -Spec $spec
 
     $spec = New-UniqueSpec -CaseName 'moved-tree'
-    $repo = New-FixtureRepo -Name 'moved-tree' -AgentsContent $movedTreeRecipe
+    $greenSpec = New-GreenFixtureSpec -Spec $spec
+    $repo = New-FixtureRepo -Name 'moved-tree' -AgentsContent $movedTreeRecipe -ExtraFiles @{ "docs\changes\$spec.md" = $greenSpec }
     $result = Invoke-DispatchCase -CaseName 'MOVED-TREE at launch' -Spec $spec -Repo $repo -FakeRepo $repo
     $movedRow = if ($result.Rows.Count -eq 1) { $result.Rows[0] } else { $null }
     Assert-Case -Label 'moved-tree exit' -Condition ($result.ExitCode -eq 69) -Detail "expected 69, got $($result.ExitCode)"
@@ -316,12 +370,102 @@ Not started.
     Assert-PreflightPinCleaned -CaseName 'moved-tree' -Spec $spec
 
     $spec = New-UniqueSpec -CaseName 'green'
-    $repo = New-FixtureRepo -Name 'green' -AgentsContent $greenRecipe
+    $greenSpec = New-GreenFixtureSpec -Spec $spec
+    $repo = New-FixtureRepo -Name 'green' -AgentsContent $greenRecipe -ExtraFiles @{ "docs\changes\$spec.md" = $greenSpec }
     $result = Invoke-DispatchCase -CaseName 'GREEN baseline' -Spec $spec -Repo $repo -FakeRepo $repo -FakeEnvironment @{ FAKE_CODEX_INSCOPE_ONLY = '1' }
     Assert-Case -Label 'GREEN proceeds' -Condition ($result.ExitCode -notin @(72, 69)) -Detail "exit $($result.ExitCode) is not a gate refusal"
     Assert-Case -Label 'GREEN success' -Condition ($result.ExitCode -eq 0) -Detail "expected fake coder success 0, got $($result.ExitCode)"
     Assert-Case -Label 'GREEN ledger presence' -Condition ($result.Rows.Count -eq 1) -Detail "expected one row, got $($result.Rows.Count)"
     Assert-PreflightPinCleaned -CaseName 'GREEN' -Spec $spec
+
+    $spec = New-UniqueSpec -CaseName 'cross-tree-no-source'
+    $repo = New-FixtureRepo -Name 'cross-tree-no-source' -AgentsContent $greenRecipe
+    $result = Invoke-DispatchCase -CaseName 'CROSS-TREE no SpecSourcePath' -Spec $spec -Repo $repo -FakeRepo $repo
+    Assert-Case -Label 'cross-tree-no-source exit' -Condition ($result.ExitCode -eq 72) -Detail "expected 72, got $($result.ExitCode)"
+    Assert-Case -Label 'cross-tree-no-source ledger' -Condition ($result.Rows.Count -eq 0) -Detail "expected zero rows, got $($result.Rows.Count)"
+    Assert-NoCodexLog -CaseName 'cross-tree-no-source' -Spec $spec
+    Assert-PreflightPinCleaned -CaseName 'cross-tree-no-source' -Spec $spec
+
+    $spec = New-UniqueSpec -CaseName 'cross-tree-valid'
+    $greenSpec = New-GreenFixtureSpec -Spec $spec
+    $specSourcePath = [System.IO.Path]::GetFullPath((Join-Path (Join-Path $testRoot 'external-specs\valid') "$spec.md"))
+    Write-Utf8NoBom -Path $specSourcePath -Content $greenSpec
+    $repo = New-FixtureRepo -Name 'cross-tree-valid' -AgentsContent $greenRecipe
+    $result = Invoke-DispatchCase -CaseName 'CROSS-TREE valid SpecSourcePath' -Spec $spec -Repo $repo -FakeRepo $repo -ExtraParameters @{ SpecSourcePath = $specSourcePath } -FakeEnvironment @{ FAKE_CODEX_INSCOPE_ONLY = '1' }
+    Assert-Case -Label 'cross-tree-valid exit' -Condition ($result.ExitCode -eq 0) -Detail "expected fake coder success 0, got $($result.ExitCode)"
+    Assert-Case -Label 'cross-tree-valid ledger' -Condition ($result.Rows.Count -eq 1) -Detail "expected one row, got $($result.Rows.Count)"
+    Assert-PreflightPinCleaned -CaseName 'cross-tree-valid' -Spec $spec
+
+    $spec = New-UniqueSpec -CaseName 'cross-tree-missing'
+    $specSourcePath = [System.IO.Path]::GetFullPath((Join-Path (Join-Path $testRoot 'external-specs\missing') "$spec.md"))
+    $repo = New-FixtureRepo -Name 'cross-tree-missing' -AgentsContent $greenRecipe
+    $result = Invoke-DispatchCase -CaseName 'CROSS-TREE missing SpecSourcePath' -Spec $spec -Repo $repo -FakeRepo $repo -ExtraParameters @{ SpecSourcePath = $specSourcePath }
+    Assert-Case -Label 'cross-tree-missing exit' -Condition ($result.ExitCode -eq 72) -Detail "expected 72, got $($result.ExitCode)"
+    Assert-Case -Label 'cross-tree-missing ledger' -Condition ($result.Rows.Count -eq 0) -Detail "expected zero rows, got $($result.Rows.Count)"
+    Assert-NoCodexLog -CaseName 'cross-tree-missing' -Spec $spec
+    Assert-PreflightPinCleaned -CaseName 'cross-tree-missing' -Spec $spec
+
+    $spec = New-UniqueSpec -CaseName 'cross-tree-invalid'
+    $specSourcePath = [System.IO.Path]::GetFullPath((Join-Path (Join-Path $testRoot 'external-specs\invalid') "$spec.md"))
+    Write-Utf8NoBom -Path $specSourcePath -Content $invalidSpec
+    $repo = New-FixtureRepo -Name 'cross-tree-invalid' -AgentsContent $greenRecipe
+    $result = Invoke-DispatchCase -CaseName 'CROSS-TREE invalid SpecSourcePath' -Spec $spec -Repo $repo -FakeRepo $repo -ExtraParameters @{ SpecSourcePath = $specSourcePath }
+    Assert-Case -Label 'cross-tree-invalid exit' -Condition ($result.ExitCode -eq 72) -Detail "expected 72, got $($result.ExitCode)"
+    Assert-Case -Label 'cross-tree-invalid ledger' -Condition ($result.Rows.Count -eq 0) -Detail "expected zero rows, got $($result.Rows.Count)"
+    Assert-Case -Label 'cross-tree-invalid evidence' -Condition ($result.Output -match 'FAIL FILES-COMPLETENESS') -Detail 'dispatcher printed the validator finding'
+    Assert-NoCodexLog -CaseName 'cross-tree-invalid' -Spec $spec
+    Assert-PreflightPinCleaned -CaseName 'cross-tree-invalid' -Spec $spec
+
+    $spec = New-UniqueSpec -CaseName 'cross-tree-mismatch'
+    $sourceSpec = New-UniqueSpec -CaseName 'cross-tree-other-name'
+    $greenSpec = New-GreenFixtureSpec -Spec $sourceSpec
+    $specSourcePath = [System.IO.Path]::GetFullPath((Join-Path (Join-Path $testRoot 'external-specs\mismatch') "$sourceSpec.md"))
+    Write-Utf8NoBom -Path $specSourcePath -Content $greenSpec
+    $repo = New-FixtureRepo -Name 'cross-tree-mismatch' -AgentsContent $greenRecipe
+    $result = Invoke-DispatchCase -CaseName 'CROSS-TREE basename mismatch' -Spec $spec -Repo $repo -FakeRepo $repo -ExtraParameters @{ SpecSourcePath = $specSourcePath }
+    Assert-Case -Label 'cross-tree-mismatch exit' -Condition ($result.ExitCode -eq 72) -Detail "expected 72, got $($result.ExitCode)"
+    Assert-Case -Label 'cross-tree-mismatch ledger' -Condition ($result.Rows.Count -eq 0) -Detail "expected zero rows, got $($result.Rows.Count)"
+    Assert-NoCodexLog -CaseName 'cross-tree-mismatch' -Spec $spec
+    Assert-PreflightPinCleaned -CaseName 'cross-tree-mismatch' -Spec $spec
+
+    $spec = New-UniqueSpec -CaseName 'cross-tree-relative'
+    $specSourcePath = "docs\changes\$spec.md"
+    $repo = New-FixtureRepo -Name 'cross-tree-relative' -AgentsContent $greenRecipe
+    $result = Invoke-DispatchCase -CaseName 'CROSS-TREE relative SpecSourcePath' -Spec $spec -Repo $repo -FakeRepo $repo -ExtraParameters @{ SpecSourcePath = $specSourcePath }
+    Assert-Case -Label 'cross-tree-relative exit' -Condition ($result.ExitCode -eq 72) -Detail "expected 72, got $($result.ExitCode)"
+    Assert-Case -Label 'cross-tree-relative ledger' -Condition ($result.Rows.Count -eq 0) -Detail "expected zero rows, got $($result.Rows.Count)"
+    Assert-NoCodexLog -CaseName 'cross-tree-relative' -Spec $spec
+    Assert-PreflightPinCleaned -CaseName 'cross-tree-relative' -Spec $spec
+
+    $spec = New-UniqueSpec -CaseName 'cross-tree-precedence'
+    $greenSpec = New-GreenFixtureSpec -Spec $spec
+    $specSourcePath = [System.IO.Path]::GetFullPath((Join-Path (Join-Path $testRoot 'external-specs\precedence') "$spec.md"))
+    Write-Utf8NoBom -Path $specSourcePath -Content $invalidSpec
+    $repo = New-FixtureRepo -Name 'cross-tree-precedence' -AgentsContent $greenRecipe -ExtraFiles @{ "docs\changes\$spec.md" = $greenSpec }
+    $result = Invoke-DispatchCase -CaseName 'IN-WORKTREE spec precedence' -Spec $spec -Repo $repo -FakeRepo $repo -ExtraParameters @{ SpecSourcePath = $specSourcePath } -FakeEnvironment @{ FAKE_CODEX_INSCOPE_ONLY = '1' }
+    Assert-Case -Label 'cross-tree-precedence exit' -Condition ($result.ExitCode -eq 0) -Detail "expected fake coder success 0, got $($result.ExitCode)"
+    Assert-Case -Label 'cross-tree-precedence ledger' -Condition ($result.Rows.Count -eq 1) -Detail "expected one row, got $($result.Rows.Count)"
+    Assert-PreflightPinCleaned -CaseName 'cross-tree-precedence' -Spec $spec
+
+    $spec = New-UniqueSpec -CaseName 'cross-tree-drive-relative'
+    $specSourcePath = "C:relative\path\$spec.md"
+    $repo = New-FixtureRepo -Name 'cross-tree-drive-relative' -AgentsContent $greenRecipe
+    $result = Invoke-DispatchCase -CaseName 'CROSS-TREE drive-relative SpecSourcePath' -Spec $spec -Repo $repo -FakeRepo $repo -ExtraParameters @{ SpecSourcePath = $specSourcePath }
+    Assert-Case -Label 'cross-tree-drive-relative exit' -Condition ($result.ExitCode -eq 72) -Detail "expected 72, got $($result.ExitCode)"
+    Assert-Case -Label 'cross-tree-drive-relative ledger' -Condition ($result.Rows.Count -eq 0) -Detail "expected zero rows, got $($result.Rows.Count)"
+    Assert-NoCodexLog -CaseName 'cross-tree-drive-relative' -Spec $spec
+    Assert-PreflightPinCleaned -CaseName 'cross-tree-drive-relative' -Spec $spec
+
+    $spec = New-UniqueSpec -CaseName 'cross-tree-case-variant'
+    $greenSpec = New-GreenFixtureSpec -Spec $spec
+    $caseVariantSpec = $spec.ToUpperInvariant()
+    $specSourcePath = [System.IO.Path]::GetFullPath((Join-Path (Join-Path $testRoot 'external-specs\case-variant') "$caseVariantSpec.md"))
+    Write-Utf8NoBom -Path $specSourcePath -Content $greenSpec
+    $repo = New-FixtureRepo -Name 'cross-tree-case-variant' -AgentsContent $greenRecipe
+    $result = Invoke-DispatchCase -CaseName 'CROSS-TREE case-variant basename' -Spec $spec -Repo $repo -FakeRepo $repo -ExtraParameters @{ SpecSourcePath = $specSourcePath } -FakeEnvironment @{ FAKE_CODEX_INSCOPE_ONLY = '1' }
+    Assert-Case -Label 'cross-tree-case-variant exit' -Condition ($result.ExitCode -eq 0) -Detail "expected fake coder success 0, got $($result.ExitCode)"
+    Assert-Case -Label 'cross-tree-case-variant ledger' -Condition ($result.Rows.Count -eq 1) -Detail "expected one row, got $($result.Rows.Count)"
+    Assert-PreflightPinCleaned -CaseName 'cross-tree-case-variant' -Spec $spec
 
     $spec = New-UniqueSpec -CaseName 'review'
     $repo = New-FixtureRepo -Name 'review-red-recipe' -AgentsContent $redRecipe

@@ -100,7 +100,7 @@ not: a guaranteed stdin close, a durable run record, and crash recovery.
 waiting on an inherited stdin in some launch paths — a real recurring incident this wrapper exists
 to make structurally impossible, not just documented against.
 
-**Params:** `-Spec -Task -Worktree -BaseSha -Phase -Prompt [-Effort medium] [-NoOutputTimeoutMin 8]
+**Params:** `-Spec -Task -Worktree -BaseSha -Phase -Prompt [-SpecSourcePath <abs>] [-Effort medium] [-NoOutputTimeoutMin 8]
 [-Adopt]`. `-Prompt` is the assembled dispatch pack text (same four-slot pack as any `▸codex`
 dispatch — `references/dispatch-pack.md`).
 

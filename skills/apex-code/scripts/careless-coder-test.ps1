@@ -31,7 +31,43 @@ function Assert-Ok {
     if (-not $Condition) { $script:failures += 1 }
 }
 
-function New-Repo([string]$Path, [switch]$GreenBaseline) {
+function New-FixtureSpec([string]$Spec) {
+    return @"
+---
+spec: $Spec
+status: draft
+autonomy_level: L2
+---
+# Spec: fixture placeholder
+## Intent
+- Intent: fixture spec to satisfy pre-flight validation.
+## Assumptions
+- none -> impact: Low
+## Prerequisites
+- none
+## Files to Change
+| File | Operation | Notes |
+|------|-----------|-------|
+| src/a.py | modify | placeholder |
+## Tasks
+- [ ] **Task 1:** placeholder change -- files: src/a.py -- done when: file present.
+## Wave plan
+Wave 1: [Task 1]
+## Permissions
+Approving this spec approves the file operation above.
+## Specialist Context
+### Security
+(none)
+## Documentation
+(none)
+## Acceptance Criteria
+- [ ] **Task 1** -> verify: the placeholder change is present.
+## Progress
+_(coding writes here)_
+"@
+}
+
+function New-Repo([string]$Path, [switch]$GreenBaseline, [hashtable]$ExtraFiles = @{}) {
     if (Test-Path $Path) { Remove-Item -Recurse -Force $Path }
     New-Item -ItemType Directory -Force -Path (Join-Path $Path 'src') | Out-Null
     Push-Location $Path
@@ -48,6 +84,11 @@ function New-Repo([string]$Path, [switch]$GreenBaseline) {
             'exit 0'
             '```'
         ) | Out-File -Encoding ascii AGENTS.md
+    }
+    foreach ($entry in $ExtraFiles.GetEnumerator()) {
+        $filePath = Join-Path $Path $entry.Key
+        [System.IO.Directory]::CreateDirectory((Split-Path $filePath -Parent)) | Out-Null
+        [System.IO.File]::WriteAllText($filePath, [string]$entry.Value, [System.Text.UTF8Encoding]::new($false))
     }
     git add -A; git commit -q -m init
     Pop-Location
@@ -121,7 +162,9 @@ Write-Host "`n--- #1  A CLEAN, IN-SCOPE BUILD MUST EXIT 0 ---" -ForegroundColor 
 # tree it is judging. Nothing in the suite caught it: the one test that would have was already
 # expecting a 65 for a different reason. This is the test that would have.
 $repo = Join-Path $root 'clean'
-New-Repo $repo -GreenBaseline
+New-Repo $repo -GreenBaseline -ExtraFiles @{
+    'docs/changes/clean.md' = (New-FixtureSpec -Spec 'clean')
+}
 Push-Location $repo; $sha = (git rev-parse HEAD); Pop-Location
 $env:FAKE_CODEX_REPO = $repo
 $env:FAKE_CODEX_STATUS = 'done'
@@ -132,7 +175,7 @@ $env:FAKE_CODEX_INSCOPE_ONLY = '1'      # write ONLY the authorized file
     -CodexExecutable 'powershell.exe' `
     -CodexExecutableArgumentPrefix @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $fakeCodex) *> $null
 Assert-Ok ($LASTEXITCODE -eq 0) 'a clean in-scope build exits 0' "exit $LASTEXITCODE (want 0)"
-Assert-Ok (-not (Test-Path (Join-Path $repo 'docs'))) 'the harness wrote NOTHING into the worktree' 'no docs/progress/'
+Assert-Ok (-not (Test-Path (Join-Path $repo 'docs\progress'))) 'the harness wrote NOTHING into the worktree' 'no docs/progress/'
 Remove-Item Env:\FAKE_CODEX_INSCOPE_ONLY, Env:\FAKE_CODEX_STATUS, Env:\FAKE_CODEX_NO_REPORT, Env:\FAKE_CODEX_REPO -ErrorAction SilentlyContinue
 
 Write-Host ''
