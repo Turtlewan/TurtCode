@@ -1,7 +1,7 @@
 ---
 skill: apex-code
 backend: claude
-version: 2.9.0
+version: 2.10.0
 last_updated: 2026-07-18
 sources:
   - docs/technical/adr/ADR-027-codex-primary-opus-fallback-deepseek-archived.md
@@ -83,24 +83,23 @@ Same-tree parallel workers collide on lockfiles, ports, caches and the git index
 **Layer A -- classify authorized files before every build dispatch:**
 
 ```powershell
-powershell.exe -NoProfile -File "$env:USERPROFILE\.claude\skills\apex-code\scripts\apex-critical-files.ps1" -Test -Paths path1 path2 path3
+powershell.exe -NoProfile -File "$env:USERPROFILE\.claude\skills\apex-code\scripts\apex-critical-files.ps1" -Test -Root <repo-root> -Paths path1 path2 path3
 ```
 
-Use the task's `-Authorized` paths, space-separated after `-Paths`. Never use `-Paths a,b,c`: under
-`-File` that arrives as one literal string, classifies nothing, and silently exits 0.
+Use the task's `-Authorized` paths, space-separated after `-Paths`. Never use `-Paths a,b,c`: under `-File` that arrives as one literal string, classifies nothing, and silently exits 0.
 
 - Exit **0**: no critical path; dispatch normally.
-- Exit **11**: permanent hard block (for example, `docs/audit/`) -- **REFUSE the task entirely**.
-  It must never be built, even with confirmation.
+- Exit **11**: permanent hard block (for example, `docs/audit/`) -- **REFUSE the task entirely**; it must never be built, even with confirmation.
 - Exit **10**: critical path. If **ATTENDED**, run the existing governance approval gate; only the
   user's real "yes" permits dispatch with `-CriticalFilesConfirmed -CriticalFilesConfirmedNote
-  "attended <who> <when>"`. If AFK, `dontAsk`, or otherwise autonomous with no human present,
-  **PARK** and surface the task instead of dispatching it.
+  "attended <who> <when>"`. If AFK, `dontAsk`, or otherwise autonomous with no human present, **PARK** and surface the task instead of dispatching it.
+
+**Host-state authoring:** the six matchers are `docs/status.md`, root `AGENTS.md`, root `CLAUDE.md`,
+`docs/changes/`, `docs/handoff/`, and any path whose basename is `codex-run-ledger.jsonl`.
+Authorizing any of them -- including bare directory grants `docs/changes` or `docs/handoff` -- requires attended `-CriticalFilesConfirmed`; an unattended/AFK dispatch that tries to authorize one refuses with exit **76** by design: **PARK** the task. Remaining gap: a broader directory grant (for example, all of `docs`) still slips literal-token classification until D6 post-hoc write classification (Wave B2); see ADR-044 D3 consequence (a).
 
 A spec's `## Permissions` text does **not** satisfy Layer A; only a live attended human confirmation
-does. Layer B is the wrapper's exit 76 mechanical backstop: it proves the confirmation switch was
-passed, but cannot prove who supplied it. Layer A owns that provenance check, so unattended work
-must park rather than proceed.
+does. Layer B's exit 76 mechanical backstop proves the confirmation switch was passed, but not who supplied it. Layer A owns that provenance check, so unattended work must park.
 
 Every task tagged `▸codex` (the default). Assemble the **dispatch pack** — Goal → Context →
 Constraints → Done-when — per `references/dispatch-pack.md`, then **always dispatch through the
@@ -386,6 +385,7 @@ hard-block list (push to main · merge a PR · drop a table). Summary only here;
   `references/permissions.md`.
 - **Critical files always need confirmation regardless of level** — `.env`, migrations, auth
   middleware, CI configs, secrets. Unattended, an auth-semantics change is a **stop**, not a build.
+  For host-state paths, see the Layer-A host-state authoring note above.
 - **Commit yes, push no**, unless the level says otherwise.
 - A new dependency is a **supply-chain action**: verify the exact package name (typosquat) and that
   it is maintained. Unattended and uncertain → don't install; block the spec.

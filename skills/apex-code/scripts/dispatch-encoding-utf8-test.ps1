@@ -94,6 +94,114 @@ $revExit = $LASTEXITCODE
 # other unrelated failure. Assert the exact success code, not merely "not 73".
 Check 'read-only review over mojibake tree exits 0 (was 73)' ($revExit -eq 0) "review exit=$revExit"
 
+# --- Tests 3-6: adoption keys the encoding scan off the recorded sandbox --------------------------
+function New-AdoptMojibakeRepo($name) {
+    $repo = Join-Path $parent $name
+    New-Item -ItemType Directory -Force -Path (Join-Path $repo 'src') | Out-Null
+    Push-Location $repo
+    try {
+        git init -q; git config user.email 't@t.t'; git config user.name 't'
+        git config core.excludesFile (Join-Path $repo '.git\info\exclude')
+        Write-Utf8 (Join-Path $repo 'src\clean.py') "x = 1"
+        git add -A; git commit -q -m init
+        Write-Utf8 (Join-Path $repo 'src\corrupt.py') "x = 1  # $moji`n"
+    } finally { Pop-Location }
+    return $repo
+}
+
+# (a) A dead read-only review row skips the adopt encoding scan and adopts its CLEAN report.
+$adoptRepoA = New-AdoptMojibakeRepo 'adopt-read-only-repo'
+$adoptStateA = Join-Path $parent 'adopt-read-only-state'
+$adoptProgressA = Join-Path $adoptStateA 'progress'
+New-Item -ItemType Directory -Force -Path $adoptProgressA | Out-Null
+$adoptReportA = Join-Path $adoptStateA 'review-final.json'
+Write-Utf8 $adoptReportA (([ordered]@{ verdict='CLEAN'; findings=@() }) | ConvertTo-Json -Compress -Depth 8)
+$adoptRunA = 'adopt-encoding-read-only'
+$adoptRowA = [ordered]@{
+    run_id = $adoptRunA; spec = 'adopt-ro'; task = 'case-a'; phase = 'review'; status = 'stalled'
+    started = (Get-Date).ToUniversalTime().AddHours(-1).ToString('o')
+    pid = $null; launcher_pid = $null; worktree = $adoptRepoA; authorized = @()
+    scope_task = 'adopt-read-only-scope'; final_path = $adoptReportA; schema = 'review'; sandbox = 'read-only'
+}
+$adoptLedgerA = Join-Path $adoptProgressA 'codex-run-ledger.jsonl'
+[System.IO.File]::AppendAllText($adoptLedgerA, (($adoptRowA | ConvertTo-Json -Compress -Depth 8) + [Environment]::NewLine), [System.Text.UTF8Encoding]::new($false))
+$env:APEX_STATE_DIR = $adoptStateA
+$adoptOutputA = (& $dispatch -Adopt -Phase 'review' -Spec 'adopt-ro' -Task 'case-a' -Worktree $adoptRepoA *>&1 | Out-String)
+$adoptExitA = $LASTEXITCODE
+$adoptSavedA = Get-Content -LiteralPath $adoptLedgerA | ForEach-Object { $_ | ConvertFrom-Json } | Where-Object { $_.run_id -eq $adoptRunA } | Select-Object -First 1
+Check 'adopt read-only row exits 0' ($adoptExitA -eq 0) "adopt exit=$adoptExitA"
+Check 'adopt read-only row has no encoding violation' ($null -ne $adoptSavedA -and $adoptSavedA.encoding_violation -ne $true) "encoding_violation=$($adoptSavedA.encoding_violation)"
+Check 'adopt read-only row logs scan skip' ($adoptOutputA.Contains('[encoding] read-only adopt')) 'stdout contains read-only adopt note'
+
+# (b) A dead workspace-write build row scans its own dirty fixture and records the violation.
+$adoptRepoB = New-AdoptMojibakeRepo 'adopt-workspace-write-repo'
+$adoptStateB = Join-Path $parent 'adopt-workspace-write-state'
+$adoptProgressB = Join-Path $adoptStateB 'progress'
+New-Item -ItemType Directory -Force -Path $adoptProgressB | Out-Null
+$adoptReportB = Join-Path $adoptStateB 'completion-final.json'
+Write-Utf8 $adoptReportB (([ordered]@{ status='done'; changed_files=@(); commands_run=@(); deviations=@(); unresolved=@(); blocker=$null }) | ConvertTo-Json -Compress -Depth 8)
+$adoptRunB = 'adopt-encoding-workspace-write'
+$adoptRowB = [ordered]@{
+    run_id = $adoptRunB; spec = 'adopt-ww'; task = 'case-b'; phase = 'build'; status = 'stalled'
+    started = (Get-Date).ToUniversalTime().AddHours(-1).ToString('o')
+    pid = $null; launcher_pid = $null; worktree = $adoptRepoB; authorized = @()
+    scope_task = 'adopt-workspace-write-scope'; final_path = $adoptReportB; schema = 'completion'; sandbox = 'workspace-write'
+}
+$adoptLedgerB = Join-Path $adoptProgressB 'codex-run-ledger.jsonl'
+[System.IO.File]::AppendAllText($adoptLedgerB, (($adoptRowB | ConvertTo-Json -Compress -Depth 8) + [Environment]::NewLine), [System.Text.UTF8Encoding]::new($false))
+$env:APEX_STATE_DIR = $adoptStateB
+& $dispatch -Adopt -Phase 'build' -Spec 'adopt-ww' -Task 'case-b' -Worktree $adoptRepoB *> $null
+$adoptExitB = $LASTEXITCODE
+$adoptSavedB = Get-Content -LiteralPath $adoptLedgerB | ForEach-Object { $_ | ConvertFrom-Json } | Where-Object { $_.run_id -eq $adoptRunB } | Select-Object -First 1
+Check 'adopt workspace-write row exits 73' ($adoptExitB -eq 73) "adopt exit=$adoptExitB"
+Check 'adopt workspace-write row records violation' ($null -ne $adoptSavedB -and $adoptSavedB.encoding_violation -eq $true) "encoding_violation=$($adoptSavedB.encoding_violation)"
+
+# (c) The guard is sandbox-keyed: a review row with write access still scans and fails.
+$adoptRepoC = New-AdoptMojibakeRepo 'adopt-review-write-repo'
+$adoptStateC = Join-Path $parent 'adopt-review-write-state'
+$adoptProgressC = Join-Path $adoptStateC 'progress'
+New-Item -ItemType Directory -Force -Path $adoptProgressC | Out-Null
+$adoptReportC = Join-Path $adoptStateC 'review-final.json'
+Write-Utf8 $adoptReportC (([ordered]@{ verdict='CLEAN'; findings=@() }) | ConvertTo-Json -Compress -Depth 8)
+$adoptRunC = 'adopt-encoding-review-write'
+$adoptRowC = [ordered]@{
+    run_id = $adoptRunC; spec = 'adopt-review-write'; task = 'case-c'; phase = 'review'; status = 'stalled'
+    started = (Get-Date).ToUniversalTime().AddHours(-1).ToString('o')
+    pid = $null; launcher_pid = $null; worktree = $adoptRepoC; authorized = @()
+    scope_task = 'adopt-review-write-scope'; final_path = $adoptReportC; schema = 'review'; sandbox = 'workspace-write'
+}
+$adoptLedgerC = Join-Path $adoptProgressC 'codex-run-ledger.jsonl'
+[System.IO.File]::AppendAllText($adoptLedgerC, (($adoptRowC | ConvertTo-Json -Compress -Depth 8) + [Environment]::NewLine), [System.Text.UTF8Encoding]::new($false))
+$env:APEX_STATE_DIR = $adoptStateC
+& $dispatch -Adopt -Phase 'review' -Spec 'adopt-review-write' -Task 'case-c' -Worktree $adoptRepoC *> $null
+$adoptExitC = $LASTEXITCODE
+$adoptSavedC = Get-Content -LiteralPath $adoptLedgerC | ForEach-Object { $_ | ConvertFrom-Json } | Where-Object { $_.run_id -eq $adoptRunC } | Select-Object -First 1
+Check 'adopt review/write row exits 73' ($adoptExitC -eq 73) "adopt exit=$adoptExitC"
+Check 'adopt review/write row records violation' ($null -ne $adoptSavedC -and $adoptSavedC.encoding_violation -eq $true) "encoding_violation=$($adoptSavedC.encoding_violation)"
+
+# (d) A legacy/fabricated row with no sandbox property fails closed by running the scan.
+$adoptRepoD = New-AdoptMojibakeRepo 'adopt-no-sandbox-repo'
+$adoptStateD = Join-Path $parent 'adopt-no-sandbox-state'
+$adoptProgressD = Join-Path $adoptStateD 'progress'
+New-Item -ItemType Directory -Force -Path $adoptProgressD | Out-Null
+$adoptReportD = Join-Path $adoptStateD 'completion-final.json'
+Write-Utf8 $adoptReportD (([ordered]@{ status='done'; changed_files=@(); commands_run=@(); deviations=@(); unresolved=@(); blocker=$null }) | ConvertTo-Json -Compress -Depth 8)
+$adoptRunD = 'adopt-encoding-no-sandbox'
+$adoptRowD = [ordered]@{
+    run_id = $adoptRunD; spec = 'adopt-no-sandbox'; task = 'case-d'; phase = 'build'; status = 'stalled'
+    started = (Get-Date).ToUniversalTime().AddHours(-1).ToString('o')
+    pid = $null; launcher_pid = $null; worktree = $adoptRepoD; authorized = @()
+    scope_task = 'adopt-no-sandbox-scope'; final_path = $adoptReportD; schema = 'completion'
+}
+$adoptLedgerD = Join-Path $adoptProgressD 'codex-run-ledger.jsonl'
+[System.IO.File]::AppendAllText($adoptLedgerD, (($adoptRowD | ConvertTo-Json -Compress -Depth 8) + [Environment]::NewLine), [System.Text.UTF8Encoding]::new($false))
+$env:APEX_STATE_DIR = $adoptStateD
+& $dispatch -Adopt -Phase 'build' -Spec 'adopt-no-sandbox' -Task 'case-d' -Worktree $adoptRepoD *> $null
+$adoptExitD = $LASTEXITCODE
+$adoptSavedD = Get-Content -LiteralPath $adoptLedgerD | ForEach-Object { $_ | ConvertFrom-Json } | Where-Object { $_.run_id -eq $adoptRunD } | Select-Object -First 1
+Check 'adopt sandbox-absent row exits 73' ($adoptExitD -eq 73) "adopt exit=$adoptExitD"
+Check 'adopt sandbox-absent row records violation' ($null -ne $adoptSavedD -and $adoptSavedD.encoding_violation -eq $true) "encoding_violation=$($adoptSavedD.encoding_violation)"
+
 try { Remove-Item -Recurse -Force $parent -ErrorAction SilentlyContinue } catch {}
 Write-Host ""
 if ($script:fail -gt 0) { Write-Host "$($script:fail) check(s) FAILED" -ForegroundColor Red; exit 1 }

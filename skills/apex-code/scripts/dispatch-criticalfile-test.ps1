@@ -228,6 +228,7 @@ function Invoke-DispatchCase {
     return [pscustomobject]@{
         ExitCode = $exitCode
         Rows = @(Get-LedgerRowsForSpec -Spec $Spec)
+        Output = $outputText
     }
 }
 
@@ -242,7 +243,7 @@ try {
     # Create every repository before dispatching so no Git process can disturb the deliberate
     # case 3 to case 8 LASTEXITCODE adjacency below.
     $fixtures = @{}
-    foreach ($number in 1..10) {
+    foreach ($number in 1..11) {
         $extraFiles = @{}
         if ($number -eq 3) {
             $extraFiles['docs\changes\critfile-critical-confirmed.md'] = New-FixtureSpec -Spec 'critfile-critical-confirmed'
@@ -267,6 +268,17 @@ try {
     Assert-Case -Label 'case 2 unconfirmed critical file is refused' `
         -Condition ($result.ExitCode -eq 76 -and $result.Rows.Count -eq 0) `
         -Detail ("exit={0}, rows={1}; expected exit=76, rows=0" -f $result.ExitCode, $result.Rows.Count)
+
+    $spec = 'critfile-absolute-host-state-unconfirmed'
+    $absoluteStatusPath = Join-Path $fixtures[11].Path 'docs\status.md'
+    $expectedCriticalLine = "CRITICAL $(Join-Path 'docs' 'status.md'): host-state"
+    $result = Invoke-DispatchCase -CaseName '11 absolute host-state grant unconfirmed' -Spec $spec `
+        -Fixture $fixtures[11] -Authorized @($absoluteStatusPath)
+    Assert-Case -Label 'case 11 absolute host-state grant is refused by classifier' `
+        -Condition ($result.ExitCode -eq 76 -and $result.Rows.Count -eq 0 -and
+            $result.Output.Contains($expectedCriticalLine)) `
+        -Detail ("exit={0}, rows={1}, output contains '{2}'={3}; expected exit=76, rows=0, output match=True" -f
+            $result.ExitCode, $result.Rows.Count, $expectedCriticalLine, $result.Output.Contains($expectedCriticalLine))
 
     # The shared fake always edits src/a.py. Direct that fake-only write to a disposable sink so
     # this case can keep the required config/.env-only authorization and finish with exit 0.

@@ -729,7 +729,11 @@ function Invoke-Adopt {
         throw "codex-scope-check.ps1 is missing ($adoptScript). Refusing to adopt without the encoding gate."
     }
     $adoptEncodingViolation = $false
-    if ($match.worktree) {
+    # Key this on the recorded sandbox, not phase: legacy/fabricated review rows may have written.
+    if ([string]$match.sandbox -eq 'read-only') {
+        Write-Host "[encoding] read-only adopt (review/end-gate): no coder writes to scan -- skipping." -ForegroundColor DarkGray
+    }
+    elseif ($match.worktree) {
         & $adoptScript -EncodingScan -Worktree ([string]$match.worktree) -Task ([string]$match.scope_task) `
             -Authorized @($match.authorized) | Write-Host
         if ($LASTEXITCODE -eq 73) { $adoptEncodingViolation = $true }
@@ -839,7 +843,7 @@ try {
             $critLines = @()
             try {
                 & cmd /c exit 99
-                $critLines = @(& $criticalScript -Test -Paths $Authorized)
+                $critLines = @(& $criticalScript -Test -Paths $Authorized -Root $Worktree)
                 $critExit = $LASTEXITCODE
             } catch {
                 $critExit = $null

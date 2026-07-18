@@ -12,7 +12,9 @@ param(
     [string[]]$Paths,
 
     [Parameter(Position = 1, ValueFromRemainingArguments = $true)]
-    [string[]]$AdditionalPaths
+    [string[]]$AdditionalPaths,
+
+    [string]$Root
 )
 
 # Split comma-packed arguments before classification. Without this, callers that pass
@@ -64,6 +66,33 @@ $anyCritical = $false
 
 foreach ($path in $Paths) {
     $originalPath = [string]$path
+
+    # Relativize absolute grants so they cannot fail open past host-state matchers.
+    if ($Root -and [System.IO.Path]::IsPathRooted($originalPath)) {
+        $canonicalRoot = [System.IO.Path]::GetFullPath($Root)
+        $canonicalPath = [System.IO.Path]::GetFullPath($originalPath)
+        $rootWithoutTrailingSeparator = $canonicalRoot.TrimEnd(
+            [System.IO.Path]::DirectorySeparatorChar,
+            [System.IO.Path]::AltDirectorySeparatorChar
+        )
+        $pathWithoutTrailingSeparator = $canonicalPath.TrimEnd(
+            [System.IO.Path]::DirectorySeparatorChar,
+            [System.IO.Path]::AltDirectorySeparatorChar
+        )
+        $rootPrefix = $rootWithoutTrailingSeparator + [System.IO.Path]::DirectorySeparatorChar
+
+        if ([string]::Equals(
+                $pathWithoutTrailingSeparator,
+                $rootWithoutTrailingSeparator,
+                [System.StringComparison]::OrdinalIgnoreCase
+            )) {
+            $originalPath = ''
+        }
+        elseif ($canonicalPath.StartsWith($rootPrefix, [System.StringComparison]::OrdinalIgnoreCase)) {
+            $originalPath = $canonicalPath.Substring($rootPrefix.Length)
+        }
+    }
+
     $normalizedPath = $originalPath.Replace('\', '/').ToLowerInvariant()
     while ($normalizedPath.StartsWith('./')) {
         $normalizedPath = $normalizedPath.Substring(2)
@@ -83,6 +112,8 @@ foreach ($path in $Paths) {
     if (($normalizedPath -eq 'docs/status.md') -or
         ($normalizedPath -eq 'agents.md') -or
         ($normalizedPath -eq 'claude.md') -or
+        ($normalizedPath -eq 'docs/changes') -or
+        ($normalizedPath -eq 'docs/handoff') -or
         ($normalizedPath -match '^docs/changes/') -or
         ($normalizedPath -match '^docs/handoff/') -or
         ($basename -eq 'codex-run-ledger.jsonl')) {

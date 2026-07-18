@@ -1,6 +1,13 @@
 [CmdletBinding()]
 param()
 
+$worktreeRoot = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..\..\..'))
+$absoluteStatusPath = Join-Path $worktreeRoot 'docs\status.md'
+$caseVariantAbsoluteStatusPath = $absoluteStatusPath.ToUpperInvariant()
+$unrelatedAbsolutePath = Join-Path ([System.IO.Path]::GetTempPath()) 'critical-files-outside\plain.txt'
+$syntheticRoot = Join-Path ([System.IO.Path]::GetTempPath()) 'critroot'
+$syntheticSiblingPath = Join-Path ([System.IO.Path]::GetTempPath()) 'critroot-foo\docs\status.md'
+
 $testCases = @(
     [pscustomobject]@{
         Name = 'TIER-1 audit file'
@@ -342,6 +349,71 @@ $testCases = @(
         Matches = @(@('CRITICAL', 'host-state'))
     }
     [pscustomobject]@{
+        Name = 'Host-state Root - absolute status path under Root'
+        Paths = @($absoluteStatusPath)
+        Root = $worktreeRoot
+        ExitCode = 10
+        Matches = @(@('CRITICAL', 'host-state'))
+    }
+    [pscustomobject]@{
+        Name = 'Host-state Root - absolute status path without Root fails open'
+        Paths = @($absoluteStatusPath)
+        ExitCode = 0
+        Matches = @()
+    }
+    [pscustomobject]@{
+        Name = 'Host-state Root - unrelated absolute path outside Root'
+        Paths = @($unrelatedAbsolutePath)
+        Root = $worktreeRoot
+        ExitCode = 0
+        Matches = @()
+    }
+    [pscustomobject]@{
+        Name = 'Host-state Root - relative status path unchanged'
+        Paths = @('docs/status.md')
+        Root = $worktreeRoot
+        ExitCode = 10
+        Matches = @(@('CRITICAL', 'host-state'))
+    }
+    [pscustomobject]@{
+        Name = 'Host-state exact directory - changes trailing slash'
+        Paths = @('docs/changes/')
+        ExitCode = 10
+        Matches = @(@('CRITICAL', 'host-state'))
+    }
+    [pscustomobject]@{
+        Name = 'Host-state exact directory - changes without slash'
+        Paths = @('docs/changes')
+        ExitCode = 10
+        Matches = @(@('CRITICAL', 'host-state'))
+    }
+    [pscustomobject]@{
+        Name = 'Host-state exact directory - handoff trailing slash'
+        Paths = @('docs/handoff/')
+        ExitCode = 10
+        Matches = @(@('CRITICAL', 'host-state'))
+    }
+    [pscustomobject]@{
+        Name = 'Host-state exact directory - handoff without slash'
+        Paths = @('docs/handoff')
+        ExitCode = 10
+        Matches = @(@('CRITICAL', 'host-state'))
+    }
+    [pscustomobject]@{
+        Name = 'Host-state Root - case-variant absolute path under Root'
+        Paths = @($caseVariantAbsoluteStatusPath)
+        Root = $worktreeRoot
+        ExitCode = 10
+        Matches = @(@('CRITICAL', 'host-state'))
+    }
+    [pscustomobject]@{
+        Name = 'Host-state Root - sibling prefix is outside Root'
+        Paths = @($syntheticSiblingPath)
+        Root = $syntheticRoot
+        ExitCode = 0
+        Matches = @()
+    }
+    [pscustomobject]@{
         Name = 'Host-state overlap - changes auth path'
         Paths = @('docs/changes/auth-plan.md')
         ExitCode = 10
@@ -420,7 +492,15 @@ $failures = 0
 $passed = 0
 
 foreach ($testCase in $testCases) {
-    $output = @(& (Join-Path $PSScriptRoot 'apex-critical-files.ps1') -Test -Paths @($testCase.Paths))
+    $classifierArgs = @{
+        Test = $true
+        Paths = @($testCase.Paths)
+    }
+    if ($null -ne $testCase.PSObject.Properties['Root']) {
+        $classifierArgs.Root = $testCase.Root
+    }
+
+    $output = @(& (Join-Path $PSScriptRoot 'apex-critical-files.ps1') @classifierArgs)
     $actualExitCode = $LASTEXITCODE
     $problems = @()
 
