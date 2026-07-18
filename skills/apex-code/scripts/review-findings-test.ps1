@@ -6,13 +6,25 @@
 
 $ErrorActionPreference = 'Stop'
 
+$stateRoot = Join-Path $env:TEMP ("apex-review-findings-state-" + [guid]::NewGuid().ToString('N'))
+$oldApexStateDir = $env:APEX_STATE_DIR
+
+try {
+    # Keep adversarial ledger seeds and dispatcher writes off the live run ledger.
+    New-Item -ItemType Directory -Force -Path $stateRoot | Out-Null
+    $progressRoot = Join-Path $stateRoot 'progress'
+    New-Item -ItemType Directory -Force -Path $progressRoot | Out-Null
+    $ledger = Join-Path $progressRoot 'codex-run-ledger.jsonl'
+    [System.IO.File]::WriteAllBytes($ledger, [byte[]]@())
+    $env:APEX_STATE_DIR = $stateRoot
+    # Preserve a semantically empty line so the unchanged per-case rewrites never receive $null.
+    Add-Content -LiteralPath $ledger -Value '' -Encoding UTF8
+
 $SP = $PSScriptRoot
 $scopeCheck = Join-Path $SP 'codex-scope-check.ps1'
 $treePin = Join-Path $SP 'tree-pin.ps1'
 $dispatch = Join-Path $SP 'codex-dispatch.ps1'
 $fakeCodex = Join-Path $SP 'dispatch-test-fakecodex.ps1'
-$apexRoot = if ($env:LOCALAPPDATA) { Join-Path $env:LOCALAPPDATA 'apex' } else { Join-Path $env:TEMP 'apex' }
-$ledger = Join-Path (Join-Path $apexRoot 'progress') 'codex-run-ledger.jsonl'
 $root = Join-Path $env:TEMP 'apex-review-findings'
 $failures = 0
 
@@ -247,3 +259,15 @@ if ($failures -eq 0) {
 }
 Write-Host "$failures FAILURE(S)" -ForegroundColor Red
 exit 1
+}
+finally {
+    if ($null -eq $oldApexStateDir) {
+        Remove-Item Env:\APEX_STATE_DIR -ErrorAction SilentlyContinue
+    }
+    else {
+        $env:APEX_STATE_DIR = $oldApexStateDir
+    }
+    if (Test-Path -LiteralPath $stateRoot) {
+        Remove-Item -LiteralPath $stateRoot -Recurse -Force -ErrorAction SilentlyContinue
+    }
+}

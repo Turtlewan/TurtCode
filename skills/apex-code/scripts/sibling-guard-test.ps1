@@ -16,8 +16,9 @@
 $ErrorActionPreference = 'Stop'
 
 $scopeCheck = Join-Path $PSScriptRoot 'codex-scope-check.ps1'
-$apexRoot = if ($env:LOCALAPPDATA) { Join-Path $env:LOCALAPPDATA 'apex' } else { Join-Path $env:TEMP 'apex' }
-$ledger = Join-Path (Join-Path $apexRoot 'progress') 'codex-run-ledger.jsonl'
+$stateRoot = Join-Path $env:TEMP ("apex-sibling-guard-state-" + [guid]::NewGuid().ToString('N'))
+$oldApexStateDir = $env:APEX_STATE_DIR
+$ledger = Join-Path (Join-Path $stateRoot 'progress') 'codex-run-ledger.jsonl'
 $repo = Join-Path $env:TEMP 'apex-sibling-test'
 $failures = 0
 
@@ -28,6 +29,13 @@ function Assert-Ok {
     Write-Host ("  {0}  {1,-48} {2}" -f $mark, $Name, $Detail) -ForegroundColor $colour
     if (-not $Condition) { $script:failures += 1 }
 }
+
+try {
+    # Keep this suite's synthetic runs off the live ledger.
+    New-Item -ItemType Directory -Force -Path $stateRoot | Out-Null
+    New-Item -ItemType Directory -Force -Path (Join-Path $stateRoot 'progress') | Out-Null
+    New-Item -ItemType File -Force -Path $ledger | Out-Null
+    $env:APEX_STATE_DIR = $stateRoot
 
 if (Test-Path $repo) { Remove-Item -Recurse -Force $repo }
 New-Item -ItemType Directory -Force -Path (Join-Path $repo 'src') | Out-Null
@@ -77,7 +85,7 @@ try {
     Stop-Process -Id $sibling.Id -Force -ErrorAction SilentlyContinue
     # Drop the synthetic row so it cannot block a real dispatch later.
     $kept = [System.IO.File]::ReadAllLines($ledger) | Where-Object { $_ -notmatch 'siblingtest' }
-    [System.IO.File]::WriteAllLines($ledger, [string[]]$kept, [System.Text.UTF8Encoding]::new($false))
+    [System.IO.File]::WriteAllLines($ledger, [string[]]@($kept), [System.Text.UTF8Encoding]::new($false))
 }
 
 # Once the sibling is DEAD, the guard must stand down and the check must bite normally again --
@@ -95,3 +103,15 @@ if ($failures -eq 0) {
 }
 Write-Host "$failures FAILURE(S)" -ForegroundColor Red
 exit 1
+}
+finally {
+    if ($null -eq $oldApexStateDir) {
+        Remove-Item Env:\APEX_STATE_DIR -ErrorAction SilentlyContinue
+    }
+    else {
+        $env:APEX_STATE_DIR = $oldApexStateDir
+    }
+    if (Test-Path -LiteralPath $stateRoot) {
+        Remove-Item -LiteralPath $stateRoot -Recurse -Force -ErrorAction SilentlyContinue
+    }
+}

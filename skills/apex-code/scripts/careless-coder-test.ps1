@@ -4,6 +4,16 @@
 # actively evading the guard. Every case below is something an honest, sloppy coder does by accident
 # -- and every one exited 0 before this round.
 
+$stateRoot = Join-Path $env:TEMP ("apex-careless-state-" + [guid]::NewGuid().ToString('N'))
+$oldApexStateDir = $env:APEX_STATE_DIR
+
+try {
+    # Keep dispatcher state off the live ledger for this suite.
+    New-Item -ItemType Directory -Force -Path $stateRoot | Out-Null
+    $progressRoot = New-Item -ItemType Directory -Force -Path (Join-Path $stateRoot 'progress')
+    New-Item -ItemType File -Force -Path (Join-Path $progressRoot.FullName 'codex-run-ledger.jsonl') | Out-Null
+    $env:APEX_STATE_DIR = $stateRoot
+
 $ErrorActionPreference = 'Stop'
 
 $SP = $PSScriptRoot
@@ -132,3 +142,15 @@ if ($failures -eq 0) {
 }
 Write-Host "$failures FAILURE(S)" -ForegroundColor Red
 exit 1
+}
+finally {
+    if ($null -eq $oldApexStateDir) {
+        Remove-Item Env:\APEX_STATE_DIR -ErrorAction SilentlyContinue
+    }
+    else {
+        $env:APEX_STATE_DIR = $oldApexStateDir
+    }
+    if (Test-Path -LiteralPath $stateRoot) {
+        Remove-Item -LiteralPath $stateRoot -Recurse -Force -ErrorAction SilentlyContinue
+    }
+}
