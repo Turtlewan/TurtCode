@@ -74,6 +74,7 @@ param(
     [string[]]$Authorized = @(),
     [switch]$ReportOnly,          # accepted for compatibility; this script is always report-only now
     [string]$StateDirectory,
+    [string]$WrittenPathsFile,
     [string]$ExcludeRunId         # accepted for compatibility; no longer used (nothing is reverted)
 )
 
@@ -88,9 +89,20 @@ if ($EncodingScan) { $selectedModes += '-EncodingScan' }
 if ($selectedModes.Count -gt 1) {
     throw "Mode switches are mutually exclusive; specify exactly one of -Snapshot, -Check, or -EncodingScan (received $($selectedModes -join ', '))."
 }
+if ($WrittenPathsFile -and -not $Check) {
+    throw "-WrittenPathsFile is valid only with -Check."
+}
 
 if (-not (Test-Path $Worktree)) { throw "Worktree not found: $Worktree" }
 $repo = (Resolve-Path $Worktree).Path
+if ($WrittenPathsFile) {
+    $writtenPathsFull = [System.IO.Path]::GetFullPath($WrittenPathsFile)
+    $repoPrefix = $repo.TrimEnd([char]92, [char]47) + [System.IO.Path]::DirectorySeparatorChar
+    if ([string]::Equals($writtenPathsFull, $repo, [System.StringComparison]::OrdinalIgnoreCase) -or
+            $writtenPathsFull.StartsWith($repoPrefix, [System.StringComparison]::OrdinalIgnoreCase)) {
+        throw "-WrittenPathsFile must resolve outside the worktree: $WrittenPathsFile"
+    }
+}
 
 # A git WARNING must never kill a dispatch. `& git ... 2>$null` under $ErrorActionPreference='Stop'
 # wraps native stderr in a TERMINATING NativeCommandError in Windows PowerShell 5.1 -- so the
@@ -299,6 +311,11 @@ if (-not $StateDirectory) {
 }
 if (-not (Test-Path $StateDirectory)) { New-Item -ItemType Directory -Force -Path $StateDirectory | Out-Null }
 $snapPath = Join-Path $StateDirectory "scope-$Task.snapshot.json"
+if ($WrittenPathsFile -and
+        [string]::Equals([System.IO.Path]::GetFullPath($WrittenPathsFile),
+            [System.IO.Path]::GetFullPath($snapPath), [System.StringComparison]::OrdinalIgnoreCase)) {
+    throw "-WrittenPathsFile must not resolve to the snapshot path: $WrittenPathsFile"
+}
 
 # --------------------------------------------------------------------------- ENCODING SCAN
 # Codex-on-Windows double-encodes non-ASCII it writes into source: an em-dash goes in as U+2014 and
@@ -629,38 +646,117 @@ $allPaths = New-Object System.Collections.Generic.HashSet[string]
 foreach ($p in $nowDirty.Keys) { [void]$allPaths.Add((Normalize $p)) }
 foreach ($p in $preDirty.Keys) { [void]$allPaths.Add($p) }
 
-foreach ($n in $allPaths) {
-    if (Test-IsAuthorized $n) { continue }
-    if (Test-IsStatePath $n) { continue }
+$collectWritten = [bool]$WrittenPathsFile
+$writtenSet = $null
+if ($collectWritten) {
+    $writtenSet = New-Object System.Collections.Generic.List[string]
+    foreach ($n in $allPaths) {
+        if (Test-IsAuthorized $n) {
+            $wasDirty = $preDirty.ContainsKey($n)
+            $isDirty = $false
+            foreach ($k in $nowDirty.Keys) {
+                if ((Normalize $k) -eq $n) { $isDirty = $true; break }
+            }
 
-    $wasDirty = $preDirty.ContainsKey($n)
-    $isDirty = $false
-    $statusNow = '??'
-    foreach ($k in $nowDirty.Keys) {
-        if ((Normalize $k) -eq $n) { $isDirty = $true; $statusNow = $nowDirty[$k]; break }
-    }
-
-    if ($wasDirty -and -not $isDirty) {
-        # It was dirty before the dispatch and is not dirty now: something reverted or deleted host
-        # work. USUALLY the coder -- and silent destruction is the worst kind of out-of-scope write,
-        # so it is reported. But the HOST tidying up its own draft mid-dispatch produces exactly the
-        # same signature, and this script cannot tell them apart (the same timing-attribution limit
-        # that made auto-revert unsafe). So it is reported as GONE and named, for a human to judge --
-        # never silently, and never acted on.
-        $violations += [pscustomobject]@{ Path = $n; Status = 'GONE' }
-        continue
-    }
-
-    if ($wasDirty -and $preState.ContainsKey($n)) {
-        if ((Get-PathState $n) -eq $preState[$n]) {
-            # Byte-identical since the snapshot, working tree AND index. The coder was never in here:
-            # it is host work (typically an uncommitted earlier wave, or docs/status.md).
-            $untouched += $n
+            if ($wasDirty -and -not $isDirty) {
+                [void]$writtenSet.Add($n)
+            } elseif ($isDirty -and -not ($preDirty.ContainsKey($n) -and $preState.ContainsKey($n) -and
+                    (Get-PathState $n) -eq $preState[$n])) {
+                [void]$writtenSet.Add($n)
+            }
             continue
         }
-    }
+        if (Test-IsStatePath $n) { continue }
 
-    if ($isDirty) { $violations += [pscustomobject]@{ Path = $n; Status = $statusNow } }
+        $wasDirty = $preDirty.ContainsKey($n)
+        $isDirty = $false
+        $statusNow = '??'
+        foreach ($k in $nowDirty.Keys) {
+            if ((Normalize $k) -eq $n) { $isDirty = $true; $statusNow = $nowDirty[$k]; break }
+        }
+
+        if ($wasDirty -and -not $isDirty) {
+            # It was dirty before the dispatch and is not dirty now: something reverted or deleted host
+            # work. USUALLY the coder -- and silent destruction is the worst kind of out-of-scope write,
+            # so it is reported. But the HOST tidying up its own draft mid-dispatch produces exactly the
+            # same signature, and this script cannot tell them apart (the same timing-attribution limit
+            # that made auto-revert unsafe). So it is reported as GONE and named, for a human to judge --
+            # never silently, and never acted on.
+            $violations += [pscustomobject]@{ Path = $n; Status = 'GONE' }
+            [void]$writtenSet.Add($n)
+            continue
+        }
+
+        if ($wasDirty -and $preState.ContainsKey($n)) {
+            if ((Get-PathState $n) -eq $preState[$n]) {
+                # Byte-identical since the snapshot, working tree AND index. The coder was never in here:
+                # it is host work (typically an uncommitted earlier wave, or docs/status.md).
+                $untouched += $n
+                continue
+            }
+        }
+
+        if ($isDirty) {
+            $violations += [pscustomobject]@{ Path = $n; Status = $statusNow }
+            [void]$writtenSet.Add($n)
+        }
+    }
+} else {
+    foreach ($n in $allPaths) {
+        if (Test-IsAuthorized $n) { continue }
+        if (Test-IsStatePath $n) { continue }
+
+        $wasDirty = $preDirty.ContainsKey($n)
+        $isDirty = $false
+        $statusNow = '??'
+        foreach ($k in $nowDirty.Keys) {
+            if ((Normalize $k) -eq $n) { $isDirty = $true; $statusNow = $nowDirty[$k]; break }
+        }
+
+        if ($wasDirty -and -not $isDirty) {
+            # It was dirty before the dispatch and is not dirty now: something reverted or deleted host
+            # work. USUALLY the coder -- and silent destruction is the worst kind of out-of-scope write,
+            # so it is reported. But the HOST tidying up its own draft mid-dispatch produces exactly the
+            # same signature, and this script cannot tell them apart (the same timing-attribution limit
+            # that made auto-revert unsafe). So it is reported as GONE and named, for a human to judge --
+            # never silently, and never acted on.
+            $violations += [pscustomobject]@{ Path = $n; Status = 'GONE' }
+            continue
+        }
+
+        if ($wasDirty -and $preState.ContainsKey($n)) {
+            if ((Get-PathState $n) -eq $preState[$n]) {
+                # Byte-identical since the snapshot, working tree AND index. The coder was never in here:
+                # it is host work (typically an uncommitted earlier wave, or docs/status.md).
+                $untouched += $n
+                continue
+            }
+        }
+
+        if ($isDirty) { $violations += [pscustomobject]@{ Path = $n; Status = $statusNow } }
+    }
+}
+
+if ($WrittenPathsFile) {
+    $expandedWritten = New-Object System.Collections.Generic.List[string]
+    foreach ($entry in $writtenSet) {
+        $full = Join-Path $repo $entry
+        if (Test-Path -LiteralPath $full -PathType Container) {
+            [void]$expandedWritten.Add($entry)
+            foreach ($file in (Get-ChildItem -LiteralPath $full -Recurse -File -Force -ErrorAction SilentlyContinue -ErrorVariable enumErr)) {
+                $rel = $file.FullName.Substring($repo.Length).TrimStart([char]92, [char]47) -replace '\\', '/'
+                [void]$expandedWritten.Add($rel)
+            }
+        } else {
+            [void]$expandedWritten.Add($entry)
+        }
+    }
+    $sorted = @($expandedWritten | Sort-Object -Unique)
+    try {
+        [System.IO.File]::WriteAllLines($WrittenPathsFile, [string[]]$sorted, [System.Text.UTF8Encoding]::new($false))
+    } catch {
+        throw "Failed to write -WrittenPathsFile '$WrittenPathsFile': $($_.Exception.Message)"
+    }
 }
 
 # The coder is instructed never to commit. If HEAD moved, it did -- and a commit is not something a

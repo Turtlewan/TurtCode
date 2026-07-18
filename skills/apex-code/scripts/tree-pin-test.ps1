@@ -294,6 +294,110 @@ try {
     Write-Utf8File (Join-Path $fixture.Root 'projects/item.txt') "not runtime tree`n"
     $result = Invoke-TreePin (@('-Verify') + $argsForCase)
     Assert-Equal 'ignored projects churn off the runtime tree moves the tree' 69 $result.ExitCode
+
+    # Digest is a compute-only, single-tree interface: one bare digest and no pin artifact.
+    $fixture = New-TestFixture 'digest-contract' 'tracked.txt' "digest fixture`n"
+    $digestArgs = @(
+        '-Worktree', $fixture.Root,
+        '-PinDirectory', $fixture.Pins,
+        '-RuntimeExclusionRoot', $fixture.Root
+    )
+    $firstDigest = Invoke-TreePin (@('-Digest') + $digestArgs)
+    Assert-Equal 'digest shape exits 0' 0 $firstDigest.ExitCode
+    Assert-True 'digest shape is exactly one bare lowercase SHA-256 line' ($firstDigest.Output -match '^[0-9a-f]{64}$')
+    Assert-Equal 'digest shape mints no pin artifact' 0 @(Get-ChildItem -LiteralPath $fixture.Pins -Filter 'apex-treepin-*' -File).Count
+
+    $secondDigest = Invoke-TreePin (@('-Digest') + $digestArgs)
+    Assert-Equal 'second unchanged digest exits 0' 0 $secondDigest.ExitCode
+    Assert-Equal 'unchanged tree produces byte-identical digests' $firstDigest.Output $secondDigest.Output
+
+    Write-Utf8File (Join-Path $fixture.Root 'tracked.txt') "digest fixture with changed bytes`n"
+    $changedDigest = Invoke-TreePin (@('-Digest') + $digestArgs)
+    Assert-Equal 'digest after tracked content mutation exits 0' 0 $changedDigest.ExitCode
+    Assert-True 'tracked content mutation changes the digest' ($changedDigest.Output -ne $secondDigest.Output)
+
+    # No tree mutation occurs between these calls, so stdout and the persisted pin must agree.
+    $equivalentDigest = Invoke-TreePin (@('-Digest') + $digestArgs)
+    $pinArgs = @(
+        '-Worktree', $fixture.Root,
+        '-Label', $fixture.Name,
+        '-PinDirectory', $fixture.Pins,
+        '-RuntimeExclusionRoot', $fixture.Root
+    )
+    $equivalentPin = Invoke-TreePin (@('-Pin') + $pinArgs)
+    Assert-Equal 'digest/pin equivalence digest exits 0' 0 $equivalentDigest.ExitCode
+    Assert-Equal 'digest/pin equivalence pin exits 0' 0 $equivalentPin.ExitCode
+    $equivalentPinPath = Get-PinPath $fixture.Root $fixture.Name $fixture.Pins
+    $equivalentPinLines = [System.IO.File]::ReadAllLines($equivalentPinPath)
+    Assert-Equal 'digest stdout equals the digest stored in the pin' $equivalentDigest.Output $equivalentPinLines[1]
+
+    # Every mode combination other than exactly one must fail with the mode guard diagnostic.
+    $exactlyOneMessage = 'Pass exactly one of -Pin, -Verify, or -Digest.'
+    $guardArgs = @(
+        '-Worktree', $fixture.Root,
+        '-Label', 'digest-guards',
+        '-PinDirectory', $fixture.Pins,
+        '-RuntimeExclusionRoot', $fixture.Root
+    )
+    $result = Invoke-TreePin (@('-Pin', '-Digest') + $guardArgs)
+    Assert-True 'Pin plus Digest throws' ($result.ExitCode -ne 0)
+    Assert-True 'Pin plus Digest reports the exactly-one error' ($result.Output -match [regex]::Escape($exactlyOneMessage))
+    $result = Invoke-TreePin (@('-Verify', '-Digest') + $guardArgs)
+    Assert-True 'Verify plus Digest throws' ($result.ExitCode -ne 0)
+    Assert-True 'Verify plus Digest reports the exactly-one error' ($result.Output -match [regex]::Escape($exactlyOneMessage))
+    $result = Invoke-TreePin (@('-Pin', '-Verify', '-Digest') + $guardArgs)
+    Assert-True 'Pin plus Verify plus Digest throws' ($result.ExitCode -ne 0)
+    Assert-True 'Pin plus Verify plus Digest reports the exactly-one error' ($result.Output -match [regex]::Escape($exactlyOneMessage))
+    $result = Invoke-TreePin $guardArgs
+    Assert-True 'no mode throws' ($result.ExitCode -ne 0)
+    Assert-True 'no mode reports the exactly-one error' ($result.Output -match [regex]::Escape($exactlyOneMessage))
+
+    $result = Invoke-TreePin (@('-Digest', '-PinAlso', $rootTwo) + $digestArgs)
+    Assert-True 'Digest with non-empty PinAlso throws' ($result.ExitCode -ne 0)
+    Assert-True 'Digest with non-empty PinAlso reports the single-tree error' ($result.Output -match [regex]::Escape('Pass no -PinAlso with -Digest.'))
+
+    # Digest and Pin must apply the same runtime exclusions when the fixture is the runtime root.
+    $fixture = New-TestFixture 'digest-runtime-exclusion' '.gitignore' "/projects/`n"
+    $runtimeDigestArgs = @(
+        '-Worktree', $fixture.Root,
+        '-PinDirectory', $fixture.Pins,
+        '-RuntimeExclusionRoot', $fixture.Root
+    )
+    $runtimePinArgs = @(
+        '-Worktree', $fixture.Root,
+        '-Label', $fixture.Name,
+        '-PinDirectory', $fixture.Pins,
+        '-RuntimeExclusionRoot', $fixture.Root
+    )
+    $runtimeDigestBefore = Invoke-TreePin (@('-Digest') + $runtimeDigestArgs)
+    $runtimePinBefore = Invoke-TreePin (@('-Pin') + $runtimePinArgs)
+    Assert-Equal 'runtime-exclusion baseline digest exits 0' 0 $runtimeDigestBefore.ExitCode
+    Assert-Equal 'runtime-exclusion baseline pin exits 0' 0 $runtimePinBefore.ExitCode
+    $runtimePinPath = Get-PinPath $fixture.Root $fixture.Name $fixture.Pins
+    $runtimePinDigestBefore = ([System.IO.File]::ReadAllLines($runtimePinPath))[1]
+
+    Write-Utf8File (Join-Path $fixture.Root 'projects/session.json') "runtime churn`n"
+    $runtimeDigestAfter = Invoke-TreePin (@('-Digest') + $runtimeDigestArgs)
+    $runtimePinAfter = Invoke-TreePin (@('-Pin') + $runtimePinArgs)
+    Assert-Equal 'runtime-exclusion post-churn digest exits 0' 0 $runtimeDigestAfter.ExitCode
+    Assert-Equal 'runtime-exclusion post-churn pin exits 0' 0 $runtimePinAfter.ExitCode
+    $runtimePinDigestAfter = ([System.IO.File]::ReadAllLines($runtimePinPath))[1]
+    Assert-Equal 'excluded runtime churn does not move Digest output' $runtimeDigestBefore.Output $runtimeDigestAfter.Output
+    Assert-Equal 'excluded runtime churn does not move the Pin digest' $runtimePinDigestBefore $runtimePinDigestAfter
+
+    # Label remains mandatory for the two artifact-oriented modes.
+    $labelArgs = @(
+        '-Worktree', $fixture.Root,
+        '-PinDirectory', $fixture.Pins,
+        '-RuntimeExclusionRoot', $fixture.Root
+    )
+    $labelMessage = 'Pass -Label with -Pin or -Verify.'
+    $result = Invoke-TreePin (@('-Pin') + $labelArgs)
+    Assert-True 'Pin without Label throws' ($result.ExitCode -ne 0)
+    Assert-True 'Pin without Label reports the label-required error' ($result.Output -match [regex]::Escape($labelMessage))
+    $result = Invoke-TreePin (@('-Verify') + $labelArgs)
+    Assert-True 'Verify without Label throws' ($result.ExitCode -ne 0)
+    Assert-True 'Verify without Label reports the label-required error' ($result.Output -match [regex]::Escape($labelMessage))
 } catch {
     $failures.Add("suite error: $($_.Exception.Message)")
     Write-Host "FAIL: suite error: $($_.Exception.Message)" -ForegroundColor Red

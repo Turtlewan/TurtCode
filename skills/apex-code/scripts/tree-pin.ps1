@@ -23,18 +23,29 @@
 param(
     [switch]$Pin,
     [switch]$Verify,
+    [switch]$Digest,
     [Parameter(Mandatory)][string]$Worktree,
     # Extra trees pinned/verified in the SAME gate (an APEX change spans ~/apex and ~/.claude).
     [string[]]$PinAlso = @(),
-    [Parameter(Mandatory)][string]$Label,
+    [string]$Label,
     [string]$PinDirectory = $env:TEMP,
     [string]$RuntimeExclusionRoot = (Join-Path $env:USERPROFILE '.claude')
 )
 
 $ErrorActionPreference = 'Stop'
 
-if ($Pin -eq $Verify) {
-    throw 'Pass exactly one of -Pin or -Verify.'
+$modeCount = 0
+foreach ($mode in @($Pin, $Verify, $Digest)) {
+    if ($mode) { $modeCount++ }
+}
+if ($modeCount -ne 1) {
+    throw 'Pass exactly one of -Pin, -Verify, or -Digest.'
+}
+if (($Pin -or $Verify) -and [string]::IsNullOrEmpty($Label)) {
+    throw 'Pass -Label with -Pin or -Verify.'
+}
+if ($Digest -and @($PinAlso).Count -gt 0) {
+    throw 'Pass no -PinAlso with -Digest.'
 }
 foreach ($root in (@($Worktree) + $PinAlso)) {
     if (-not (Test-Path -LiteralPath $root -PathType Container)) {
@@ -210,6 +221,11 @@ $trees = @(foreach ($root in (@($Worktree) + $PinAlso)) {
             $worktreeFull.TrimEnd('\', '/').Equals($resolvedRuntimeExclusionRoot, [System.StringComparison]::OrdinalIgnoreCase))
     }
 })
+
+if ($Digest) {
+    $trees[0].Fingerprint.Digest
+    exit 0
+}
 
 if ($Pin) {
     foreach ($tree in $trees) {
