@@ -6,7 +6,9 @@ $ErrorActionPreference = 'Stop'
 
 $dispatch = Join-Path $PSScriptRoot 'codex-dispatch.ps1'
 $fakeCodex = Join-Path $PSScriptRoot 'dispatch-test-fakecodex.ps1'
-foreach ($required in @($dispatch, $fakeCodex)) {
+$criticalFiles = Join-Path $PSScriptRoot 'apex-critical-files.ps1'
+$scopeCheck = Join-Path $PSScriptRoot 'codex-scope-check.ps1'
+foreach ($required in @($dispatch, $fakeCodex, $criticalFiles, $scopeCheck)) {
     if (-not (Test-Path -LiteralPath $required -PathType Leaf)) {
         throw "Required test dependency not found: $required"
     }
@@ -24,9 +26,11 @@ $missingClassifier = Join-Path $testRoot 'classifier-does-not-exist.ps1'
 $oldApexStateDir = $env:APEX_STATE_DIR
 $oldFakeRepo = $env:FAKE_CODEX_REPO
 $oldFakeInScopeOnly = $env:FAKE_CODEX_INSCOPE_ONLY
+$oldFakeExtraWrite = $env:FAKE_CODEX_EXTRA_WRITE
 $oldFakeStatus = $env:FAKE_CODEX_STATUS
 $oldFakeNoReport = $env:FAKE_CODEX_NO_REPORT
 $oldFakeVerdict = $env:FAKE_CODEX_VERDICT
+$oldGitConfigGlobal = $env:GIT_CONFIG_GLOBAL
 
 $script:failureCount = 0
 $script:assertionCount = 0
@@ -163,6 +167,57 @@ function Get-LedgerRowsForSpec {
     return @($matches)
 }
 
+function Set-LedgerRowProperty {
+    param(
+        [Parameter(Mandatory)][string]$RunId,
+        [Parameter(Mandatory)][string]$Name,
+        [AllowNull()]$Value,
+        [switch]$Remove
+    )
+
+    $rewritten = New-Object System.Collections.Generic.List[string]
+    foreach ($line in [System.IO.File]::ReadAllLines($ledgerPath)) {
+        if ([string]::IsNullOrWhiteSpace($line)) { continue }
+        $row = $line | ConvertFrom-Json
+        if ([string]$row.run_id -ceq $RunId) {
+            if ($Remove) {
+                $row.PSObject.Properties.Remove($Name)
+            }
+            else {
+                $row | Add-Member -NotePropertyName $Name -NotePropertyValue $Value -Force
+            }
+        }
+        $rewritten.Add(($row | ConvertTo-Json -Depth 20 -Compress))
+    }
+    [System.IO.File]::WriteAllLines($ledgerPath, $rewritten.ToArray(), [System.Text.UTF8Encoding]::new($false))
+}
+
+function Add-FabricatedLedgerRow {
+    param([Parameter(Mandatory)]$Row)
+
+    $parent = Split-Path $ledgerPath -Parent
+    [System.IO.Directory]::CreateDirectory($parent) | Out-Null
+    $json = ($Row | ConvertTo-Json -Depth 20 -Compress) + [Environment]::NewLine
+    [System.IO.File]::AppendAllText($ledgerPath, $json, [System.Text.UTF8Encoding]::new($false))
+}
+
+function Get-WorktreeKeyLocal {
+    param([Parameter(Mandatory)][string]$Path)
+    $top = @(Invoke-FixtureGit -Repo $Path -GitArguments @('rev-parse', '--show-toplevel'))
+    return (([string]$top[0]) -replace '\\', '/').TrimEnd('/').ToLowerInvariant()
+}
+
+function New-ControlledDigestScript {
+    param(
+        [Parameter(Mandatory)][string]$Name,
+        [Parameter(Mandatory)][string]$Digest
+    )
+
+    $path = Join-Path $testRoot "$Name.ps1"
+    Write-Utf8NoBom -Path $path -Content "Write-Output '$Digest'`nexit 0`n"
+    return $path
+}
+
 function Assert-Case {
     param(
         [Parameter(Mandatory)][string]$Label,
@@ -188,7 +243,8 @@ function Invoke-DispatchCase {
         [string]$FakeRepo,
         [string[]]$Authorized = @('src/a.py'),
         [hashtable]$ExtraParameters = @{},
-        [hashtable]$FakeEnvironment = @{}
+        [hashtable]$FakeEnvironment = @{},
+        [string]$FakePath = $fakeCodex
     )
 
     $parameters = @{
@@ -201,13 +257,13 @@ function Invoke-DispatchCase {
         Authorized = @($Authorized)
         ScratchDirectory = $scratchRoot
         CodexExecutable = 'powershell.exe'
-        CodexExecutableArgumentPrefix = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $fakeCodex)
+        CodexExecutableArgumentPrefix = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $FakePath)
     }
     foreach ($entry in $ExtraParameters.GetEnumerator()) {
         $parameters[$entry.Key] = $entry.Value
     }
 
-    foreach ($name in @('FAKE_CODEX_INSCOPE_ONLY', 'FAKE_CODEX_STATUS', 'FAKE_CODEX_NO_REPORT', 'FAKE_CODEX_VERDICT')) {
+    foreach ($name in @('FAKE_CODEX_INSCOPE_ONLY', 'FAKE_CODEX_EXTRA_WRITE', 'FAKE_CODEX_STATUS', 'FAKE_CODEX_NO_REPORT', 'FAKE_CODEX_VERDICT')) {
         Set-OptionalEnvironmentValue -Name $name -Value $null
     }
     if ([string]::IsNullOrWhiteSpace($FakeRepo)) { $FakeRepo = $Fixture.Path }
@@ -219,7 +275,7 @@ function Invoke-DispatchCase {
     Write-Host "`n===== CASE: $CaseName =====" -ForegroundColor Cyan
     $captured = @(& $dispatch @parameters *>&1)
     $exitCode = $LASTEXITCODE
-    $outputText = ($captured | Out-String)
+    $outputText = @($captured | ForEach-Object { $_.ToString() }) -join [Environment]::NewLine
     if (-not [string]::IsNullOrWhiteSpace($outputText)) {
         Write-Host $outputText.TrimEnd()
     }
@@ -236,14 +292,32 @@ try {
     [System.IO.Directory]::CreateDirectory($repoRoot) | Out-Null
     [System.IO.Directory]::CreateDirectory($stateRoot) | Out-Null
     [System.IO.Directory]::CreateDirectory($scratchRoot) | Out-Null
+    $scratchGitConfig = Join-Path $testRoot 'gitconfig'
+    $scratchGitIgnore = Join-Path $testRoot 'gitignore'
+    Write-Utf8NoBom -Path $scratchGitIgnore -Content ''
+    $scratchGitIgnoreConfigPath = $scratchGitIgnore -replace '\\', '/'
+    Write-Utf8NoBom -Path $scratchGitConfig -Content "[core]`n    excludesFile = $scratchGitIgnoreConfigPath`n"
+    $env:GIT_CONFIG_GLOBAL = $scratchGitConfig
     Write-Utf8NoBom -Path $unexpectedClassifier -Content 'exit 7'
     Write-Utf8NoBom -Path $noExitClassifier -Content 'return'
+    $cleanReviewFake = Join-Path $testRoot 'clean-review-fake.ps1'
+    Write-Utf8NoBom -Path $cleanReviewFake -Content @'
+$passThruArgs = $args
+[void][Console]::In.ReadToEnd()
+$finalPath = $null
+for ($i = 0; $i -lt $passThruArgs.Count - 1; $i++) {
+    if ($passThruArgs[$i] -eq '-o') { $finalPath = $passThruArgs[$i + 1]; break }
+}
+$report = [ordered]@{ verdict = 'CLEAN'; findings = @() }
+[System.IO.File]::WriteAllText($finalPath, ($report | ConvertTo-Json -Depth 8), [System.Text.UTF8Encoding]::new($false))
+exit 0
+'@
     $env:APEX_STATE_DIR = $stateRoot
 
     # Create every repository before dispatching so no Git process can disturb the deliberate
     # case 3 to case 8 LASTEXITCODE adjacency below.
     $fixtures = @{}
-    foreach ($number in 1..11) {
+    foreach ($number in 1..17) {
         $extraFiles = @{}
         if ($number -eq 3) {
             $extraFiles['docs\changes\critfile-critical-confirmed.md'] = New-FixtureSpec -Spec 'critfile-critical-confirmed'
@@ -254,6 +328,7 @@ try {
         $fixtures[$number] = New-FixtureRepo -Name ("case-{0}" -f $number) -ExtraFiles $extraFiles
     }
     $fakeSink = New-FixtureRepo -Name 'case-3-fake-sink'
+    $reviewSink = New-FixtureRepo -Name 'review-fake-sink'
 
     $spec = 'critfile-hardblock-confirmed'
     $result = Invoke-DispatchCase -CaseName '1 HARD-BLOCK confirmed' -Spec $spec -Fixture $fixtures[1] `
@@ -353,13 +428,147 @@ try {
             NoTreePin = $true
             NoTreePinReason = 'review ledger fixture'
         } -FakeEnvironment @{ FAKE_CODEX_VERDICT = 'CLEAN' }
+    Assert-Case -Label 'case 10 missing ReviewedRunId target fails before reservation' `
+        -Condition ($result.ExitCode -eq 78 -and $result.Rows.Count -eq 0) `
+        -Detail ("exit={0}, rows={1}; expected exit=78, rows=0" -f $result.ExitCode, $result.Rows.Count)
+
+    # Seed each binding case through a real BUILD dispatch so the source row has the same terminal
+    # shape and real end_tree_digest as production. The review fake writes into a separate sink so it
+    # cannot move the tree being reviewed.
+    $spec = 'critfile-review-digest-mismatch'
+    $build = Invoke-DispatchCase -CaseName '12a seed real build for mismatch' -Spec $spec -Fixture $fixtures[12] `
+        -ExtraParameters @{ SkipBaselineCheck = $true } `
+        -FakeEnvironment @{ FAKE_CODEX_INSCOPE_ONLY = '1' }
+    $buildRow = @($build.Rows | Where-Object { $_.phase -eq 'build' }) | Select-Object -First 1
+    $liveDigest = [string]$buildRow.end_tree_digest
+    $differentDigest = if ($liveDigest -ceq ('f' * 64)) { 'e' * 64 } else { 'f' * 64 }
+    Set-LedgerRowProperty -RunId ([string]$buildRow.run_id) -Name 'end_tree_digest' -Value $differentDigest
+    $digestScript = New-ControlledDigestScript -Name 'mismatch-live-digest' -Digest $liveDigest
+    $result = Invoke-DispatchCase -CaseName '12b review digest mismatch' -Spec $spec -Fixture $fixtures[12] `
+        -FakeRepo $reviewSink.Path -Authorized @() -ExtraParameters @{
+            Phase = 'review'; Schema = 'review'; ReviewedRunId = [string]$buildRow.run_id
+            NoTreePin = $true; NoTreePinReason = 'controlled mismatch'; TreePinScript = $digestScript
+        } -FakeEnvironment @{ FAKE_CODEX_VERDICT = 'CLEAN' }
+    $reviewRows = @($result.Rows | Where-Object { $_.phase -eq 'review' })
+    $reviewRow = $reviewRows | Select-Object -First 1
+    Assert-Case -Label 'review digest mismatch reserves once then fails closed' `
+        -Condition ($build.ExitCode -eq 0 -and $liveDigest -cmatch '^[0-9a-f]{64}$' -and
+            $result.ExitCode -eq 78 -and $result.Rows.Count -eq 2 -and $reviewRows.Count -eq 1 -and
+            $reviewRow.status -eq 'failed' -and $reviewRow.digest_mismatch -eq $true -and
+            $reviewRow.tree_pin_override -eq $true) `
+        -Detail ("build={0}, review={1}, rows={2}, review_rows={3}, status={4}, mismatch={5}, override={6}" -f
+            $build.ExitCode, $result.ExitCode, $result.Rows.Count, $reviewRows.Count, $reviewRow.status,
+            $reviewRow.digest_mismatch, $reviewRow.tree_pin_override)
+
+    $spec = 'critfile-review-digest-match'
+    $build = Invoke-DispatchCase -CaseName '13a seed real build for match' -Spec $spec -Fixture $fixtures[13] `
+        -ExtraParameters @{ SkipBaselineCheck = $true } `
+        -FakeEnvironment @{ FAKE_CODEX_INSCOPE_ONLY = '1' }
+    $buildRow = @($build.Rows | Where-Object { $_.phase -eq 'build' }) | Select-Object -First 1
+    $digestScript = New-ControlledDigestScript -Name 'matching-live-digest' -Digest ([string]$buildRow.end_tree_digest)
+    $result = Invoke-DispatchCase -CaseName '13b review digest match' -Spec $spec -Fixture $fixtures[13] `
+        -FakeRepo $reviewSink.Path -FakePath $cleanReviewFake -Authorized @() -ExtraParameters @{
+            Phase = 'review'; Schema = 'review'; ReviewedRunId = [string]$buildRow.run_id
+            NoTreePin = $true; NoTreePinReason = 'controlled match'; TreePinScript = $digestScript
+        } -FakeEnvironment @{ FAKE_CODEX_VERDICT = 'CLEAN' }
+    $reviewRow = @($result.Rows | Where-Object { $_.phase -eq 'review' }) | Select-Object -First 1
+    Assert-Case -Label 'matching review records the build digest and proceeds' `
+        -Condition ($build.ExitCode -eq 0 -and $result.ExitCode -eq 0 -and $result.Rows.Count -eq 2 -and
+            $reviewRow.reviewed_tree_digest -ceq [string]$buildRow.end_tree_digest -and
+            $reviewRow.tree_pin_override -eq $true) `
+        -Detail ("build={0}, review={1}, build_digest={2}, reviewed_digest={3}" -f $build.ExitCode,
+            $result.ExitCode, $buildRow.end_tree_digest, $reviewRow.reviewed_tree_digest)
+
+    $spec = 'critfile-review-digest-unverifiable'
+    $build = Invoke-DispatchCase -CaseName '14a seed real build for unverifiable' -Spec $spec -Fixture $fixtures[14] `
+        -ExtraParameters @{ SkipBaselineCheck = $true } `
+        -FakeEnvironment @{ FAKE_CODEX_INSCOPE_ONLY = '1' }
+    $buildRow = @($build.Rows | Where-Object { $_.phase -eq 'build' }) | Select-Object -First 1
+    Set-LedgerRowProperty -RunId ([string]$buildRow.run_id) -Name 'end_tree_digest' -Value 'unverifiable'
+    $digestScript = New-ControlledDigestScript -Name 'unverifiable-unused-digest' -Digest ('a' * 64)
+    $result = Invoke-DispatchCase -CaseName '14b review referenced digest unverifiable' -Spec $spec `
+        -Fixture $fixtures[14] -FakeRepo $reviewSink.Path -Authorized @() -ExtraParameters @{
+            Phase = 'review'; Schema = 'review'; ReviewedRunId = [string]$buildRow.run_id
+            NoTreePin = $true; NoTreePinReason = 'unverifiable source'; TreePinScript = $digestScript
+        } -FakeEnvironment @{ FAKE_CODEX_VERDICT = 'CLEAN' }
+    $reviewRow = @($result.Rows | Where-Object { $_.phase -eq 'review' }) | Select-Object -First 1
+    Assert-Case -Label 'unverifiable referenced digest exits 78 after reservation' `
+        -Condition ($build.ExitCode -eq 0 -and $result.ExitCode -eq 78 -and $result.Rows.Count -eq 2 -and
+            $reviewRow.status -eq 'failed' -and $reviewRow.digest_mismatch -eq $true) `
+        -Detail ("build={0}, review={1}, rows={2}, status={3}, mismatch={4}" -f $build.ExitCode,
+            $result.ExitCode, $result.Rows.Count, $reviewRow.status, $reviewRow.digest_mismatch)
+
+    $spec = 'critfile-review-digest-legacy'
+    $build = Invoke-DispatchCase -CaseName '15a seed real build for legacy row' -Spec $spec -Fixture $fixtures[15] `
+        -ExtraParameters @{ SkipBaselineCheck = $true } `
+        -FakeEnvironment @{ FAKE_CODEX_INSCOPE_ONLY = '1' }
+    $buildRow = @($build.Rows | Where-Object { $_.phase -eq 'build' }) | Select-Object -First 1
+    Set-LedgerRowProperty -RunId ([string]$buildRow.run_id) -Name 'end_tree_digest' -Remove
+    $digestScript = New-ControlledDigestScript -Name 'legacy-unused-digest' -Digest ('b' * 64)
+    $result = Invoke-DispatchCase -CaseName '15b legacy build row without digest' -Spec $spec `
+        -Fixture $fixtures[15] -FakeRepo $reviewSink.Path -FakePath $cleanReviewFake -Authorized @() -ExtraParameters @{
+            Phase = 'review'; Schema = 'review'; ReviewedRunId = [string]$buildRow.run_id
+            NoTreePin = $true; NoTreePinReason = 'legacy source'; TreePinScript = $digestScript
+        } -FakeEnvironment @{ FAKE_CODEX_VERDICT = 'CLEAN' }
+    $reviewRow = @($result.Rows | Where-Object { $_.phase -eq 'review' }) | Select-Object -First 1
+    Assert-Case -Label 'legacy absent digest warns and proceeds' `
+        -Condition ($build.ExitCode -eq 0 -and $result.ExitCode -eq 0 -and $result.Rows.Count -eq 2 -and
+            $result.Output.Contains('predates end_tree_digest') -and $reviewRow.status -eq 'done') `
+        -Detail ("build={0}, review={1}, rows={2}, warned={3}, status={4}" -f $build.ExitCode,
+            $result.ExitCode, $result.Rows.Count, $result.Output.Contains('predates end_tree_digest'), $reviewRow.status)
+
+    # Fabricated dead build rows exercise both adoption gate paths. The live-replay row has a real
+    # scope snapshot and a post-snapshot critical write; its recorded confirmation must be used even
+    # though the adopt invocation itself carries no confirmation switch.
+    $spec = 'critfile-adopt-live-replay'
+    $scopeTask = 'fabricated-adopt-live-replay'
+    $gateState = Join-Path $stateRoot 'gates'
+    [System.IO.Directory]::CreateDirectory($gateState) | Out-Null
+    & $scopeCheck -Snapshot -Worktree $fixtures[16].Path -Task $scopeTask -StateDirectory $gateState -Authorized @('src') | Out-Null
+    if ($LASTEXITCODE -ne 0) { throw "scope snapshot for adopt replay failed with exit $LASTEXITCODE" }
+    Add-Content -LiteralPath (Join-Path $fixtures[16].Path 'src\package-lock.json') -Value 'adopted critical write'
+    $reportPath = Join-Path $testRoot 'adopt-live-report.json'
+    Write-Utf8NoBom -Path $reportPath -Content '{"status":"done","changed_files":["src/package-lock.json"],"commands_run":[],"deviations":[],"unresolved":[],"blocker":null}'
+    $runId = 'fabricated-adopt-live-run'
+    Add-FabricatedLedgerRow -Row ([ordered]@{
+        run_id = $runId; pid = $null; launcher_pid = $null; worktree = $fixtures[16].Path
+        worktree_key = (Get-WorktreeKeyLocal $fixtures[16].Path); spec = $spec; task = 'critical-file-gate'
+        base_sha = $fixtures[16].BaseSha; phase = 'build'; started = '2026-01-01T00:00:00Z'
+        final_path = $reportPath; schema = 'completion'; sandbox = 'workspace-write'; status = 'running'
+        scope_armed = $true; scope_task = $scopeTask; authorized = @('src'); tree_pin_label = $null
+        critical_files_confirmed = $true; critical_files_confirmed_note = 'recorded attended confirmation'
+    })
+    $result = Invoke-DispatchCase -CaseName '16 adopt build with live scope replay' -Spec $spec `
+        -Fixture $fixtures[16] -ExtraParameters @{ Adopt = $true; CriticalFilesScript = $criticalFiles }
     $row = @($result.Rows) | Select-Object -First 1
-    Assert-Case -Label 'case 10 review bypasses critical gate and records review linkage' `
-        -Condition ($result.ExitCode -ne 76 -and $result.Rows.Count -eq 1 -and
-            $row.reviewer_family -eq 'openai' -and [string]::IsNullOrEmpty([string]$row.builder_family) -and
-            $row.reviewed_run_id -eq 'sentinel-123') `
-        -Detail ("exit={0}, rows={1}, reviewer_family='{2}', builder_family='{3}', reviewed_run_id='{4}'" -f
-            $result.ExitCode, $result.Rows.Count, $row.reviewer_family, $row.builder_family, $row.reviewed_run_id)
+    Assert-Case -Label 'adopt live replay records digest and honors row confirmation' `
+        -Condition ($result.ExitCode -eq 0 -and $row.status -eq 'adopted-done' -and
+            $row.end_tree_digest -cmatch '^[0-9a-f]{64}$' -and $row.critical_violation -eq $false) `
+        -Detail ("exit={0}, status={1}, digest={2}, critical={3}" -f $result.ExitCode, $row.status,
+            $row.end_tree_digest, $row.critical_violation)
+
+    $spec = 'critfile-adopt-recorded-verdict'
+    $reportPath = Join-Path $testRoot 'adopt-recorded-report.json'
+    Write-Utf8NoBom -Path $reportPath -Content '{"status":"done","changed_files":[],"commands_run":[],"deviations":[],"unresolved":[],"blocker":null}'
+    Add-FabricatedLedgerRow -Row ([ordered]@{
+        run_id = 'fabricated-adopt-recorded-run'; pid = $null; launcher_pid = $null; worktree = $fixtures[17].Path
+        worktree_key = (Get-WorktreeKeyLocal $fixtures[17].Path); spec = $spec; task = 'critical-file-gate'
+        base_sha = $fixtures[17].BaseSha; phase = 'build'; started = '2026-01-01T00:00:00Z'
+        final_path = $reportPath; schema = 'completion'; sandbox = 'workspace-write'; status = 'running'
+        ended = '2026-01-01T00:01:00Z'; scope_armed = $true; scope_task = 'recorded-scope'
+        authorized = @('src/a.py'); scope_exit = 0; tree_pin_label = $null; critical_files_confirmed = $false
+    })
+    $result = Invoke-DispatchCase -CaseName '17 adopt build with recorded scope verdict' -Spec $spec `
+        -Fixture $fixtures[17] -ExtraParameters @{ Adopt = $true; CriticalFilesScript = $criticalFiles }
+    $row = @($result.Rows) | Select-Object -First 1
+    Assert-Case -Label 'adopt recorded-verdict branch records digest without fabricated classification' `
+        -Condition ($result.ExitCode -eq 0 -and $row.status -eq 'adopted-done' -and
+            $row.end_tree_digest -cmatch '^[0-9a-f]{64}$' -and
+            -not (@($row.PSObject.Properties.Name) -ccontains 'critical_violation') -and
+            $result.Output.Contains('post-hoc classification unavailable for pre-completed adopted run')) `
+        -Detail ("exit={0}, status={1}, digest={2}, has_critical={3}, note={4}" -f $result.ExitCode,
+            $row.status, $row.end_tree_digest, (@($row.PSObject.Properties.Name) -ccontains 'critical_violation'),
+            $result.Output.Contains('post-hoc classification unavailable for pre-completed adopted run'))
 }
 catch {
     $script:failureCount++
@@ -370,9 +579,11 @@ finally {
     Set-OptionalEnvironmentValue -Name 'APEX_STATE_DIR' -Value $oldApexStateDir
     Set-OptionalEnvironmentValue -Name 'FAKE_CODEX_REPO' -Value $oldFakeRepo
     Set-OptionalEnvironmentValue -Name 'FAKE_CODEX_INSCOPE_ONLY' -Value $oldFakeInScopeOnly
+    Set-OptionalEnvironmentValue -Name 'FAKE_CODEX_EXTRA_WRITE' -Value $oldFakeExtraWrite
     Set-OptionalEnvironmentValue -Name 'FAKE_CODEX_STATUS' -Value $oldFakeStatus
     Set-OptionalEnvironmentValue -Name 'FAKE_CODEX_NO_REPORT' -Value $oldFakeNoReport
     Set-OptionalEnvironmentValue -Name 'FAKE_CODEX_VERDICT' -Value $oldFakeVerdict
+    Set-OptionalEnvironmentValue -Name 'GIT_CONFIG_GLOBAL' -Value $oldGitConfigGlobal
     if (Test-Path -LiteralPath $testRoot) {
         Remove-Item -LiteralPath $testRoot -Recurse -Force -ErrorAction SilentlyContinue
     }

@@ -32,6 +32,17 @@ Set-Location $repo
 
 Add-Content -Path 'src/a.py'       -Value 'codex authorized change'   # in scope   -> keep
 
+# Opt-in test hook for post-hoc written-set cases. The value is deliberately repo-relative: callers
+# choose one additional path while the default, unset flow remains byte-for-byte unchanged. Keep this
+# before the in-scope-only return so focused fixtures can use it without enabling the fake's usual
+# out-of-scope writes.
+if ($env:FAKE_CODEX_EXTRA_WRITE) {
+    $extraWritePath = Join-Path $repo $env:FAKE_CODEX_EXTRA_WRITE
+    $extraWriteParent = Split-Path $extraWritePath -Parent
+    if ($extraWriteParent) { [System.IO.Directory]::CreateDirectory($extraWriteParent) | Out-Null }
+    Add-Content -LiteralPath $extraWritePath -Value 'codex extra write'
+}
+
 # A well-behaved coder that writes ONLY what it was authorized to write. Without this, the fake
 # ALWAYS misbehaved -- so the suite had no test in which a build was supposed to come back CLEAN, and
 # a bug that made every clean build fail was structurally invisible to it.

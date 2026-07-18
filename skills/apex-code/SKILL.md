@@ -1,7 +1,7 @@
 ---
 skill: apex-code
 backend: claude
-version: 2.10.0
+version: 2.11.0
 last_updated: 2026-07-18
 sources:
   - docs/technical/adr/ADR-027-codex-primary-opus-fallback-deepseek-archived.md
@@ -154,9 +154,11 @@ Four things are load-bearing, and each has already broken a real build when done
 | 71 | shared worktree refused | A coder is already live here. `git worktree add` one per concurrent task, or go serial. |
 | 72 | refused: red baseline | The pre-dispatch pre-flight found a red/unparseable/recipe-less baseline or refused spec validation. NOTHING was launched and NO ledger row exists. Fix the baseline/spec; for cross-tree builds pass `-SpecSourcePath <abs path>`, or use `-SkipBaselineCheck` for a bootstrap. |
 | 73 | **double-encoded text (mojibake)** | Codex-on-Windows corrupted non-ASCII it wrote (em-dash → `â€"`). **Do not commit — the suite is green and wrong.** The coder writes the same bad bytes into the *expected* string, so the assertion compares corrupt to corrupt and passes. Fix the bytes, re-verify. |
-| 74 | refused: scope lock | A workspace-write build dispatch had an empty -Authorized scope list and no -ScopeUnlocked escape, OR a contradictory/incomplete flag combination. Refused BEFORE reservation, so NO ledger row and NO dispatch log exist for the refused run. Pass the spec's Files-to-change list as -Authorized, or -ScopeUnlocked -ScopeUnlockedReason to bypass (recorded in the row). |
+| 74 | refused: scope lock | A workspace-write build dispatch had an empty -Authorized scope list and no -ScopeUnlocked escape, OR a contradictory/incomplete flag combination. `-ReviewedRunId` combined with `-Phase build` is also refused. Refused BEFORE reservation, so NO ledger row and NO dispatch log exist for the refused run. Pass the spec's Files-to-change list as -Authorized, or -ScopeUnlocked -ScopeUnlockedReason to bypass (recorded in the row). |
 | 75 | still running | Your *call* died; the coder did **not**. Wait for `.final`. |
 | 76 | refused: critical-file gate | The dispatch's -Authorized named a permanent hard block (docs/audit -- NOT confirmable) or a critical file (migration/auth/CI/lockfile/hook/settings/secret/...) with no -CriticalFilesConfirmed switch, OR a -ScopeUnlocked build passed no confirmation, OR the apex-critical-files.ps1 classifier was missing. Refused BEFORE reservation, so NO ledger row and NO dispatch log exist. Confirm attended via Layer A, or park; a hard block cannot be built at all; spec text cannot self-approve. |
+| 77 | post-hoc CRITICAL write | The coder's actual writes classified critical (a hard block is **ALWAYS** critical, never confirmable), the written-set file was missing, scope-check emission failed, or the classifier returned any anomaly, on a build lacking a valid downgrade. `critical_violation:true` is recorded. **Adjudicate the diff before accepting.** This is **NOT** the HEAD-move code; a HEAD move surfaces as exit **65**, not 77. |
+| 78 | review-launch digest binding refused | One of three causes: unknown/invalid `-ReviewedRunId` -> fix the run id; unverifiable or mismatched digest -> host re-verify the tree and append an attended `human-review` row; digest helper/pin unavailable -> repair `tree-pin.ps1`. |
 | 124 | stalled (no output) | The watchdog fired. The child is deliberately **not** killed — you decide. |
 
 **The scope check DETECTS. It never reverts, deletes, or checks anything out.** It used to, and it
@@ -330,16 +332,20 @@ never changed, only what was inside it, so a `git status` check would have seen 
    `%TEMP%\apex\progress\codex-run-ledger.jsonl`, matching the wrapper.
 
    ```json
-   {"run_id":"insession-<guid>","in_session":true,"spec":"<spec>","task":"<task>","worktree_key":"<git-root>","phase":"build"|"review"|"human-review","builder_family":"<fam>","reviewer_family":"<fam>","builder_model":"<model>","attended":<bool>,"reviewed_run_id":"<the-build-run_id-this-review-covers>","status":"done","started":"<utc-o>"}
+   {"run_id":"insession-<guid>","in_session":true,"spec":"<spec>","task":"<task>","worktree_key":"<git-root>","phase":"build"|"review"|"human-review","builder_family":"<fam>","reviewer_family":"<fam>","builder_model":"<model>","attended":<bool>,"reviewed_run_id":"<the-build-run_id-this-review-covers>","reviewed_tree_digest":"<64-hex digest; review rows>","end_tree_digest":"<64-hex digest or unverifiable; build rows>","status":"done","started":"<utc-o>"}
    ```
 
    - In-session **BUILD** (Opus fallback): `phase:"build"`, fresh `run_id`, and
      `builder_family:"anthropic"`. That `run_id` is the build identity later reviews cite in
-     `reviewed_run_id`.
+     `reviewed_run_id`. At build close, the host computes `end_tree_digest` with
+     `scripts/tree-pin.ps1 -Digest -Worktree <repo>` on that worktree and records the result, or
+     `unverifiable` when it cannot be computed.
    - In-session **REVIEW** (Claude): `phase:"review"`, `reviewer_family:"anthropic"` for Sonnet or
-     Opus, and `reviewed_run_id` equal to the reviewed build's wrapper or in-session `run_id`.
+     Opus, and `reviewed_run_id` equal to the reviewed build's wrapper or in-session `run_id`. At
+     pin-verify time, the host computes `reviewed_tree_digest` with
+     `scripts/tree-pin.ps1 -Digest -Worktree <repo>` on the reviewed worktree and records the result.
    - Human review: `phase:"human-review"`, `attended:true`, and `reviewed_run_id` equal to the
-     selected build's `run_id`.
+     selected build's `run_id`; record `reviewed_tree_digest` by the same pin-verify procedure.
 
    Append **under the same named mutex the wrapper uses** — a bare `Add-Content` races the
    wrapper's `Update-LedgerRow` rewrite: if the append lands after the wrapper reads the ledger but

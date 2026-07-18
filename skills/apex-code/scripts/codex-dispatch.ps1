@@ -43,12 +43,13 @@ param(
     # -CriticalFilesConfirmed is set ONLY by the apex-code skill's Layer A step after a real attended
     # human confirmation -- a spec's `## Permissions` text never sets it.
     # -CriticalFilesConfirmedNote carries a free-text who/when string for the ledger.
-    # -CriticalFilesScript is a test-only override; empty resolves apex-critical-files.ps1 beside
-    # $PSScriptRoot so tests can dogfood the missing-classifier fail-closed path.
+    # -CriticalFilesScript and -TreePinScript are test-only overrides; empty values resolve the
+    # corresponding helpers beside $PSScriptRoot so tests can dogfood fail-closed paths.
     # -ReviewedRunId is the run_id of the BUILD that a REVIEW dispatch is reviewing.
     [switch]$CriticalFilesConfirmed,
     [string]$CriticalFilesConfirmedNote,
     [string]$CriticalFilesScript,
+    [string]$TreePinScript,
     [string]$ReviewedRunId,
     [string]$Prompt,
     # Selects the --output-schema codex is constrained to. A review/end-gate pass returns
@@ -91,6 +92,13 @@ if ($AllowSharedWorktree -and [string]::IsNullOrWhiteSpace($AllowSharedWorktreeR
 }
 if ($NoTreePin -and [string]::IsNullOrWhiteSpace($NoTreePinReason)) {
     Write-Host '[dispatch] REFUSED (exit 74): -NoTreePin requires -NoTreePinReason' -ForegroundColor Red
+    exit 74
+}
+
+# Digest binding belongs only to review/read-only dispatches; post-hoc classification belongs only
+# to scope-armed build/workspace-write dispatches. A build cannot opt into the review-side binding.
+if (-not $Adopt -and $Phase -ceq 'build' -and $ReviewedRunId) {
+    Write-Host '[dispatch] REFUSED (exit 74): -ReviewedRunId is meaningless for -Phase build' -ForegroundColor Red
     exit 74
 }
 
@@ -202,6 +210,7 @@ $schemaFile = switch ($Schema) {
     default { 'codex-completion-schema.json' }
 }
 $schemaPath = Join-Path $dispatcherRoot "skills\apex-code\references\$schemaFile"
+$digestScript = if ($TreePinScript) { $TreePinScript } else { Join-Path $PSScriptRoot 'tree-pin.ps1' }
 $ledgerMutex = [System.Threading.Mutex]::new($false, 'ApexCodexRunLedger')
 
 function Invoke-WithLedgerLock {
@@ -460,6 +469,119 @@ function Get-LiveDispatches {
     return $live
 }
 
+function Invoke-PostHocGates {
+    param(
+        [Parameter(Mandatory)][string]$Worktree,
+        [Parameter(Mandatory)][string]$DigestScript,
+        [switch]$ClassifyWritten,
+        [string]$WrittenPathsFile,
+        [string]$CriticalScript,
+        [bool]$Confirmed = $false,
+        [string]$BaselineHeadSha
+    )
+
+    $result = @{
+        EndTreeDigest = 'unverifiable'
+        CriticalViolation = $null
+        HardBlock = $false
+        CriticalPaths = @()
+        Notes = @()
+    }
+
+    try {
+        & cmd /c exit 99
+        $digestLines = @(& $DigestScript -Digest -Worktree $Worktree)
+        $digestExit = $LASTEXITCODE
+        $digestOutput = ([string[]]$digestLines -join [Environment]::NewLine).Trim()
+        if ($digestExit -eq 0 -and $digestOutput -cmatch '^[0-9a-f]{64}$') {
+            $result.EndTreeDigest = $digestOutput
+        }
+        else {
+            $result.Notes += "tree digest unverifiable (exit $digestExit)"
+        }
+    }
+    catch {
+        $result.Notes += "tree digest unverifiable: $($_.Exception.Message)"
+    }
+
+    if (-not $ClassifyWritten) {
+        return $result
+    }
+
+    $result.CriticalViolation = $false
+    if (-not [string]::IsNullOrWhiteSpace($BaselineHeadSha)) {
+        try {
+            & cmd /c exit 99
+            $headLines = @(& git -C $Worktree rev-parse HEAD 2>$null)
+            $headExit = $LASTEXITCODE
+            $currentHead = ([string[]]$headLines -join [Environment]::NewLine).Trim()
+            if ($headExit -ne 0 -or $currentHead -cnotmatch '^[0-9a-f]{40}([0-9a-f]{24})?$') {
+                $result.CriticalViolation = $true
+                $result.Notes += 'HEAD unreadable -- written set unassessable'
+                return $result
+            }
+            if ($currentHead -ne $BaselineHeadSha.Trim()) {
+                $result.CriticalViolation = $true
+                $result.Notes += 'head moved -- written set unassessable'
+                return $result
+            }
+        }
+        catch {
+            $result.CriticalViolation = $true
+            $result.Notes += "HEAD unreadable -- written set unassessable: $($_.Exception.Message)"
+            return $result
+        }
+    }
+
+    if ([string]::IsNullOrWhiteSpace($WrittenPathsFile) -or
+            -not (Test-Path -LiteralPath $WrittenPathsFile -PathType Leaf)) {
+        $result.CriticalViolation = $true
+        $result.Notes += 'written paths file missing -- written set unassessable'
+        return $result
+    }
+
+    try {
+        $writtenPaths = @([System.IO.File]::ReadAllLines($WrittenPathsFile) |
+            Where-Object { -not [string]::IsNullOrWhiteSpace([string]$_) })
+    }
+    catch {
+        $result.CriticalViolation = $true
+        $result.Notes += "written paths file unreadable -- written set unassessable: $($_.Exception.Message)"
+        return $result
+    }
+
+    if ($writtenPaths.Count -eq 0) {
+        return $result
+    }
+
+    try {
+        & cmd /c exit 99
+        $classifierOutput = @(& $CriticalScript -Test -Paths $writtenPaths -Root $Worktree)
+        $classifierExit = $LASTEXITCODE
+        $result.CriticalPaths = @($classifierOutput | ForEach-Object { [string]$_ } |
+            Where-Object { $_ -cmatch '^(CRITICAL |HARDBLOCK )' })
+
+        switch ($classifierExit) {
+            11 {
+                $result.CriticalViolation = $true
+                $result.HardBlock = $true
+            }
+            10 { $result.CriticalViolation = -not $Confirmed }
+            0 { $result.CriticalViolation = $false }
+            default {
+                $result.CriticalViolation = $true
+                $result.Notes += "critical classifier returned unexpected exit $classifierExit"
+            }
+        }
+    }
+    catch {
+        $result.CriticalViolation = $true
+        $result.Notes += "critical classifier failed: $($_.Exception.Message)"
+    }
+
+    return $result
+}
+
 function Invoke-Adopt {
     # Spec+Phase alone does not identify a run. Adoption CLOSES the row it selects and reports its
     # verdict as if it were the one you asked about -- so selecting the wrong row means closing an
@@ -666,6 +788,9 @@ function Invoke-Adopt {
     # out-of-scope write plus a `done` report used to adopt as a clean success.
     $adoptScopeExit = 0
     $adoptScript = Join-Path $PSScriptRoot 'codex-scope-check.ps1'
+    $adoptIsBuildPhase = ([string]$match.phase -ceq 'build')
+    $adoptGates = $null
+    $adoptCriticalViolation = $null
     if ($match.scope_armed -and -not (Test-Path $adoptScript)) {
         throw "This run armed a scope check, but codex-scope-check.ps1 is missing ($adoptScript). Refusing to adopt: an armed gate that cannot run must not be silently skipped."
     }
@@ -679,11 +804,22 @@ function Invoke-Adopt {
             # rather than crashing -- a gate that already ran is not a gate that was skipped.
             $adoptScopeExit = [int]$match.scope_exit
             Write-Host "[adopt] scope check already ran for this run: exit $adoptScopeExit (reusing its result)." -ForegroundColor DarkGray
+            if ($adoptIsBuildPhase) {
+                Write-Host '[adopt] post-hoc classification unavailable for pre-completed adopted run' -ForegroundColor Yellow
+            }
         }
         else {
+            $adoptWrittenPathsFile = Join-Path $harnessStateDir "adopt-written-$([string]$match.run_id).txt"
             try {
-                & $adoptScript -Check -Worktree $match.worktree -Task ([string]$match.scope_task) `
-                    -Authorized @($match.authorized) -ExcludeRunId ([string]$match.run_id) -StateDirectory $harnessStateDir | Write-Host
+                if ($adoptIsBuildPhase) {
+                    & $adoptScript -Check -Worktree $match.worktree -Task ([string]$match.scope_task) `
+                        -Authorized @($match.authorized) -ExcludeRunId ([string]$match.run_id) `
+                        -StateDirectory $harnessStateDir -WrittenPathsFile $adoptWrittenPathsFile | Write-Host
+                }
+                else {
+                    & $adoptScript -Check -Worktree $match.worktree -Task ([string]$match.scope_task) `
+                        -Authorized @($match.authorized) -ExcludeRunId ([string]$match.run_id) -StateDirectory $harnessStateDir | Write-Host
+                }
                 $adoptScopeExit = $LASTEXITCODE
             } catch {
                 # No snapshot and no recorded result: the gate was armed and its evidence is gone, so
@@ -692,10 +828,23 @@ function Invoke-Adopt {
                 Write-Host "[adopt] Its evidence is gone, so nothing can vouch for this run's scope. Treating as a violation." -ForegroundColor Red
                 $adoptScopeExit = 1
             }
+            if ($adoptIsBuildPhase) {
+                $adoptCriticalScript = if ($CriticalFilesScript) { $CriticalFilesScript } else { Join-Path $PSScriptRoot 'apex-critical-files.ps1' }
+                # Adoption may use only the confirmation already recorded on the row. The adopt
+                # invocation's own -CriticalFilesConfirmed switch is unrecorded and must never approve it.
+                $adoptGates = Invoke-PostHocGates -Worktree ([string]$match.worktree) -DigestScript $digestScript `
+                    -ClassifyWritten -WrittenPathsFile $adoptWrittenPathsFile `
+                    -CriticalScript $adoptCriticalScript -Confirmed ([bool]$match.critical_files_confirmed)
+                $adoptCriticalViolation = $adoptGates.CriticalViolation
+            }
         }
         if ($adoptScopeExit -ne 0) {
             Write-Host "[adopt] The adopted run wrote OUTSIDE its authorized set (scope exit $adoptScopeExit)." -ForegroundColor Red
         }
+    }
+
+    if ($adoptIsBuildPhase -and $null -eq $adoptGates) {
+        $adoptGates = Invoke-PostHocGates -Worktree ([string]$match.worktree) -DigestScript $digestScript
     }
 
     $adoptPinScript = Join-Path $PSScriptRoot 'tree-pin.ps1'
@@ -704,7 +853,14 @@ function Invoke-Adopt {
         if ($LASTEXITCODE -ne 0) {
             Write-Host "[adopt] The tree MOVED while this gate was open -- the adopted verdict is VOID." -ForegroundColor Red
             try {
-                Update-LedgerRow -RunId ([string]$match.run_id) -Changes @{ status = 'adopted-void'; ended = (Get-UtcTimestamp); adopted = $true }
+                $adoptVoidChanges = @{ status = 'adopted-void'; ended = (Get-UtcTimestamp); adopted = $true }
+                if ($adoptIsBuildPhase) {
+                    $adoptVoidChanges['end_tree_digest'] = $adoptGates.EndTreeDigest
+                    if ($null -ne $adoptCriticalViolation) {
+                        $adoptVoidChanges['critical_violation'] = $adoptCriticalViolation
+                    }
+                }
+                Update-LedgerRow -RunId ([string]$match.run_id) -Changes $adoptVoidChanges
             } catch {
                 throw "[adopt] Could not durably close the moved-tree ledger row: $($_.Exception.Message)"
             }
@@ -742,11 +898,18 @@ function Invoke-Adopt {
     $adoptFinal = $adoptStatus
     if ($adoptScopeExit -ne 0) { $adoptFinal = "$adoptStatus+scope$adoptScopeExit" }
     try {
-        Update-LedgerRow -RunId ([string]$match.run_id) -Changes @{
+        $adoptTerminalChanges = @{
             status = "adopted-$adoptFinal"; ended = (Get-UtcTimestamp)
             scopeViolation = ($adoptScopeExit -ne 0); scope_exit = $adoptScopeExit
             encoding_violation = $adoptEncodingViolation
         }
+        if ($adoptIsBuildPhase) {
+            $adoptTerminalChanges['end_tree_digest'] = $adoptGates.EndTreeDigest
+            if ($null -ne $adoptCriticalViolation) {
+                $adoptTerminalChanges['critical_violation'] = $adoptCriticalViolation
+            }
+        }
+        Update-LedgerRow -RunId ([string]$match.run_id) -Changes $adoptTerminalChanges
     } catch {
         throw "[adopt] Could not durably close the ledger row: $($_.Exception.Message)"
     }
@@ -761,6 +924,10 @@ function Invoke-Adopt {
     if ($adoptEncodingViolation) {
         Write-Host "[adopt] DOUBLE-ENCODED TEXT in the tree. Do NOT commit: the suite is green and WRONG." -ForegroundColor Red
         exit 73
+    }
+    if ($adoptCriticalViolation -eq $true) {
+        Write-Host '[adopt] CRITICAL FILE VIOLATION in the post-hoc written set. Do NOT commit.' -ForegroundColor Red
+        exit 77
     }
     if ($adoptStatus -eq 'done_with_concerns') { exit 68 }
     exit 0
@@ -1032,6 +1199,17 @@ $gateKey = "$safeSpec-$safeTask-$($runId.Substring(0,8))"
 $finalPath = Join-Path $ScratchDirectory "codex-$safeSpec-$safeTask-$($runId.Substring(0,8)).final"
 
 $started = Get-UtcTimestamp
+$headSha = ''
+$previous = $ErrorActionPreference
+try {
+    $ErrorActionPreference = 'Continue'
+    $headResult = (& git -C $Worktree rev-parse HEAD 2>$null)
+    if ($LASTEXITCODE -eq 0) { $headSha = ([string]$headResult).Trim() }
+} catch {
+    $headSha = ''
+} finally {
+    $ErrorActionPreference = $previous
+}
 $coderModel = 'gpt-5.6-sol'
 $ledgerRow = [ordered]@{
     run_id = $runId
@@ -1048,6 +1226,7 @@ $ledgerRow = [ordered]@{
     spec = $Spec
     task = $Task
     base_sha = $BaseSha
+    head_sha = $headSha
     phase = $Phase
     started = $started
     log_path = $logPath
@@ -1065,13 +1244,54 @@ $ledgerRow = [ordered]@{
     shared_worktree_reason = $(if ($AllowSharedWorktree) { $AllowSharedWorktreeReason } else { '' })
     tree_pin_disabled = [bool]$NoTreePin
     tree_pin_disabled_reason = $(if ($NoTreePin) { $NoTreePinReason } else { '' })
+    tree_pin_override = ([bool]$TreePinScript -and [bool]$ReviewedRunId)
     critical_files_confirmed = [bool]$CriticalFilesConfirmed
     critical_files_confirmed_note = $(if ($CriticalFilesConfirmed) { $CriticalFilesConfirmedNote } else { '' })
     builder_family = $(if ($Phase -eq 'build') { Get-ModelFamily $coderModel } else { '' })
     reviewer_family = $(if ($Phase -eq 'review' -or $Schema -eq 'review' -or $Schema -eq 'endgate') { Get-ModelFamily $coderModel } else { '' })
     reviewed_run_id = $(if ($Phase -eq 'review' -or $Schema -eq 'review' -or $Schema -eq 'endgate') { $ReviewedRunId } else { '' })
+    reviewed_tree_digest = ''
     tree_pin_label = $null
     status = 'running'
+}
+
+# Resolve the referenced build before reserving anything. This lookup is deliberately stricter than
+# a prefix/status-family match: an adopted build with a scope suffix is not a bindable review target.
+$script:reviewedBuildFound = $false
+$script:reviewedEndTreeDigestPresent = $false
+$script:reviewedEndTreeDigest = ''
+if (-not [string]::IsNullOrEmpty($ReviewedRunId)) {
+    Invoke-WithLedgerLock {
+        if (-not (Test-Path -LiteralPath $ledgerPath -PathType Leaf)) { return }
+
+        foreach ($line in [System.IO.File]::ReadAllLines($ledgerPath)) {
+            if ([string]::IsNullOrWhiteSpace($line)) { continue }
+            try { $row = $line | ConvertFrom-Json } catch { continue }
+
+            if ($row.run_id -ceq $ReviewedRunId -and $row.phase -ceq 'build' -and
+                    @('done', 'done_with_concerns', 'success', 'adopted-done') -ccontains [string]$row.status) {
+                $script:reviewedBuildFound = $true
+                $script:reviewedEndTreeDigestPresent =
+                    (@($row.PSObject.Properties.Name) -ccontains 'end_tree_digest')
+                if ($script:reviewedEndTreeDigestPresent) {
+                    $script:reviewedEndTreeDigest = [string]$row.end_tree_digest
+                }
+                break
+            }
+        }
+    }
+
+    if (-not $script:reviewedBuildFound) {
+        Write-Host "[dispatch] REFUSED (exit 78): reviewed build '$ReviewedRunId' was not found in an exact terminal-success build row." -ForegroundColor Red
+        exit 78
+    }
+}
+
+# head_sha is the reservation-time HEAD. The pre-flight pin covers movement to launch on the normal
+# path; under -SkipBaselineCheck this comparison is advisory only.
+if (-not [string]::IsNullOrWhiteSpace($BaseSha) -and
+        -not [string]::IsNullOrWhiteSpace($headSha) -and $BaseSha -ne $headSha) {
+    Write-Host "[dispatch] WARN: -BaseSha '$BaseSha' differs from reservation-time HEAD '$headSha'; proceeding." -ForegroundColor Yellow
 }
 
 # --- ONE CODER PER WORKING TREE: scan and reserve, ATOMICALLY ----------------------------------
@@ -1192,15 +1412,84 @@ elseif (-not $SkipScopeCheck) {
 $treePinScript = Join-Path $PSScriptRoot 'tree-pin.ps1'
 $treePinLabel = $gateKey
 $treePinArmed = $false
-if ((-not $NoTreePin) -and ($Sandbox -eq 'read-only' -or $Phase -eq 'review') -and -not (Test-Path $treePinScript)) {
+$reviewTreePinPath = $null
+$isReadOnlyGate = ($Sandbox -eq 'read-only' -or $Phase -eq 'review')
+if ((-not $NoTreePin) -and $isReadOnlyGate -and -not (Test-Path $treePinScript)) {
     Update-LedgerRow -RunId $runId -Changes @{ status = 'failed'; ended = (Get-UtcTimestamp); error = 'tree-pin.ps1 missing' }
     throw "A read-only gate must be pinned, but tree-pin.ps1 is missing ($treePinScript). Refusing: an unpinned gate can bless a tree that moved under it. Pass -NoTreePin -NoTreePinReason '<why>' to opt out deliberately."
 }
-if ((-not $NoTreePin) -and ($Sandbox -eq 'read-only' -or $Phase -eq 'review') -and (Test-Path $treePinScript)) {
+if ((-not $NoTreePin) -and $isReadOnlyGate -and (Test-Path $treePinScript)) {
     & $treePinScript -Pin -Worktree $Worktree -Label $treePinLabel -PinDirectory $harnessStateDir | Write-Host
     $treePinArmed = ($LASTEXITCODE -eq 0)
     if ($treePinArmed) {
+        # Keep this coupled to tree-pin.ps1: safeLabel is line 60; worktreeTag/path are lines 209-219;
+        # treepin-v2 serialization (digest on LINE 2) is lines 230-233.
+        $safeTreePinLabel = ($treePinLabel -replace '[<>:"/\\|?*]', '_')
+        $worktreeFull = (Resolve-Path -LiteralPath $Worktree).Path
+        $sha = [System.Security.Cryptography.SHA256]::Create()
+        try {
+            $keyBytes = [System.Text.Encoding]::UTF8.GetBytes(
+                ($worktreeFull -replace '\\', '/').TrimEnd('/').ToLowerInvariant())
+            $worktreeTag = [System.BitConverter]::ToString($sha.ComputeHash($keyBytes)).Replace('-', '').Substring(0, 10).ToLower()
+        }
+        finally { $sha.Dispose() }
+        $reviewTreePinPath = Join-Path $harnessStateDir "apex-treepin-$safeTreePinLabel-$worktreeTag.txt"
         try { Update-LedgerRow -RunId $runId -Changes @{ tree_pin_label = $treePinLabel } } catch { }
+    }
+}
+
+# -NoTreePin governs only pin arming, not review-to-build binding. With a pin, read the digest that
+# the -Pin call just stored so the compared tree and pinned tree are the same object (no TOCTOU gap).
+if ($isReadOnlyGate -and -not [string]::IsNullOrEmpty($ReviewedRunId)) {
+    if (-not $script:reviewedEndTreeDigestPresent) {
+        Write-Host "[dispatch] WARN: reviewed build '$ReviewedRunId' predates end_tree_digest; proceeding without digest binding." -ForegroundColor Yellow
+    }
+    elseif ([string]::IsNullOrWhiteSpace($script:reviewedEndTreeDigest) -or
+            $script:reviewedEndTreeDigest -ceq 'unverifiable') {
+        Update-LedgerRow -RunId $runId -Changes @{
+            status = 'failed'; ended = (Get-UtcTimestamp); digest_mismatch = $true
+        }
+        Write-Host "[dispatch] REFUSED (exit 78): reviewed build '$ReviewedRunId' has no verifiable end_tree_digest." -ForegroundColor Red
+        exit 78
+    }
+    else {
+        $live = ''
+        try {
+            if ($treePinArmed) {
+                $pinLines = [System.IO.File]::ReadAllLines($reviewTreePinPath)
+                if ($pinLines.Count -ge 2 -and $pinLines[0] -ceq 'treepin-v2') {
+                    $live = [string]$pinLines[1]
+                }
+            }
+            elseif ($NoTreePin) {
+                & cmd /c exit 99
+                $liveLines = @(& $digestScript -Digest -Worktree $Worktree)
+                $liveExit = $LASTEXITCODE
+                if ($liveExit -eq 0) {
+                    $live = ([string[]]$liveLines -join [Environment]::NewLine).Trim()
+                }
+            }
+        }
+        catch {
+            $live = ''
+        }
+
+        if ($live -cnotmatch '^[0-9A-Fa-f]{64}$') {
+            Update-LedgerRow -RunId $runId -Changes @{
+                status = 'failed'; ended = (Get-UtcTimestamp); digest_mismatch = $true
+            }
+            Write-Host '[dispatch] REFUSED (exit 78): the live review tree digest is unreadable or unverifiable.' -ForegroundColor Red
+            exit 78
+        }
+        if ($live -cne $script:reviewedEndTreeDigest) {
+            Update-LedgerRow -RunId $runId -Changes @{
+                status = 'failed'; ended = (Get-UtcTimestamp); digest_mismatch = $true
+            }
+            Write-Host "[dispatch] REFUSED (exit 78): the live review tree does not match reviewed build '$ReviewedRunId'." -ForegroundColor Red
+            exit 78
+        }
+
+        Update-LedgerRow -RunId $runId -Changes @{ reviewed_tree_digest = $live }
     }
 }
 
@@ -1568,24 +1857,39 @@ try {
     # Two independent facts (did the coder finish? did it stay in scope?) need two variables.
     $scopeViolation = $false
     $scopeExit = 0
+    $criticalViolation = $false
+    $criticalHardBlock = $false
+    $criticalPaths = @()
+    $scopeCheckThrew = $false
+    $writtenPathsFile = Join-Path $harnessStateDir "written-$runId.txt"
+    $scopeCheckErrorNote = $null
     if ($scopeCheckArmed) {
-        & $scopeCheckScript -Check -Worktree $Worktree -Task $gateKey -Authorized $Authorized -ExcludeRunId $runId -StateDirectory $harnessStateDir | Write-Host
-        $scopeExit = $LASTEXITCODE
-        if ($scopeExit -ne 0) { $scopeViolation = $true }
+        try {
+            & $scopeCheckScript -Check -Worktree $Worktree -Task $gateKey -Authorized $Authorized `
+                -ExcludeRunId $runId -StateDirectory $harnessStateDir `
+                -WrittenPathsFile $writtenPathsFile | Write-Host
+            $scopeExit = $LASTEXITCODE
+            if ($scopeExit -ne 0) { $scopeViolation = $true }
 
-        # The scope check DETECTS; it never reverts (it destroyed real work twice when it did, by
-        # inferring authorship from timing while other writers were live). So nothing here may claim
-        # anything was cleaned up: the out-of-scope changes are still in the tree, for a human.
-        switch ($scopeExit) {
-            0 { }
-            66 {
-                Write-Host "[dispatch] The -Authorized list looks wrong, not the coder. See above." -ForegroundColor Red
+            # The scope check DETECTS; it never reverts (it destroyed real work twice when it did, by
+            # inferring authorship from timing while other writers were live). So nothing here may claim
+            # anything was cleaned up: the out-of-scope changes are still in the tree, for a human.
+            switch ($scopeExit) {
+                0 { }
+                66 {
+                    Write-Host "[dispatch] The -Authorized list looks wrong, not the coder. See above." -ForegroundColor Red
+                }
+                default {
+                    Write-Host "[dispatch] Task '$Task' wrote OUTSIDE its authorized set. Nothing was reverted - the changes" -ForegroundColor Red
+                    Write-Host "[dispatch] are still in the tree. Usually a SPEC DEFECT: the task needed a file its spec did" -ForegroundColor Red
+                    Write-Host "[dispatch] not list. Surface it to planning; do not just re-run." -ForegroundColor Red
+                }
             }
-            default {
-                Write-Host "[dispatch] Task '$Task' wrote OUTSIDE its authorized set. Nothing was reverted - the changes" -ForegroundColor Red
-                Write-Host "[dispatch] are still in the tree. Usually a SPEC DEFECT: the task needed a file its spec did" -ForegroundColor Red
-                Write-Host "[dispatch] not list. Surface it to planning; do not just re-run." -ForegroundColor Red
-            }
+        }
+        catch {
+            $scopeCheckThrew = $true
+            $scopeCheckErrorNote = "scope_check_error: $($_.Exception.Message)"
+            Write-Host "[dispatch] $scopeCheckErrorNote" -ForegroundColor Yellow
         }
     }
 
@@ -1626,12 +1930,46 @@ try {
         if ($LASTEXITCODE -ne 0) { $treeMoved = $true }
     }
 
-    Update-LedgerRow -RunId $runId -Changes @{
+    $gates = @{
+        EndTreeDigest = ''
+        CriticalViolation = $null
+        HardBlock = $false
+        CriticalPaths = @()
+        Notes = @()
+    }
+    if ($Phase -eq 'build' -and $Sandbox -eq 'workspace-write') {
+        if ($scopeCheckArmed) {
+            $gates = Invoke-PostHocGates -Worktree $Worktree -DigestScript $digestScript `
+                -ClassifyWritten -WrittenPathsFile $writtenPathsFile `
+                -CriticalScript $(if ($CriticalFilesScript) { $CriticalFilesScript } else { Join-Path $PSScriptRoot 'apex-critical-files.ps1' }) `
+                -Confirmed $CriticalFilesConfirmed -BaselineHeadSha $headSha
+            $criticalViolation = ($gates.CriticalViolation -eq $true) -or $scopeCheckThrew
+            $criticalPaths = $gates.CriticalPaths
+            $criticalHardBlock = $gates.HardBlock
+        }
+        else {
+            $gates = Invoke-PostHocGates -Worktree $Worktree -DigestScript $digestScript
+            $criticalViolation = $null
+            if ($ScopeUnlocked) {
+                Write-Host '[dispatch] scope-unlocked: written set unavailable; pre-flight -CriticalFilesConfirmed was already required' -ForegroundColor Yellow
+            }
+        }
+    }
+    else {
+        $criticalViolation = $null
+    }
+
+    $terminalChanges = @{
         status = $status; ended = (Get-UtcTimestamp)
         scopeViolation = $scopeViolation; scope_exit = $scopeExit; tree_moved = $treeMoved
         encoding_violation = $encodingViolation
+        end_tree_digest = $gates.EndTreeDigest
         report_status = $reportStatus; unresolved = $unresolved; deviations = $deviations; blocker = $blocker
     }
+    if ($null -ne $criticalViolation) {
+        $terminalChanges['critical_violation'] = $criticalViolation
+    }
+    Update-LedgerRow -RunId $runId -Changes $terminalChanges
 
     # The coder's own account of what it could not finish is the single highest-value input to the
     # review that follows -- and it is exactly what got dropped on cap-deps-1b, leaving the reviewer
@@ -1689,6 +2027,15 @@ try {
     # failure does not excuse an out-of-scope write; it is usually how you get one.
     if ($scopeViolation) { exit 65 }
 
+    if ($criticalViolation -eq $true) {
+        Write-Host '[dispatch] CRITICAL FILE VIOLATION in the post-hoc written set. Do NOT commit.' -ForegroundColor Red
+        if ($criticalHardBlock) {
+            $criticalPathText = if ($criticalPaths.Count -gt 0) { $criticalPaths -join ', ' } else { '(classifier named no paths)' }
+            Write-Host "[dispatch] HARD-BLOCK critical path(s): $criticalPathText" -ForegroundColor Red
+        }
+        exit 77
+    }
+
     # Corrupted bytes in the tree. Ranked BELOW a scope violation deliberately: a scope violation is a
     # SPEC defect and re-routes the whole task through planning -- and when that task is re-dispatched,
     # this scan runs again and re-catches the mojibake. Encoding is a mechanical byte fix; scope is
@@ -1704,7 +2051,7 @@ try {
     # A CHILD's exit code must never be passed through into the wrapper's RESERVED space. Codex
     # exiting 67 (for its own reasons) is not "the coder reported blocked"; a caller reading the
     # contract would act on a verdict that was never given. Remap anything that collides.
-    # The wrapper's exit space is a CONTRACT: 0/1/65/66/67/68/69/71/75/124. Passing an arbitrary child
+    # The wrapper's exit space is a CONTRACT: 0/1/65/66/67/68/69/71/75/77/78/124. Passing an arbitrary child
     # code straight through breaks it -- a child exiting 2 told the caller nothing the contract can
     # express, and a child exiting 67 claimed a `blocked` verdict it never gave.
     if ($exitCode -ne 0) {
@@ -1724,6 +2071,10 @@ try {
     $ledgerMutex.Dispose()
 }
 } finally {
+    if ($treePinArmed -and -not [string]::IsNullOrWhiteSpace($reviewTreePinPath)) {
+        Remove-Item -LiteralPath $reviewTreePinPath -Force -ErrorAction SilentlyContinue
+        $treePinArmed = $false
+    }
     if ($preflightPinArmed) {
         $safe = ($preflightPinLabel -replace '[<>:"/\\|?*]', '_')
         $preflightPinGlob = Join-Path $harnessStateDir "apex-treepin-$safe-*.txt"
