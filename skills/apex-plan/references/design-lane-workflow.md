@@ -16,7 +16,7 @@ mature lanes in detail and the loop.
   validate output quality. Detail: `docs/research/swiftui-design-tooling/`.
 
 ## Division of labour (fixed, both lanes)
-These are browser/Mac tools planning mode **cannot drive**. *Planning authors + refines the prompt and
+These are browser/Mac tools the host **cannot drive**. *The host authors + refines the prompt and
 translates the result into the brief/spec; the user runs the tool and iterates visually.*
 
 ## The loop

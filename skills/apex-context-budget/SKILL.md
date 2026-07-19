@@ -1,6 +1,5 @@
 ---
 skill: apex-context-budget
-backend: claude
 version: 1.1.0
 last_updated: 2026-06-03
 sources:
@@ -96,7 +95,7 @@ Sort **every** inventoried item into one bucket with an action:
 
 ## Scope discipline — audit APEX, don't prescribe deleting other systems
 
-The APEX surface is `apex-*` skills/agents, the registry, the CLAUDE.md chain, and MCP
+The APEX surface is `apex-*` skills/agents, the CLAUDE.md chain, and MCP
 *relevance to the workflow*. **Co-installed third-party systems ARE in scope.** This rule used to
 read "not APEX's to prune" — and that is exactly how 33 `gsd-*` agents survived, costing **14.5 KB of
 always-on description weight, four times APEX's own**, while the skill built to find bloat was

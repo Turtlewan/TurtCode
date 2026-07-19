@@ -36,13 +36,13 @@ When an architectural decision is reached during planning:
 ## status.md update — by mode
 
 ### Deep Details / Light
-At the end of every planning session:
+At the end of every planning pass:
 1. Read current docs/status.md
 2. Rewrite content between <!-- PLANNING:START --> and <!-- PLANNING:END -->:
    - Pending table: scan docs/changes/*.md (not done/). One row per spec, alphabetical
    - Open questions: carry over unresolved, add new, remove resolved
-3. Update _Last updated by planning mode:_ line to today's date
+3. Update _Last updated:_ line to today's date
 4. Write file back
 
 ### Bug Fix
-No status.md update. Bug fix docs are ephemeral — consumed and archived in one coding session.
+No status.md update. Bug fix docs are ephemeral — consumed and archived within the session.

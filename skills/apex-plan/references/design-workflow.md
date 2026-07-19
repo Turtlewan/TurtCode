@@ -130,7 +130,7 @@ lib it can't see; agents treat imported deps as "aspirational" and re-invent ins
 "Cheap mode" = render the component **logic-free** (mock data, no backend/navigation) to a PNG the
 image model can read — small, fast, token-light. On a logic-free surface the cost is low enough that
 **Claude can be the primary UI hand at the design/prototype stage**. Once it's wired into the real
-app, logic + bigger files return → coding mode carries the bulk again.
+app, logic + bigger files return → the dispatched build carries the bulk again.
 
 **Step 0 — establish the feel before mockup #1** (soft-default, skippable). A cold mockup defaults to
 generic AI-slop, so before rendering the *first* one, do the lightweight half of § Aesthetic
@@ -139,7 +139,7 @@ baseline now and fold the feel in later. Set the brief **once** — don't re-run
 
 **Two loops — pick by whether the user wants to be in it:**
 - **Interactive co-review (the user's eyes — default when present):** write the mockup to
-  **`docs/research/mockups/<name>.html`** (that dir auto-passes the write-guard); the user views it
+  **`docs/research/mockups/<name>.html`** (a scratch location for throwaway mockups); the user views it
   in **Cursor's in-editor render** — Claude's edit lands as a live diff *and* the pane updates, one
   window ([[cursor-coedit-flow]]). Loop: user comments → Claude edits (view-layer) → re-view →
   repeat to approval.
@@ -171,7 +171,7 @@ eyes-on loop, not a capability workaround.
 ## Visual review gate (post-build)
 
 A generator rates its own UI as fine when it isn't, so visual defects are caught by a **separate**
-reviewer (evaluator-independence). After a UI build completes, in planning mode:
+reviewer (evaluator-independence). After a UI build completes:
 
 1. **Capture** the rendered UI at target sizes — Web → Playwright screenshots (375/768/1024/1440);
    Native SwiftUI → Xcode Preview captures (compact/regular), Mac-gated.
@@ -179,7 +179,7 @@ reviewer (evaluator-independence). After a UI build completes, in planning mode:
 3. **Turn findings into a focused fix-spec** for the coder. Typically 2–3 cycles.
 
 Dispatch as a **fresh reviewer** — never self-review the build you just reasoned about. The app must
-be reachable from planning mode (local web; Mac-hosted app over LAN / Tailscale).
+be reachable from the host session (local web; Mac-hosted app over LAN / Tailscale).
 
 ---
 

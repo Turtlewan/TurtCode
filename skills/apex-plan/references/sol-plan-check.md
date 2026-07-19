@@ -28,7 +28,7 @@ the spec, do not rewrite it."*
   planning-discussion text — the cold first read is sacred (evaluator independence).
 - `--sandbox read-only` + no profile: Sol can inspect the repo, writes nothing. **Sol never
   edits the spec** — planning applies accepted amendments itself.
-- Effort `max` (plan-check is the highest-leverage read; if gate spend ever crowds Terra build
+- Effort `max` (plan-check is the highest-leverage read; if gate spend ever crowds Sol build
   quota, drop to `xhigh` before dropping the gate).
 
 ## Disposition

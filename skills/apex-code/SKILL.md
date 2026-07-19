@@ -1,6 +1,5 @@
 ---
 skill: apex-code
-backend: claude
 version: 2.11.0
 last_updated: 2026-07-18
 sources:

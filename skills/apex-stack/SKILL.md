@@ -1,6 +1,5 @@
 ---
 skill: apex-stack
-backend: claude
 version: 1.2.1
 last_updated: 2026-07-16
 sources:

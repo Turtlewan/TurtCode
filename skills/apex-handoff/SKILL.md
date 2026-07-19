@@ -1,6 +1,5 @@
 ---
 skill: apex-handoff
-backend: claude
 version: 1.6.0
 last_updated: 2026-06-10
 sources:
@@ -12,7 +11,7 @@ description: >
   Use when writing or consuming a session handoff — the coding→planning narrative inbox
   (docs/handoff/YYYY-MM-DD.md) or the planning→coding spec boundary. Triggers: "write the
   handoff", end of any session that built something, "what did the last build learn", draining it
-  at planning session start, deciding where a fact lives (one-home-per-fact routing).
+  at session start, deciding where a fact lives (one-home-per-fact routing).
   CANONICAL home of the four-section handoff contract — apex-plan, apex-code, and global
   CLAUDE.md carry summaries of it; on conflict, this file wins. Not the spec format itself
   (apex-plan) or status.md mechanics (apex-orchestrate templates).

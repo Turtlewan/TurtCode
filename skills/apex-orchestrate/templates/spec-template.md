@@ -46,7 +46,7 @@ autonomy_level: L2
 - **Non-goals:** {adjacent work this spec deliberately does NOT do}
 
 ## Assumptions
-<!-- Planning mode fills this. Coding mode verifies each item before executing. -->
+<!-- The plan fills this. The build verifies each item before executing. -->
 <!-- Format: assumption → impact if wrong (Stop | Caution | Low) -->
 - {Assumption 1} → impact: {Stop | Caution | Low}
 - {Assumption 2} → impact: {Stop | Caution | Low}
@@ -143,4 +143,4 @@ Approving this spec approves all of them.
 - [ ] {Step 3} → verify: {what to check — specific, observable}
 
 ## Progress
-_(Coding mode writes here — do not edit manually)_
+_(The build writes here — do not edit manually)_

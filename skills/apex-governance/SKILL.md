@@ -1,6 +1,5 @@
 ---
 skill: apex-governance
-backend: claude
 version: 2.2.0
 last_updated: 2026-07-17
 sources:

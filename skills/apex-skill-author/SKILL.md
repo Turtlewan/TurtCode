@@ -1,6 +1,5 @@
 ---
 skill: apex-skill-author
-backend: claude
 version: 2.0.0
 last_updated: 2026-07-14
 sources:
@@ -77,7 +76,6 @@ Frontmatter — all fields required:
 
 ```yaml
 skill: apex-<name>
-backend: claude
 version: <semver>
 last_updated: YYYY-MM-DD
 sources: [<short names, not URLs>]

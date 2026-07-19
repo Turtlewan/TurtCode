@@ -9,7 +9,12 @@ routing — both coders are frontier-class and Opus is not a proactive choice.
 The old DeepSeek Flash/Pro tiers and the `flash < pro < codex` cost-routing are archived (recoverable,
 not in the active menu). If an old project still carries `coder_tier_policy`, treat it as `[codex]`.
 
-## Host-direct build — when the planning host builds the queue itself (ADR-035)
+## Host-direct build — SUPERSEDED by ADR-045 (kept as background)
+
+> **ADR-045 (2026-07-16 split) retires host-direct build.** The host reasons/plans/challenges only;
+> it makes no mechanical edits and writes no code — all build work dispatches to a coder or worker.
+> The reasoning below is why (context decay, scarce-pool depletion, the self-serving bias); it no
+> longer describes a path the host may take.
 
 The host may build a spec queue **itself** (own `Write`/`Edit`, in sequence) instead of dispatching
 `codex exec`. Legal, but **narrow: it must win on a structural argument, never on convenience — when
@@ -30,12 +35,13 @@ both paths are viable, the tie goes to dispatch.** Requires ALL of:
 Fail any one → **dispatch**.
 
 **Two gotchas the reasoning won't supply:**
-- The planning write-guard **exempts APEX + `~/.claude` only**. Every other repo prompts per non-`.md`
-  edit — so host-direct outside those two is a prompt-per-edit slog regardless of how the reasoning
-  above scores. Run the build in coding mode (`apex-build`) instead.
-- **The B1 scope hole is live** (`apex:docs/findings/artemis-13-7-issues.md`): a dispatched Codex can
-  write outside its authorized file list with nothing stopping it. Until the post-dispatch diff check
-  lands, dispatch carries a risk host-direct does not. Expected to expire.
+- Outside APEX / `~/.claude`, edits to non-allow-listed paths prompt for permission (there is no
+  write-guard any more — ADR-038 — but the ordinary permission system still gates writes outside the
+  `permissions.allow` set). Arm AFK autonomy (`acceptEdits` + `permissions.allow`) so an unattended
+  run doesn't stall on prompts, or dispatch.
+- The B1 scope hole is **closed**: the post-dispatch scope check (`codex-scope-check`, exit-65;
+  ADR-041/044) now blocks a dispatched Codex from writing outside its authorized file list. Dispatch
+  no longer carries the extra risk this note once flagged.
 
 **Distrust the preference.** The host feels dispatch's costs (handoff, supervision, integration) and is
 blind to host-direct's (pool depletion, context decay — never experienced). Host-direct also spends the

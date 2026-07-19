@@ -1,6 +1,5 @@
 ---
 skill: apex-deep-dive
-backend: claude
 version: 1.4.0
 last_updated: 2026-06-03
 sources:
@@ -20,7 +19,7 @@ description: >
 
 # APEX Deep Dive
 
-Specialist research mode. Goes deeper than a standard planning session.
+Specialist research mode. Goes deeper than a standard planning pass.
 Reads your project thoroughly, researches 2-3 approaches, returns structured analysis.
 Output is analysis only — no code, no spec produced.
 

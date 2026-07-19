@@ -1,6 +1,5 @@
 ---
 skill: apex-debug
-backend: claude
 version: 1.4.0
 last_updated: 2026-06-13
 sources:

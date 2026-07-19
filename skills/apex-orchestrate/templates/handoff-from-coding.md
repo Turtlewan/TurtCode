@@ -1,9 +1,9 @@
 # Handoff: {YYYY-MM-DD}
-_Mode: coding | L{n} | {profile}_
+_Session {YYYY-MM-DD} | L{n} | {profile}_
 
 > **Read-once inbox.** Every item below must terminate in exactly one of — a Pending Spec,
 > an Open Question, folded into existing state, or explicitly discarded — before the
-> planning session closes (inbox-zero). **What changed is in `git log`; build/test status
+> session closes (inbox-zero). **What changed is in `git log`; build/test status
 > and in-progress position are in status.md.** None of that is repeated here.
 
 ## Decisions Made

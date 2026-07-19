@@ -22,7 +22,7 @@ before the build:
   spawns). Dispatched workers **inherit the parent's `dontAsk`** (local denials, no classifier).
 - **Protected paths** (`.claude/`, `.git/`, …) are denied outright and `permissions.allow` cannot
   override them — a spec that must write one (a skill `impl.md`, `~/.claude/workflows/*`) can't run under
-  `dontAsk`; do those in planning mode or a one-off approval. For an ordinary project build this is a
+  `dontAsk`; do those via a one-off approval (or a session where the path is allow-listed). For an ordinary project build this is a
   feature (the build can't mutate `.claude/`/`.git/`).
 
 ## Per-action check during execution

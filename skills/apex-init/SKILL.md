@@ -1,6 +1,5 @@
 ---
 skill: apex-init
-backend: claude
 version: 1.7.0
 last_updated: 2026-06-22
 sources:
@@ -27,7 +26,7 @@ Sets up the project structure for APEX. Ask the questions, run stack selection, 
 
 ## Persistent artifacts — why they matter
 
-Each planning and coding session starts fresh. Without persistent artifacts,
+Each session starts fresh. Without persistent artifacts,
 context is lost between sessions. These four files survive every session boundary
 and are loaded by every new agent before it acts:
 
@@ -88,8 +87,8 @@ Create these files in the project root if they don't already exist:
 
 Also seed the **System Overview stub** at `docs/technical/architecture/overview.md`
 if it doesn't already exist (template below). Leave it as the stub — it carries the
-`<!-- apex:overview:stub -->` marker so planning mode's coverage check flags it as
-"exists but not yet written." Planning fills it in (in Claude) once the architecture
+`<!-- apex:overview:stub -->` marker so the doc-coverage check flags it as
+"exists but not yet written." The host fills it in once the architecture
 takes shape; do not write the real overview during bootstrap.
 
 **Data-model stub — only for data-bearing projects (ADR-008).** If the confirmed stack
@@ -234,7 +233,7 @@ check greps for. Do not fill the sections during bootstrap.
 # {project-name} — System Overview
 
 <!-- apex:overview:stub -->
-> **STATUS: STUB.** Not yet written. Planning mode (Claude) fills this in once the
+> **STATUS: STUB.** Not yet written. The host fills this in once the
 > architecture takes shape. Until then the doc-coverage check flags it as outstanding.
 
 ## What it does
