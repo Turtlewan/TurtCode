@@ -156,6 +156,9 @@ function Get-TreeFingerprint([string]$Root, [bool]$ApplyRuntimeExclusions) {
     $lines += "HEAD $head"
 
     $status = Invoke-Git $Root status --porcelain --ignored=traditional
+    # Mirrored by codex-scope-check.ps1's -Check runtime-path exclusion; keep both lists in sync.
+    # Scope-check discriminates on ref presence (index OR HEAD, so host-curated paths stay checked),
+    # rather than the `!!` status class used here.
     $runtimeExclusions = @(
         'sessions',
         'projects',

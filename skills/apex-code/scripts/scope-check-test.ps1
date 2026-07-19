@@ -430,6 +430,165 @@ try {
     Assert-True -Name 'written paths snapshot alias has diagnostic' -Condition ($snapshotAlias.Output -match 'must not resolve to the snapshot path') -Detail $snapshotAlias.Output
     Assert-True -Name 'written paths snapshot alias preserves evidence' -Condition (Test-Path -LiteralPath $snapshotAliasFile -PathType Leaf) -Detail 'snapshot evidence was removed or overwritten'
 
+    # Runtime exclusion (1): new session churn under the configured runtime root is not attributed.
+    $runtimeChurnRepo = New-TestRepo -Name 'runtime-untracked-churn'
+    $runtimeChurnState = Join-Path -Path $testRoot -ChildPath 'state-runtime-untracked-churn'
+    $runtimeChurnFile = Join-Path -Path $testRoot -ChildPath 'written-runtime-untracked-churn.txt'
+    $runtimeChurnSnapshot = Invoke-ScopeCheck -CheckerArguments @('-Snapshot', '-Worktree', $runtimeChurnRepo, '-Task', 'runtime-untracked-churn', '-StateDirectory', $runtimeChurnState)
+    Assert-True -Name 'runtime untracked churn snapshot succeeds' -Condition ($runtimeChurnSnapshot.ExitCode -eq 0) -Detail ("expected 0, got {0}" -f $runtimeChurnSnapshot.ExitCode)
+    $runtimeChurnLeaf = Join-Path -Path $runtimeChurnRepo -ChildPath 'projects/session-x.jsonl'
+    New-Item -ItemType Directory -Force -Path (Split-Path -Parent $runtimeChurnLeaf) | Out-Null
+    [System.IO.File]::WriteAllText($runtimeChurnLeaf, "session churn`r`n", [System.Text.Encoding]::ASCII)
+    $runtimeChurn = Invoke-ScopeCheck -CheckerArguments @('-Check', '-Worktree', $runtimeChurnRepo, '-Task', 'runtime-untracked-churn', '-StateDirectory', $runtimeChurnState, '-RuntimeExclusionRoot', $runtimeChurnRepo, '-WrittenPathsFile', $runtimeChurnFile)
+    Assert-True -Name 'runtime untracked churn exits clean' -Condition ($runtimeChurn.ExitCode -eq 0) -Detail ("expected 0, got {0}: {1}" -f $runtimeChurn.ExitCode, $runtimeChurn.Output)
+    Assert-WrittenPaths -Name 'runtime untracked churn emits neither token nor leaf' -Path $runtimeChurnFile -Expected @()
+
+    # Runtime exclusion (2): an index/HEAD-tracked runtime file remains attributable.
+    $runtimeTrackedRepo = New-TestRepo -Name 'runtime-tracked-file' -Files @('projects/keep.txt')
+    $runtimeTrackedState = Join-Path -Path $testRoot -ChildPath 'state-runtime-tracked-file'
+    $runtimeTrackedFile = Join-Path -Path $testRoot -ChildPath 'written-runtime-tracked-file.txt'
+    $runtimeTrackedSnapshot = Invoke-ScopeCheck -CheckerArguments @('-Snapshot', '-Worktree', $runtimeTrackedRepo, '-Task', 'runtime-tracked-file', '-StateDirectory', $runtimeTrackedState)
+    Assert-True -Name 'runtime tracked file snapshot succeeds' -Condition ($runtimeTrackedSnapshot.ExitCode -eq 0) -Detail ("expected 0, got {0}" -f $runtimeTrackedSnapshot.ExitCode)
+    Add-Content -LiteralPath (Join-Path $runtimeTrackedRepo 'projects/keep.txt') -Value 'CODER WORK' -Encoding ASCII
+    $runtimeTracked = Invoke-ScopeCheck -CheckerArguments @('-Check', '-Worktree', $runtimeTrackedRepo, '-Task', 'runtime-tracked-file', '-StateDirectory', $runtimeTrackedState, '-RuntimeExclusionRoot', $runtimeTrackedRepo, '-WrittenPathsFile', $runtimeTrackedFile)
+    Assert-True -Name 'runtime tracked file exits non-zero' -Condition ($runtimeTracked.ExitCode -ne 0) -Detail ("expected non-zero, got {0}" -f $runtimeTracked.ExitCode)
+    Assert-WrittenPaths -Name 'runtime tracked file remains attributed' -Path $runtimeTrackedFile -Expected @('projects/keep.txt')
+
+    # Runtime exclusion (3): matching is pinned to the configured root, not merely the path name.
+    $runtimePinRepo = New-TestRepo -Name 'runtime-root-pin'
+    $runtimePinState = Join-Path -Path $testRoot -ChildPath 'state-runtime-root-pin'
+    $runtimePinFile = Join-Path -Path $testRoot -ChildPath 'written-runtime-root-pin.txt'
+    $runtimePinSnapshot = Invoke-ScopeCheck -CheckerArguments @('-Snapshot', '-Worktree', $runtimePinRepo, '-Task', 'runtime-root-pin', '-StateDirectory', $runtimePinState)
+    Assert-True -Name 'runtime root pin snapshot succeeds' -Condition ($runtimePinSnapshot.ExitCode -eq 0) -Detail ("expected 0, got {0}" -f $runtimePinSnapshot.ExitCode)
+    $runtimePinLeaf = Join-Path -Path $runtimePinRepo -ChildPath 'projects/session-x.jsonl'
+    New-Item -ItemType Directory -Force -Path (Split-Path -Parent $runtimePinLeaf) | Out-Null
+    [System.IO.File]::WriteAllText($runtimePinLeaf, "session churn`r`n", [System.Text.Encoding]::ASCII)
+    $runtimePin = Invoke-ScopeCheck -CheckerArguments @('-Check', '-Worktree', $runtimePinRepo, '-Task', 'runtime-root-pin', '-StateDirectory', $runtimePinState, '-WrittenPathsFile', $runtimePinFile)
+    Assert-True -Name 'runtime root pin exits non-zero away from configured root' -Condition ($runtimePin.ExitCode -ne 0) -Detail ("expected non-zero, got {0}" -f $runtimePin.ExitCode)
+    Assert-WrittenPaths -Name 'runtime root pin attributes token and expanded leaf' -Path $runtimePinFile -Expected @('projects', 'projects/session-x.jsonl')
+
+    # Runtime exclusion (4): ordinary untracked source remains attributable at the runtime root.
+    $runtimeNoOverRepo = New-TestRepo -Name 'runtime-no-over-exclusion'
+    $runtimeNoOverState = Join-Path -Path $testRoot -ChildPath 'state-runtime-no-over-exclusion'
+    $runtimeNoOverFile = Join-Path -Path $testRoot -ChildPath 'written-runtime-no-over-exclusion.txt'
+    $runtimeNoOverSnapshot = Invoke-ScopeCheck -CheckerArguments @('-Snapshot', '-Worktree', $runtimeNoOverRepo, '-Task', 'runtime-no-over-exclusion', '-StateDirectory', $runtimeNoOverState)
+    Assert-True -Name 'runtime no-over-exclusion snapshot succeeds' -Condition ($runtimeNoOverSnapshot.ExitCode -eq 0) -Detail ("expected 0, got {0}" -f $runtimeNoOverSnapshot.ExitCode)
+    [System.IO.File]::WriteAllText((Join-Path $runtimeNoOverRepo 'src/rogue.py'), "rogue`r`n", [System.Text.Encoding]::ASCII)
+    $runtimeNoOver = Invoke-ScopeCheck -CheckerArguments @('-Check', '-Worktree', $runtimeNoOverRepo, '-Task', 'runtime-no-over-exclusion', '-StateDirectory', $runtimeNoOverState, '-RuntimeExclusionRoot', $runtimeNoOverRepo, '-WrittenPathsFile', $runtimeNoOverFile)
+    Assert-True -Name 'runtime no-over-exclusion exits non-zero' -Condition ($runtimeNoOver.ExitCode -ne 0) -Detail ("expected non-zero, got {0}" -f $runtimeNoOver.ExitCode)
+    Assert-WrittenPaths -Name 'runtime no-over-exclusion attributes source path' -Path $runtimeNoOverFile -Expected @('src/rogue.py')
+
+    # Runtime exclusion (5): the exclusion count is loud without relying on console width.
+    Assert-True -Name 'runtime exclusion count note is loud' -Condition ($runtimeChurn.Output -match 'runtime path\(s\) excluded') -Detail $runtimeChurn.Output
+
+    # Runtime exclusion (6): the non-collecting attribution branch applies the same exclusion.
+    $runtimeNoCollectRepo = New-TestRepo -Name 'runtime-no-written-paths'
+    $runtimeNoCollectState = Join-Path -Path $testRoot -ChildPath 'state-runtime-no-written-paths'
+    $runtimeNoCollectSnapshot = Invoke-ScopeCheck -CheckerArguments @('-Snapshot', '-Worktree', $runtimeNoCollectRepo, '-Task', 'runtime-no-written-paths', '-StateDirectory', $runtimeNoCollectState)
+    Assert-True -Name 'runtime no-written-paths snapshot succeeds' -Condition ($runtimeNoCollectSnapshot.ExitCode -eq 0) -Detail ("expected 0, got {0}" -f $runtimeNoCollectSnapshot.ExitCode)
+    $runtimeNoCollectLeaf = Join-Path -Path $runtimeNoCollectRepo -ChildPath 'projects/session-x.jsonl'
+    New-Item -ItemType Directory -Force -Path (Split-Path -Parent $runtimeNoCollectLeaf) | Out-Null
+    [System.IO.File]::WriteAllText($runtimeNoCollectLeaf, "session churn`r`n", [System.Text.Encoding]::ASCII)
+    $runtimeNoCollect = Invoke-ScopeCheck -CheckerArguments @('-Check', '-Worktree', $runtimeNoCollectRepo, '-Task', 'runtime-no-written-paths', '-StateDirectory', $runtimeNoCollectState, '-RuntimeExclusionRoot', $runtimeNoCollectRepo)
+    Assert-True -Name 'runtime no-written-paths exits clean' -Condition ($runtimeNoCollect.ExitCode -eq 0) -Detail ("expected 0, got {0}: {1}" -f $runtimeNoCollect.ExitCode, $runtimeNoCollect.Output)
+    Assert-True -Name 'runtime no-written-paths prints clean verdict' -Condition ($runtimeNoCollect.Output -match '(?m)^\[scope\].* clean -') -Detail $runtimeNoCollect.Output
+
+    # Runtime exclusion (7): runtime churn present at snapshot and gone at check is excluded too.
+    $runtimeGoneRepo = New-TestRepo -Name 'runtime-gone'
+    $runtimeGoneState = Join-Path -Path $testRoot -ChildPath 'state-runtime-gone'
+    $runtimeGoneFile = Join-Path -Path $testRoot -ChildPath 'written-runtime-gone.txt'
+    $runtimeGoneDirectory = Join-Path -Path $runtimeGoneRepo -ChildPath 'projects'
+    New-Item -ItemType Directory -Force -Path $runtimeGoneDirectory | Out-Null
+    [System.IO.File]::WriteAllText((Join-Path $runtimeGoneDirectory 'session-x.jsonl'), "session churn`r`n", [System.Text.Encoding]::ASCII)
+    $runtimeGoneSnapshot = Invoke-ScopeCheck -CheckerArguments @('-Snapshot', '-Worktree', $runtimeGoneRepo, '-Task', 'runtime-gone', '-StateDirectory', $runtimeGoneState)
+    Assert-True -Name 'runtime gone snapshot succeeds' -Condition ($runtimeGoneSnapshot.ExitCode -eq 0) -Detail ("expected 0, got {0}" -f $runtimeGoneSnapshot.ExitCode)
+    Remove-Item -LiteralPath $runtimeGoneDirectory -Recurse -Force
+    $runtimeGone = Invoke-ScopeCheck -CheckerArguments @('-Check', '-Worktree', $runtimeGoneRepo, '-Task', 'runtime-gone', '-StateDirectory', $runtimeGoneState, '-RuntimeExclusionRoot', $runtimeGoneRepo, '-WrittenPathsFile', $runtimeGoneFile)
+    Assert-True -Name 'runtime gone exits clean' -Condition ($runtimeGone.ExitCode -eq 0) -Detail ("expected 0, got {0}: {1}" -f $runtimeGone.ExitCode, $runtimeGone.Output)
+    Assert-WrittenPaths -Name 'runtime gone emits no path' -Path $runtimeGoneFile -Expected @()
+    Assert-True -Name 'runtime gone prints no GONE line' -Condition ($runtimeGone.Output -notmatch '(?m)^\s*GONE\s+projects(?:/|$)') -Detail $runtimeGone.Output
+
+    # Runtime exclusion (8): a staged deletion remains curated through the HEAD inventory.
+    $runtimeDeletionRepo = New-TestRepo -Name 'runtime-tracked-deletion' -Files @('projects/keep.txt')
+    $runtimeDeletionState = Join-Path -Path $testRoot -ChildPath 'state-runtime-tracked-deletion'
+    $runtimeDeletionFile = Join-Path -Path $testRoot -ChildPath 'written-runtime-tracked-deletion.txt'
+    $runtimeDeletionSnapshot = Invoke-ScopeCheck -CheckerArguments @('-Snapshot', '-Worktree', $runtimeDeletionRepo, '-Task', 'runtime-tracked-deletion', '-StateDirectory', $runtimeDeletionState)
+    Assert-True -Name 'runtime tracked deletion snapshot succeeds' -Condition ($runtimeDeletionSnapshot.ExitCode -eq 0) -Detail ("expected 0, got {0}" -f $runtimeDeletionSnapshot.ExitCode)
+    Invoke-TestGit -RepoPath $runtimeDeletionRepo -GitArguments @('rm', '--', 'projects/keep.txt')
+    [string[]]$runtimeDeletionIndexEntries = @(& $gitPath -C $runtimeDeletionRepo ls-files -- 'projects/keep.txt')
+    $runtimeDeletionIndexExit = $LASTEXITCODE
+    Assert-True -Name 'runtime tracked deletion is absent from index before check' -Condition ($runtimeDeletionIndexExit -eq 0 -and $runtimeDeletionIndexEntries.Count -eq 0) -Detail ("exit {0}, entries [{1}]" -f $runtimeDeletionIndexExit, ($runtimeDeletionIndexEntries -join ', '))
+    $runtimeDeletion = Invoke-ScopeCheck -CheckerArguments @('-Check', '-Worktree', $runtimeDeletionRepo, '-Task', 'runtime-tracked-deletion', '-StateDirectory', $runtimeDeletionState, '-RuntimeExclusionRoot', $runtimeDeletionRepo, '-WrittenPathsFile', $runtimeDeletionFile)
+    Assert-True -Name 'runtime tracked deletion exits non-zero' -Condition ($runtimeDeletion.ExitCode -ne 0) -Detail ("expected non-zero, got {0}" -f $runtimeDeletion.ExitCode)
+    Assert-WrittenPaths -Name 'runtime tracked deletion remains attributed from HEAD' -Path $runtimeDeletionFile -Expected @('projects/keep.txt')
+
+    # Runtime exclusion (9): inventory lookup treats metacharacters as literal set members.
+    $runtimeMetaRepo = New-TestRepo -Name 'runtime-metacharacter' -Files @('projects/file[1].txt')
+    $runtimeMetaState = Join-Path -Path $testRoot -ChildPath 'state-runtime-metacharacter'
+    $runtimeMetaFile = Join-Path -Path $testRoot -ChildPath 'written-runtime-metacharacter.txt'
+    $runtimeMetaSnapshot = Invoke-ScopeCheck -CheckerArguments @('-Snapshot', '-Worktree', $runtimeMetaRepo, '-Task', 'runtime-metacharacter', '-StateDirectory', $runtimeMetaState)
+    Assert-True -Name 'runtime metacharacter snapshot succeeds' -Condition ($runtimeMetaSnapshot.ExitCode -eq 0) -Detail ("expected 0, got {0}" -f $runtimeMetaSnapshot.ExitCode)
+    Add-Content -LiteralPath (Join-Path $runtimeMetaRepo 'projects/file[1].txt') -Value 'CODER WORK' -Encoding ASCII
+    $runtimeMeta = Invoke-ScopeCheck -CheckerArguments @('-Check', '-Worktree', $runtimeMetaRepo, '-Task', 'runtime-metacharacter', '-StateDirectory', $runtimeMetaState, '-RuntimeExclusionRoot', $runtimeMetaRepo, '-WrittenPathsFile', $runtimeMetaFile)
+    Assert-True -Name 'runtime metacharacter exits non-zero' -Condition ($runtimeMeta.ExitCode -ne 0) -Detail ("expected non-zero, got {0}" -f $runtimeMeta.ExitCode)
+    Assert-WrittenPaths -Name 'runtime metacharacter remains attributed literally' -Path $runtimeMetaFile -Expected @('projects/file[1].txt')
+
+    # Runtime exclusion (10): a collapsed directory token is curated by an indexed descendant.
+    $runtimeCollapsedRepo = New-TestRepo -Name 'runtime-collapsed-directory'
+    $runtimeCollapsedState = Join-Path -Path $testRoot -ChildPath 'state-runtime-collapsed-directory'
+    $runtimeCollapsedFile = Join-Path -Path $testRoot -ChildPath 'written-runtime-collapsed-directory.txt'
+    $runtimeCollapsedDirectory = Join-Path -Path $runtimeCollapsedRepo -ChildPath 'projects'
+    New-Item -ItemType Directory -Force -Path $runtimeCollapsedDirectory | Out-Null
+    [System.IO.File]::WriteAllText((Join-Path $runtimeCollapsedDirectory 'a.jsonl'), "a`r`n", [System.Text.Encoding]::ASCII)
+    [System.IO.File]::WriteAllText((Join-Path $runtimeCollapsedDirectory 'b.jsonl'), "b`r`n", [System.Text.Encoding]::ASCII)
+    $runtimeCollapsedSnapshot = Invoke-ScopeCheck -CheckerArguments @('-Snapshot', '-Worktree', $runtimeCollapsedRepo, '-Task', 'runtime-collapsed-directory', '-StateDirectory', $runtimeCollapsedState)
+    Assert-True -Name 'runtime collapsed directory snapshot succeeds' -Condition ($runtimeCollapsedSnapshot.ExitCode -eq 0) -Detail ("expected 0, got {0}" -f $runtimeCollapsedSnapshot.ExitCode)
+    Invoke-TestGit -RepoPath $runtimeCollapsedRepo -GitArguments @('add', '-f', '--', 'projects/a.jsonl')
+    $runtimeCollapsed = Invoke-ScopeCheck -CheckerArguments @('-Check', '-Worktree', $runtimeCollapsedRepo, '-Task', 'runtime-collapsed-directory', '-StateDirectory', $runtimeCollapsedState, '-RuntimeExclusionRoot', $runtimeCollapsedRepo, '-WrittenPathsFile', $runtimeCollapsedFile)
+    Assert-True -Name 'runtime collapsed directory exits non-zero' -Condition ($runtimeCollapsed.ExitCode -ne 0) -Detail ("expected non-zero, got {0}" -f $runtimeCollapsed.ExitCode)
+    Assert-WrittenPaths -Name 'runtime collapsed directory token remains attributed' -Path $runtimeCollapsedFile -Expected @('projects', 'projects/a.jsonl', 'projects/b.jsonl')
+
+    # Runtime exclusion (11): rename attribution keeps the HEAD source and index destination.
+    $runtimeRenameRepo = New-TestRepo -Name 'runtime-rename' -Files @('projects/keep.txt')
+    $runtimeRenameState = Join-Path -Path $testRoot -ChildPath 'state-runtime-rename'
+    $runtimeRenameFile = Join-Path -Path $testRoot -ChildPath 'written-runtime-rename.txt'
+    $runtimeRenameSnapshot = Invoke-ScopeCheck -CheckerArguments @('-Snapshot', '-Worktree', $runtimeRenameRepo, '-Task', 'runtime-rename', '-StateDirectory', $runtimeRenameState)
+    Assert-True -Name 'runtime rename snapshot succeeds' -Condition ($runtimeRenameSnapshot.ExitCode -eq 0) -Detail ("expected 0, got {0}" -f $runtimeRenameSnapshot.ExitCode)
+    Invoke-TestGit -RepoPath $runtimeRenameRepo -GitArguments @('mv', '--', 'projects/keep.txt', 'projects/renamed.txt')
+    $runtimeRename = Invoke-ScopeCheck -CheckerArguments @('-Check', '-Worktree', $runtimeRenameRepo, '-Task', 'runtime-rename', '-StateDirectory', $runtimeRenameState, '-RuntimeExclusionRoot', $runtimeRenameRepo, '-WrittenPathsFile', $runtimeRenameFile)
+    Assert-True -Name 'runtime rename exits non-zero' -Condition ($runtimeRename.ExitCode -ne 0) -Detail ("expected non-zero, got {0}" -f $runtimeRename.ExitCode)
+    Assert-WrittenPaths -Name 'runtime rename attributes source and destination' -Path $runtimeRenameFile -Expected @('projects/keep.txt', 'projects/renamed.txt')
+
+    # Runtime exclusion (12): an ls-files inventory failure disables all exclusion for this check.
+    $runtimeLsFilesRepo = New-TestRepo -Name 'runtime-ls-files-failure'
+    $runtimeLsFilesState = Join-Path -Path $testRoot -ChildPath 'state-runtime-ls-files-failure'
+    $runtimeLsFilesFile = Join-Path -Path $testRoot -ChildPath 'written-runtime-ls-files-failure.txt'
+    $runtimeLsFilesSnapshot = Invoke-ScopeCheck -CheckerArguments @('-Snapshot', '-Worktree', $runtimeLsFilesRepo, '-Task', 'runtime-ls-files-failure', '-StateDirectory', $runtimeLsFilesState)
+    Assert-True -Name 'runtime ls-files failure snapshot succeeds normally' -Condition ($runtimeLsFilesSnapshot.ExitCode -eq 0) -Detail ("expected 0, got {0}" -f $runtimeLsFilesSnapshot.ExitCode)
+    $runtimeLsFilesLeaf = Join-Path -Path $runtimeLsFilesRepo -ChildPath 'projects/session-x.jsonl'
+    New-Item -ItemType Directory -Force -Path (Split-Path -Parent $runtimeLsFilesLeaf) | Out-Null
+    [System.IO.File]::WriteAllText($runtimeLsFilesLeaf, "session churn`r`n", [System.Text.Encoding]::ASCII)
+    $runtimeLsFilesShim = New-FailingGitShim -Name 'shim-runtime-ls-files' -FailCommand 'ls-files'
+    $runtimeLsFiles = Invoke-ScopeCheck -CheckerArguments @('-Check', '-Worktree', $runtimeLsFilesRepo, '-Task', 'runtime-ls-files-failure', '-StateDirectory', $runtimeLsFilesState, '-RuntimeExclusionRoot', $runtimeLsFilesRepo, '-WrittenPathsFile', $runtimeLsFilesFile) -PathOverride $runtimeLsFilesShim
+    Assert-True -Name 'runtime ls-files inventory failure exits non-zero' -Condition ($runtimeLsFiles.ExitCode -ne 0) -Detail ("expected non-zero, got {0}" -f $runtimeLsFiles.ExitCode)
+    Assert-WrittenPaths -Name 'runtime ls-files inventory failure attributes churn' -Path $runtimeLsFilesFile -Expected @('projects', 'projects/session-x.jsonl')
+    Assert-True -Name 'runtime ls-files inventory failure is loud' -Condition ($runtimeLsFiles.Output -match 'runtime inventory could not be built') -Detail $runtimeLsFiles.Output
+
+    # Runtime exclusion (13): an ls-tree HEAD inventory failure is fail-closed in the same way.
+    $runtimeLsTreeRepo = New-TestRepo -Name 'runtime-ls-tree-failure'
+    $runtimeLsTreeState = Join-Path -Path $testRoot -ChildPath 'state-runtime-ls-tree-failure'
+    $runtimeLsTreeFile = Join-Path -Path $testRoot -ChildPath 'written-runtime-ls-tree-failure.txt'
+    $runtimeLsTreeSnapshot = Invoke-ScopeCheck -CheckerArguments @('-Snapshot', '-Worktree', $runtimeLsTreeRepo, '-Task', 'runtime-ls-tree-failure', '-StateDirectory', $runtimeLsTreeState)
+    Assert-True -Name 'runtime ls-tree failure snapshot succeeds normally' -Condition ($runtimeLsTreeSnapshot.ExitCode -eq 0) -Detail ("expected 0, got {0}" -f $runtimeLsTreeSnapshot.ExitCode)
+    $runtimeLsTreeLeaf = Join-Path -Path $runtimeLsTreeRepo -ChildPath 'projects/session-x.jsonl'
+    New-Item -ItemType Directory -Force -Path (Split-Path -Parent $runtimeLsTreeLeaf) | Out-Null
+    [System.IO.File]::WriteAllText($runtimeLsTreeLeaf, "session churn`r`n", [System.Text.Encoding]::ASCII)
+    $runtimeLsTreeShim = New-FailingGitShim -Name 'shim-runtime-ls-tree' -FailCommand 'ls-tree'
+    $runtimeLsTree = Invoke-ScopeCheck -CheckerArguments @('-Check', '-Worktree', $runtimeLsTreeRepo, '-Task', 'runtime-ls-tree-failure', '-StateDirectory', $runtimeLsTreeState, '-RuntimeExclusionRoot', $runtimeLsTreeRepo, '-WrittenPathsFile', $runtimeLsTreeFile) -PathOverride $runtimeLsTreeShim
+    Assert-True -Name 'runtime ls-tree inventory failure exits non-zero' -Condition ($runtimeLsTree.ExitCode -ne 0) -Detail ("expected non-zero, got {0}" -f $runtimeLsTree.ExitCode)
+    Assert-WrittenPaths -Name 'runtime ls-tree inventory failure attributes churn' -Path $runtimeLsTreeFile -Expected @('projects', 'projects/session-x.jsonl')
+    Assert-True -Name 'runtime ls-tree inventory failure is loud' -Condition ($runtimeLsTree.Output -match 'runtime inventory could not be built') -Detail $runtimeLsTree.Output
+
     if ($failureCount -gt 0) {
         Write-Output ("FAILED -- {0} of {1} scope-check assertions failed." -f $failureCount, $assertionCount)
         $suiteExitCode = 1

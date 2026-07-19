@@ -75,7 +75,8 @@ param(
     [switch]$ReportOnly,          # accepted for compatibility; this script is always report-only now
     [string]$StateDirectory,
     [string]$WrittenPathsFile,
-    [string]$ExcludeRunId         # accepted for compatibility; no longer used (nothing is reverted)
+    [string]$ExcludeRunId,        # accepted for compatibility; no longer used (nothing is reverted)
+    [string]$RuntimeExclusionRoot = (Join-Path $env:USERPROFILE '.claude')
 )
 
 $ErrorActionPreference = 'Stop'
@@ -646,13 +647,79 @@ $allPaths = New-Object System.Collections.Generic.HashSet[string]
 foreach ($p in $nowDirty.Keys) { [void]$allPaths.Add((Normalize $p)) }
 foreach ($p in $preDirty.Keys) { [void]$allPaths.Add($p) }
 
+# Lockstep coupling: mirrors tree-pin.ps1 $runtimeExclusions plus its match/root gate. Unlike
+# tree-pin's `!!` status-class gate, this side discriminates on ref presence (index OR HEAD via
+# Test-IsHostCurated), so host-curated runtime files (including committed files the coder deletes or
+# renames) stay checked while fixture ?? runtime files are excluded. Both files must stay in sync.
+$runtimeExclusions = @(
+    'sessions',
+    'projects',
+    'backups',
+    'jobs',
+    'shell-snapshots',
+    'todos',
+    'file-history',
+    'history.jsonl',
+    '.last-update-result.json'
+)
+function Test-IsRuntimePath([string]$NormalizedPath) {
+    foreach ($prefix in $runtimeExclusions) {
+        if ($NormalizedPath.Equals($prefix, [System.StringComparison]::OrdinalIgnoreCase) -or
+                $NormalizedPath.StartsWith($prefix + '/', [System.StringComparison]::OrdinalIgnoreCase)) {
+            return $true
+        }
+    }
+    return $false
+}
+
+$resolvedRuntimeExclusionRoot = $null
+if (Test-Path -LiteralPath $RuntimeExclusionRoot -PathType Container) {
+    $resolvedRuntimeExclusionRoot = (Resolve-Path -LiteralPath $RuntimeExclusionRoot).Path.TrimEnd('\', '/')
+}
+$applyRuntimeExclusions = ($null -ne $resolvedRuntimeExclusionRoot -and
+    $repo.TrimEnd('\', '/').Equals($resolvedRuntimeExclusionRoot, [System.StringComparison]::OrdinalIgnoreCase))
+
+$curatedFiles = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
+$curatedDirs = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
+function Test-IsHostCurated([string]$n) {
+    return $curatedFiles.Contains($n) -or $curatedDirs.Contains($n)
+}
+
+if ($applyRuntimeExclusions) {
+    try {
+        $indexInventory = [string]::Join('', [string[]]@(Invoke-Git ls-files -z))
+        $headInventory = [string]::Join('', [string[]]@(Invoke-Git ls-tree -r --name-only -z HEAD))
+        foreach ($inventory in @($indexInventory, $headInventory)) {
+            foreach ($entry in ($inventory -split "`0")) {
+                if ($entry.Length -eq 0) { continue }
+                $curatedPath = Normalize $entry
+                if (-not $curatedPath) { continue }
+                [void]$curatedFiles.Add($curatedPath)
+
+                $segments = @($curatedPath -split '/')
+                for ($i = 1; $i -lt $segments.Count; $i++) {
+                    [void]$curatedDirs.Add([string]::Join('/', [string[]]$segments[0..($i - 1)]))
+                }
+            }
+        }
+    } catch {
+        $applyRuntimeExclusions = $false
+        Write-Host "[scope] WARNING: runtime inventory could not be built, so nothing was excluded." -ForegroundColor Yellow
+    }
+}
+
 $collectWritten = [bool]$WrittenPathsFile
 $writtenSet = $null
+$runtimeExcludedCount = 0
 if ($collectWritten) {
     # Lockstep sibling: the non-collecting branch differs only by omitting writtenSet accumulation;
     # keep its GONE/untouched/isDirty classification line-for-line identical to this branch.
     $writtenSet = New-Object System.Collections.Generic.List[string]
     foreach ($n in $allPaths) {
+        if ($applyRuntimeExclusions -and (Test-IsRuntimePath $n) -and -not (Test-IsHostCurated $n)) {
+            $runtimeExcludedCount++
+            continue
+        }
         if (Test-IsAuthorized $n) {
             $wasDirty = $preDirty.ContainsKey($n)
             $isDirty = $false
@@ -707,6 +774,10 @@ if ($collectWritten) {
     # Lockstep sibling: the collecting branch differs only by writtenSet accumulation;
     # keep its GONE/untouched/isDirty classification line-for-line identical to this branch.
     foreach ($n in $allPaths) {
+        if ($applyRuntimeExclusions -and (Test-IsRuntimePath $n) -and -not (Test-IsHostCurated $n)) {
+            $runtimeExcludedCount++
+            continue
+        }
         if (Test-IsAuthorized $n) { continue }
         if (Test-IsStatePath $n) { continue }
 
@@ -739,6 +810,10 @@ if ($collectWritten) {
 
         if ($isDirty) { $violations += [pscustomobject]@{ Path = $n; Status = $statusNow } }
     }
+}
+
+if ($runtimeExcludedCount -gt 0) {
+    Write-Host "[scope] $runtimeExcludedCount runtime path(s) excluded (session churn under runtime dirs; index/HEAD-tracked paths still checked)."
 }
 
 if ($WrittenPathsFile) {
