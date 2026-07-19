@@ -7,9 +7,9 @@ Workflow / `apex-build-wave.js` path is NOT used here (its `agent()` spawns Clau
 can't drive the external Codex CLI).
 
 ## Cap (machine protection, not a quota device)
-`max_parallel_codex = max(1, min(4, floor(physical_cores / 2) − 1))` → **3** on this host. Detect cores
+`max_parallel_codex = max(1, min(4, floor(physical_cores / 2) − 1))` → **3** on this host, capped to the **default 2** below (A2, session-79b: two full waves ran sequentially with zero wall-clock pressure; the formula value stays documented for reference). Detect cores
 (`nproc` / PowerShell `(Get-CimInstance Win32_Processor).NumberOfCores`); if detection is unavailable,
-default **3**. Override per spec with `max_parallel_codex` frontmatter (`1` = sequential = pre-ADR-028
+default **2** (A2). Override per spec with `max_parallel_codex` frontmatter (`1` = sequential = pre-ADR-028
 behaviour; status.md carries the project default). A (sub-)wave wider than the cap splits into sequential
 sub-waves of ≤cap (mirrors `worker_cap`). Each `codex exec` runs the full local toolchain, so keep the
 cap well below the Workflow's `min(16, cores−2)`.
@@ -41,7 +41,7 @@ sandbox-SID-owned cache dirs, clear them with the codex-exec cleanup trick (SKIL
 artifact ownership) before retrying.
 
 ## Failure / fallback (ADR-027 unchanged)
-A subprocess that exits non-zero / rate-limited → that task falls back to Opus (fresh `model: opus` worker — ADR-032; quota-out skips the remaining effort rungs — the Codex pool is dead). A
+A subprocess that exits non-zero / rate-limited → that task falls back to Sonnet 5 (fresh `model: sonnet` worker — ADR-032 as amended by A1, session-79b; quota-out skips the remaining effort rungs — the Codex pool is dead). A
 quota-out on **any** concurrent subprocess means the pool is dead → stop launching further Codex and fall
 back the remaining sub-wave tasks to Opus (sequential). A task that won't converge after honest recovery
 → fork (capture-at-halt).

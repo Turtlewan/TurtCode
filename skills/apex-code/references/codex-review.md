@@ -2,7 +2,7 @@
 
 Loaded on demand when apex-code runs the family-aware cross-model review (§ Cross-model review). Codex
 (`gpt-5.6-sol`) is the **independent reviewer for Opus-built (fallback) code** (ADR-027 — Codex is the
-default *builder*, so this review path fires only on the Opus fallback); it is **advisory** — it never
+default *builder*, so this review path fires only on the Claude fallback — Sonnet 5, per A1); it is **advisory** — it never
 blocks the pipeline and never edits code. Note: Opus builds only when Codex quota is exhausted, so this
 Codex review usually can't run either → apex-code degrades to single-model + human flag.
 

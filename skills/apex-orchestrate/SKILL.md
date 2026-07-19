@@ -75,7 +75,7 @@ queued. What do you want to plan next?"
 
 One line, after routing:
 
-> `Running at L{n} | Coder: Codex gpt-5.6-sol (Opus fallback)`
+> `Running at L{n} | Coder: Codex gpt-5.6-sol (Sonnet 5 fallback)`
 
 "set level L{n}" → update `autonomy_level` in status.md, confirm what it enables. Levels, gates, and
 hard blocks are canonical in **apex-governance** — consult it; never keep a second copy.

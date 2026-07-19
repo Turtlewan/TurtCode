@@ -54,7 +54,7 @@ swap, no write-guard. Just run `claude`.
 | **Host — reason, plan, challenge only** | this session (Fable). Dispatches everything below; makes no mechanical edits and writes no code (2026-07-16 split). |
 | **Spec author** | **Opus** — a `model: opus` worker drafts specs/ADRs from the host's plan |
 | **Build orchestrator** | **Sonnet** — a `model: sonnet` worker runs waves, dispatches coders, routes exit codes |
-| **Coder** | **Codex `gpt-5.6-sol`** — dispatched per task as a `codex exec` subprocess (own auth, own quota; spends none of the Anthropic pool). Fallback on quota-out: **Opus**. |
+| **Coder** | **Codex `gpt-5.6-sol`** — dispatched per task as a `codex exec` subprocess (own auth, own quota; spends none of the Anthropic pool). Fallback on quota-out: **Sonnet 5** (A1, 2026-07-19; Opus keeps spec-author + high-risk reviewer roles). |
 | **Checker** | **cross-family, both directions** — Codex checks the host's plans/specs before execution; Claude reviews Codex's code. An agent never reviews its own output. |
 
 DeepSeek is archived (ADR-027, recovery-only). At any shift to building, name the coder path and

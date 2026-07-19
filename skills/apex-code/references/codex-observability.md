@@ -33,7 +33,7 @@ worktree.
 - **`max`** — reserve for the hardest *single* tasks: state migrations, IAM/auth-critical work, gnarly
   concurrency. The second-highest rung of the verify-fail recovery ladder (`medium→high→xhigh→max`).
 - **`ultra`** — the **final** rung of the verify-fail ladder, above `max` (ADR-034). Reached only when
-  `max` has already failed verification; then the Opus fallback (quota-out cases skip straight to Opus —
+  `max` has already failed verification; then the Sonnet 5 fallback (quota-out cases skip straight to Sonnet 5 —
   the Codex pool is dead — see § Model-routing dispatch in SKILL.md).
   `ultra` spawns in-model subagents, so token usage multiplies — codex 0.144 warns about concurrency at
   ultra effort. Because of that multiplier, an `ultra` task counts **double** against `max_parallel_codex`

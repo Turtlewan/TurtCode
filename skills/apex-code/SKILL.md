@@ -1,7 +1,7 @@
 ---
 skill: apex-code
-version: 2.11.0
-last_updated: 2026-07-18
+version: 2.12.0
+last_updated: 2026-07-19
 sources:
   - docs/technical/adr/ADR-027-codex-primary-opus-fallback-deepseek-archived.md
   - docs/technical/adr/ADR-028-parallel-codex-dispatch.md
@@ -16,7 +16,7 @@ staleness_threshold: 30d
 description: >
   APEX build workflow — executes docs/changes/ specs: pre-flight, wave-parallel Codex
   dispatch, the verify loop against the repo's AGENTS.md, forks, and post-build review.
-  Codex `gpt-5.6-sol` is the coder; Opus is the fallback. Loads when building a spec.
+  Codex `gpt-5.6-sol` is the coder; Sonnet 5 is the fallback. Loads when building a spec.
 ---
 
 # APEX Build Workflow
@@ -75,7 +75,7 @@ Log the plan before executing: `Wave 1: [task N, task M] | Wave 2: [task P]`.
 independent tasks → dispatch the wave via `apex-build-wave.js` rather than inline Agent calls, so
 worker transcripts stay out of this window (ADR-015). Mechanics → `references/workflow-dispatch.md`.
 Same-tree parallel workers collide on lockfiles, ports, caches and the git index — use
-`isolation: "worktree"` (inline) / `isolate: true` (workflow). Cap: `max_parallel_codex` (default 3).
+`isolation: "worktree"` (inline) / `isolate: true` (workflow). Cap: `max_parallel_codex` (default 2 — A2, session-79b).
 
 ## Codex dispatch — the coder
 
@@ -222,8 +222,8 @@ defensively, but pass it properly.
 **Parallel Codex** (2+ independent `▸codex` tasks) → `references/parallel-codex.md`.
 
 **Fallback:** `codex --version` fails, or quota is exhausted mid-run → the task falls back to
-**Opus**, a fresh `model: opus` worker in this session. Logged, never silent. No backend swap, no
-relaunch (ADR-038). Whole-spec pin: `coder_model: {codex|opus}`.
+**Sonnet 5**, a fresh `model: sonnet` worker in this session (A1, session-79b: the coding fallback no longer draws the scarce Opus pool; Opus keeps spec-author and high-risk reviewer roles). Logged, never silent. No backend swap, no
+relaunch (ADR-038). Whole-spec pin: `coder_model: {codex|sonnet}` (A1; `opus` remains accepted for a deliberate exception, logged).
 
 ## Verify
 
@@ -314,7 +314,7 @@ never changed, only what was inside it, so a `git status` check would have seen 
    opus` for the high-risk set); **Opus built -> Codex reviews** (`references/codex-review.md`).
    Give it the spec + diff only -- **never the other reviewer's findings**. A finding both raise ->
    resolve before "complete"; only one -> decisions table, human adjudication. If Codex is still
-   unavailable after Opus fallback builds, a diff-bound attended human review substitutes for the
+   unavailable after Claude-fallback builds, a diff-bound attended human review substitutes for the
    unavailable cross-family review (ADR-042); a same-family Claude review remains advisory.
    `apex-family-gate.ps1` enforces this substitution at completion, not prose alone. The wrapper
    hardwires `gpt-5.6-sol` and has no `-CoderModel` parameter, so every wrapper-dispatched build or
@@ -323,7 +323,7 @@ never changed, only what was inside it, so a `git status` check would have seen 
    read-only, advisory (`references/afk-endgate.md`). Opus, not Sol: Sol is the coder, and the one
    review that runs with nobody watching must not be self-review. Lenses →
    `references/silent-regression-lenses.md`.
-4. **Annotate in-session work.** At completion of every in-session worker (Opus fallback build or
+4. **Annotate in-session work.** At completion of every in-session worker (Claude fallback build or
    in-session Claude reviewer), append one compact JSON row with a terminal status to the wrapper's
    ledger. Human review uses the same row shape. Resolve the ledger as
    `%APEX_STATE_DIR%\progress\codex-run-ledger.jsonl`, falling back to
@@ -334,7 +334,7 @@ never changed, only what was inside it, so a `git status` check would have seen 
    {"run_id":"insession-<guid>","in_session":true,"spec":"<spec>","task":"<task>","worktree_key":"<git-root>","phase":"build"|"review"|"human-review","builder_family":"<fam>","reviewer_family":"<fam>","builder_model":"<model>","attended":<bool>,"reviewed_run_id":"<the-build-run_id-this-review-covers>","reviewed_tree_digest":"<64-hex digest; review rows>","end_tree_digest":"<64-hex digest or unverifiable; build rows>","status":"done","started":"<utc-o>"}
    ```
 
-   - In-session **BUILD** (Opus fallback): `phase:"build"`, fresh `run_id`, and
+   - In-session **BUILD** (Claude fallback, Sonnet 5): `phase:"build"`, fresh `run_id`, and
      `builder_family:"anthropic"`. That `run_id` is the build identity later reviews cite in
      `reviewed_run_id`. At build close, the host computes `end_tree_digest` with
      `scripts/tree-pin.ps1 -Digest -Worktree <repo>` on that worktree and records the result, or

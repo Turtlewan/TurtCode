@@ -35,10 +35,10 @@ APEX_MODE, no backend swap, no relaunch, and no write-guard -- you may edit any 
 
 Codex (`gpt-5.6-sol`) is the PRIMARY coder, dispatched PER TASK as a `codex exec` subprocess from
 this session. It has its own auth and its own quota -- dispatching it is not a session switch and
-spends none of the Anthropic pool. Opus is the FALLBACK coder (a fresh `model: opus` worker in this
+spends none of the Anthropic pool. Sonnet 5 is the FALLBACK coder (a fresh `model: sonnet` worker in this
 same session) when Codex quota is exhausted.
 
-Reviews are CROSS-FAMILY (ADR-032/034): Codex builds -> Claude reviews; Opus builds -> Codex
+Reviews are CROSS-FAMILY (ADR-032/034): Codex builds -> Claude reviews; a Claude fallback builds -> Codex
 reviews. An agent never reviews its own output.
 
 ## The three files (ADR-037)

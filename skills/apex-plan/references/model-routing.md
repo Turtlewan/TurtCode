@@ -52,7 +52,7 @@ host-direct argument that reduces to "it's smoother" is that bias, and is reject
 ## Per-task selection — collapses to a default + manual fallback
 - **Default: `codex`** for every task — text and image alike (gpt-5.6-sol is sighted, so the old image gate
   is moot). No cost-tier decision; do not route proactively to Opus.
-- **Fallback: `opus`**, reached only when Codex quota runs out mid-build (operator-confirmed) — apex-code's
+- **Fallback: `sonnet` (Sonnet 5 — A1, session-79b)**, reached only when Codex quota runs out mid-build (operator-confirmed) — apex-code's
   Opus builds the task inline as a fresh worker in this session. This is a build-time event, not a planning-time
   per-task route. See apex-code § Model fallback on verify-fail or quota-out.
 - A whole-spec `coder_model: opus` frontmatter can pin a spec to Opus up front (e.g. when you already
@@ -70,7 +70,7 @@ absent unless the spec is clearly off-default.
 - `max` — reserve for the single hardest tasks a spec can carry: state migrations, IAM/auth-critical
   work, gnarly concurrency. Sits above `xhigh`; also the second-highest rung of apex-code's verify-fail
   recovery ladder.
-- `ultra` — above `max`, and the **final** rung of that ladder before the Opus fallback (ADR-034; there is
+- `ultra` — above `max`, and the **final** rung of that ladder before the Claude fallback (Sonnet 5) (ADR-034; there is
   no higher Codex model to escalate to now that `gpt-5.6-sol` is the coder). Spawns in-model subagents, so
   it counts **double** against `max_parallel_codex` (ADR-028) — or keep `ultra` tasks sequential/foreground
   instead of folding them into a parallel wave. Gated on a pending head-to-head eval against `max` that
@@ -79,8 +79,8 @@ absent unless the spec is clearly off-default.
 
 Cheap to dial up: under config-A the build runs on Codex's **separate pool**, so `high` on a hard spec
 barely touches the scarce Opus pool. Don't blanket-`high` everything — it burns Codex quota faster (→
-earlier Opus fallback). Effort is per-spec; apex-code additionally bumps it one notch on a Codex
-verify-fail retry, up through the final `ultra` rung (ADR-034), before any Opus fallback (build-time, not a planning choice). The `gpt-5.4-mini` cheap
+earlier Claude fallback). Effort is per-spec; apex-code additionally bumps it one notch on a Codex
+verify-fail retry, up through the final `ultra` rung (ADR-034), before any Claude fallback (build-time, not a planning choice). The `gpt-5.4-mini` cheap
 model is **deferred** (ADR-030) — do not route tasks to a second model; the dial is the cost lever.
 
 ## Family-aware review routing (when `cross_model_review: true`)
@@ -94,7 +94,7 @@ from the builder at review time.
 
 ## Wave plan emit format
 With a single proactive coder, emit the normal **untagged** `## Wave plan` (every task → Codex). Do not
-tag `▸opus` proactively — the Opus fallback is a session-level manual switch, not a per-task tag.
+tag `▸sonnet` proactively — the Claude fallback is a session-level manual switch, not a per-task tag.
 
 ## Splitting a feature across models
 Largely moot with one proactive coder. If a Codex build must hand a frozen-contract slice to Opus (or
