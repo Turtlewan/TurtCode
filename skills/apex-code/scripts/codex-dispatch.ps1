@@ -822,6 +822,8 @@ function Invoke-Adopt {
                 }
                 $adoptScopeExit = $LASTEXITCODE
             } catch {
+                # Lockstep sibling: the main-path scope-check catch also fails closed on its build +
+                # workspace-write post-hoc path; its exit is 77 unless outranked, while adopt exits 65.
                 # No snapshot and no recorded result: the gate was armed and its evidence is gone, so
                 # nothing can vouch for this run's scope. Fail closed.
                 Write-Host "[adopt] The armed scope check cannot be replayed: $($_.Exception.Message)" -ForegroundColor Red
@@ -1887,6 +1889,8 @@ try {
             }
         }
         catch {
+            # Lockstep sibling: the adopt live-replay catch fails closed via exit 65; here that intent
+            # applies only to the build + workspace-write post-hoc path (exit 77 unless outranked).
             $scopeCheckThrew = $true
             $scopeCheckErrorNote = "scope_check_error: $($_.Exception.Message)"
             Write-Host "[dispatch] $scopeCheckErrorNote" -ForegroundColor Yellow

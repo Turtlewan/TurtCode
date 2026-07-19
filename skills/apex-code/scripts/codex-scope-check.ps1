@@ -649,6 +649,8 @@ foreach ($p in $preDirty.Keys) { [void]$allPaths.Add($p) }
 $collectWritten = [bool]$WrittenPathsFile
 $writtenSet = $null
 if ($collectWritten) {
+    # Lockstep sibling: the non-collecting branch differs only by omitting writtenSet accumulation;
+    # keep its GONE/untouched/isDirty classification line-for-line identical to this branch.
     $writtenSet = New-Object System.Collections.Generic.List[string]
     foreach ($n in $allPaths) {
         if (Test-IsAuthorized $n) {
@@ -702,6 +704,8 @@ if ($collectWritten) {
         }
     }
 } else {
+    # Lockstep sibling: the collecting branch differs only by writtenSet accumulation;
+    # keep its GONE/untouched/isDirty classification line-for-line identical to this branch.
     foreach ($n in $allPaths) {
         if (Test-IsAuthorized $n) { continue }
         if (Test-IsStatePath $n) { continue }

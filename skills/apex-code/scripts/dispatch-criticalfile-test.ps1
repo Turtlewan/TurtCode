@@ -317,7 +317,7 @@ exit 0
     # Create every repository before dispatching so no Git process can disturb the deliberate
     # case 3 to case 8 LASTEXITCODE adjacency below.
     $fixtures = @{}
-    foreach ($number in 1..17) {
+    foreach ($number in 1..19) {
         $extraFiles = @{}
         if ($number -eq 3) {
             $extraFiles['docs\changes\critfile-critical-confirmed.md'] = New-FixtureSpec -Spec 'critfile-critical-confirmed'
@@ -569,6 +569,52 @@ exit 0
         -Detail ("exit={0}, status={1}, digest={2}, has_critical={3}, note={4}" -f $result.ExitCode,
             $row.status, $row.end_tree_digest, (@($row.PSObject.Properties.Name) -ccontains 'critical_violation'),
             $result.Output.Contains('post-hoc classification unavailable for pre-completed adopted run'))
+
+    $spec = 'critfile-review-pinfirst-bind'
+    $build = Invoke-DispatchCase -CaseName '18a seed real build for pin-first bind' -Spec $spec -Fixture $fixtures[18] `
+        -ExtraParameters @{ SkipBaselineCheck = $true } `
+        -FakeEnvironment @{ FAKE_CODEX_INSCOPE_ONLY = '1' }
+    $buildRow = @($build.Rows | Where-Object { $_.phase -eq 'build' }) | Select-Object -First 1
+    $result = Invoke-DispatchCase -CaseName '18b review binds via real pin file' -Spec $spec -Fixture $fixtures[18] `
+        -FakeRepo $reviewSink.Path -FakePath $cleanReviewFake -Authorized @() -ExtraParameters @{
+            Phase = 'review'; Schema = 'review'; ReviewedRunId = [string]$buildRow.run_id
+        } -FakeEnvironment @{ FAKE_CODEX_VERDICT = 'CLEAN' }
+    $reviewRow = @($result.Rows | Where-Object { $_.phase -eq 'review' }) | Select-Object -First 1
+    Assert-Case -Label 'pin-first review binds via real pin file' `
+        -Condition ($build.ExitCode -eq 0 -and $result.ExitCode -eq 0 -and $result.Rows.Count -eq 2 -and
+            $reviewRow.reviewed_tree_digest -ceq [string]$buildRow.end_tree_digest -and
+            $reviewRow.tree_pin_override -eq $false) `
+        -Detail ("build={0}, review={1}, rows={2}, build_digest={3}, reviewed_digest={4}, override={5}" -f
+            $build.ExitCode, $result.ExitCode, $result.Rows.Count, $buildRow.end_tree_digest,
+            $reviewRow.reviewed_tree_digest, $reviewRow.tree_pin_override)
+
+    $spec = 'critfile-adopt-critical-unconfirmed'
+    $scopeTask = 'fabricated-adopt-77-replay'
+    $gateState = Join-Path $stateRoot 'gates'
+    [System.IO.Directory]::CreateDirectory($gateState) | Out-Null
+    & $scopeCheck -Snapshot -Worktree $fixtures[19].Path -Task $scopeTask -StateDirectory $gateState -Authorized @('src') | Out-Null
+    if ($LASTEXITCODE -ne 0) { throw "scope snapshot for adopt replay failed with exit $LASTEXITCODE" }
+    $lockfilePath = Join-Path (Join-Path $fixtures[19].Path 'src') 'package-lock.json'
+    Add-Content -LiteralPath $lockfilePath -Value 'adopted critical write'
+    $reportPath = Join-Path $testRoot 'adopt-critical-unconfirmed-report.json'
+    Write-Utf8NoBom -Path $reportPath -Content '{"status":"done","changed_files":["src/package-lock.json"],"commands_run":[],"deviations":[],"unresolved":[],"blocker":null}'
+    $runId = 'fabricated-adopt-critical-unconfirmed-run'
+    Add-FabricatedLedgerRow -Row ([ordered]@{
+        run_id = $runId; pid = $null; launcher_pid = $null; worktree = $fixtures[19].Path
+        worktree_key = (Get-WorktreeKeyLocal $fixtures[19].Path); spec = $spec; task = 'critical-file-gate'
+        base_sha = $fixtures[19].BaseSha; phase = 'build'; started = '2026-01-01T00:00:00Z'
+        final_path = $reportPath; schema = 'completion'; sandbox = 'workspace-write'; status = 'running'
+        scope_armed = $true; scope_task = $scopeTask; authorized = @('src'); tree_pin_label = $null
+        critical_files_confirmed = $false
+    })
+    $result = Invoke-DispatchCase -CaseName '19 adopt live replay unconfirmed critical' -Spec $spec `
+        -Fixture $fixtures[19] -ExtraParameters @{ Adopt = $true; CriticalFilesScript = $criticalFiles }
+    $row = @($result.Rows) | Select-Object -First 1
+    Assert-Case -Label 'adopt live replay unconfirmed critical exits 77' `
+        -Condition ($result.ExitCode -eq 77 -and $row.status -eq 'adopted-done' -and
+            $row.critical_violation -eq $true) `
+        -Detail ("exit={0}, status={1}, critical={2}" -f $result.ExitCode, $row.status,
+            $row.critical_violation)
 }
 catch {
     $script:failureCount++
