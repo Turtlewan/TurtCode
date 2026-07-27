@@ -195,6 +195,25 @@ function Get-TreeFingerprint([string]$Root, [bool]$ApplyRuntimeExclusions) {
         'history.jsonl',
         '.last-update-result.json'
     )
+    # Build-TOOL caches, excluded in EVERY worktree (unlike $runtimeExclusions above, which is
+    # ~/.claude-only). These are written by the gate's own pre-flight: apex-baseline-check runs
+    # mypy and pytest BETWEEN the pin and the verify, so their caches are guaranteed to move and the
+    # gate could never pass on a project repo. Observed 2026-07-27 in artemis: dispatch exit 69 with
+    # CHANGED .mypy_cache/ + .pytest_cache/ after a GREEN baseline -- a self-inflicted deadlock that
+    # blocks every build dispatch into a fresh worktree.
+    #
+    # Safe to exclude: a tool cache is derived output. It cannot carry code a coder wrote, so it can
+    # never be the blind spot the pin exists to close. Ignored (`!!`) entries only -- a repo that
+    # TRACKS one of these names is still fingerprinted.
+    $toolCacheExclusions = @(
+        '.mypy_cache',
+        '.pytest_cache',
+        '.ruff_cache',
+        '__pycache__',
+        '.coverage',
+        'node_modules/.cache',
+        '.venv'
+    )
     foreach ($entry in ($status | Sort-Object)) {
         if ([string]::IsNullOrWhiteSpace($entry)) { continue }
         $xy = $entry.Substring(0,2)
@@ -214,6 +233,20 @@ function Get-TreeFingerprint([string]$Root, [bool]$ApplyRuntimeExclusions) {
                 }
             }
             if ($excluded) { continue }
+        }
+        # Tool caches: every worktree, ignored entries only.
+        if ($xy -eq '!!') {
+            $isToolCache = $false
+            foreach ($prefix in $toolCacheExclusions) {
+                if ($normalizedPath.Equals($prefix, [System.StringComparison]::OrdinalIgnoreCase) -or
+                        $normalizedPath.StartsWith($prefix + '/', [System.StringComparison]::OrdinalIgnoreCase) -or
+                        $normalizedPath.EndsWith('/' + $prefix, [System.StringComparison]::OrdinalIgnoreCase) -or
+                        $normalizedPath.Contains('/' + $prefix + '/')) {
+                    $isToolCache = $true
+                    break
+                }
+            }
+            if ($isToolCache) { continue }
         }
         $lines += "$xy $path work:$(Get-PathDigest $Root $path) index:$(Get-IndexDigest $Root $path)"
     }
