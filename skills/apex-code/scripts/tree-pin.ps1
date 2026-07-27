@@ -125,7 +125,32 @@ function Get-PathDigest([string]$Root, [string]$relPath) {
     }
 
     if (-not (Test-Path -LiteralPath $full -PathType Leaf)) { return '-' }
-    $h = Invoke-Git $Root hash-object -- $relPath
+    # A file can exist and still be unreadable: a live process may hold it with FileShare.None, and
+    # `--ignored=traditional` puts exactly those runtime lock files in scope. `git hash-object` then
+    # exits 128 and Invoke-Git throws, which took the WHOLE pin down -- so no gate could open against
+    # a repo whose app was running. (Artemis, 2026-07-27: the launcher holds
+    # artemis-supervisor-<port>.lock for the life of the supervised brain.)
+    #
+    # Mirror what the directory branch above already does for an unreadable subtree: degrade to a
+    # metadata fingerprint rather than crashing, and never let it collide with a real hash. Size and
+    # mtime still move if the file's content moves, so Verify keeps its teeth; a file that becomes
+    # readable also changes digest FORM, which reads as a moved tree -- the fail-safe direction.
+    try {
+        $h = Invoke-Git $Root hash-object -- $relPath
+    } catch {
+        # Only tolerate genuine unreadability. Any other git failure is still a hard error, or this
+        # catch would quietly swallow a broken repository and hand back a valid-looking pin.
+        $readable = $false
+        try {
+            $probe = [System.IO.File]::Open($full, 'Open', 'Read', 'ReadWrite')
+            $probe.Dispose()
+            $readable = $true
+        } catch { $readable = $false }
+        if ($readable) { throw }
+        $info = Get-Item -LiteralPath $full -Force -ErrorAction SilentlyContinue
+        if ($null -eq $info) { return 'unreadable:gone' }
+        return "unreadable:$($info.Length):$($info.LastWriteTimeUtc.Ticks)"
+    }
     if (-not $h) { return '-' }
     return ([string]$h).Trim()
 }
