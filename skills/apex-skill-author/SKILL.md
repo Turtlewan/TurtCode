@@ -1,7 +1,7 @@
 ---
 skill: apex-skill-author
-version: 2.0.0
-last_updated: 2026-07-14
+version: 2.0.2
+last_updated: 2026-07-29
 sources:
   - docs/technical/adr/ADR-011-instinct-loop-no-engine.md
   - docs/technical/adr/ADR-031-codex-context-propagation.md
@@ -9,10 +9,9 @@ sources:
   - docs/technical/adr/ADR-037-three-context-files.md
 staleness_threshold: 30d
 description: >
-  Use when creating, editing, or reviewing an APEX skill. Triggers: "add a skill", "new skill for
-  X", "update the X skill", a new domain needs a skill, or before changing skill frontmatter or the
-  index. Use even if the request doesn't say "skill" but clearly means authoring one. Owns the Iron
-  Law, the frontmatter contract, the double-write, and the line caps.
+  Use when creating, editing, or reviewing an APEX skill. Triggers: "add a skill", "new
+  skill for X", "update the X skill". Owns the Iron Law, frontmatter contract, double-write,
+  line caps.
 ---
 
 # Authoring an APEX skill
@@ -38,11 +37,12 @@ General best-practice content decays worst and justifies itself least.
 
 **Baseline-test before you write. No exceptions.**
 
-1. **RED.** Dispatch a bare agent — **no skill loaded** — and give it the real task, 2–3 realistic
-   prompts. Capture verbatim what it gets wrong.
+1. **RED.** Dispatch a bare agent, pinned `model: sonnet` — **no skill loaded** — and give it the
+   real task, 2–3 realistic prompts. Capture verbatim what it gets wrong.
 2. **The skill teaches only those gaps.** If the bare agent already does it right, the skill has no
    work to do. **Don't write it.**
-3. **GREEN.** Re-run with the skill. If behaviour didn't change, the skill is a no-op — delete it.
+3. **GREEN.** Re-run the same pinned model with the skill. If behaviour didn't change, the skill is
+   a no-op — delete it.
 
 **Sandbox the probe.** The agent must not read `docs/` — no status.md, no ADRs, no roadmaps, no
 other specs. A probe that reads the project's own narrative measures **the context, not the model**,

@@ -34,7 +34,8 @@ Fill every section accurately:
 - Files Changed: every file from coder_summary with commit sha or 🟡 uncommitted
 - Documentation Status: from apex-docs-product-agent output (passed as input)
 - Current State: run the bound stack's `## Verification Recipe` (from `stack_skills` in status.md, per ADR-006) and report actual results. If no stack skill is bound, report what the spec's `## Commands to run` produced. Never assume `npm`.
-- Specialist Flags: from reviewer_findings, severity high/medium only
+- Specialist Flags: from reviewer_findings, ALL severities including low (Opus 5 reviewers
+  under-report when a downstream filter exists; this handoff is the only persisted record)
 - Decisions Made: all from coder_summary decisions table
 - Blocked Actions: from coder_summary blocked_actions
 - What's Next: 2-3 concrete suggestions based on spec, flags, and decisions

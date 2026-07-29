@@ -1,7 +1,7 @@
 ---
 skill: apex-plan
-version: 2.1.0
-last_updated: 2026-07-16
+version: 2.1.2
+last_updated: 2026-07-29
 sources:
   - docs/technical/adr/ADR-010-multi-pass-review.md
   - docs/technical/adr/ADR-011-instinct-loop-no-engine.md
@@ -15,11 +15,9 @@ sources:
   - docs/technical/adr/ADR-037-three-context-files.md
 staleness_threshold: 30d
 description: >
-  Use when planning — turning requirements into executable docs/changes specs, designing an
-  approach, or shaping a build. Triggers: plan / design / architect / spec / "let's build" /
-  "what if". Owns spec authoring, the research gate, dispatched review, the readiness gate,
-  ADRs, and the confirmation digest. Not the build (apex-code) or standalone research
-  (apex-deep-dive).
+  Use when planning — turning requirements into docs/changes specs. Triggers: plan /
+  design / architect / spec / "let's build". Owns spec authoring, research gate, readiness
+  gate, ADRs. Not build (apex-code).
 ---
 
 # APEX Planning

@@ -1,7 +1,7 @@
 ---
 skill: apex-orchestrate
-version: 2.0.0
-last_updated: 2026-07-14
+version: 2.0.1
+last_updated: 2026-07-29
 sources:
   - docs/technical/adr/ADR-015-dispatch-return-contract.md
   - docs/technical/adr/ADR-036-remove-knowledge-layer.md
@@ -9,10 +9,9 @@ sources:
   - docs/technical/adr/ADR-038-single-session.md
 staleness_threshold: 30d
 description: >
-  APEX session orchestrator — runs first every session: orients from docs/status.md, surfaces
-  in-flight work, sets the autonomy level, and routes the task to apex-plan / apex-code /
-  apex-debug. One session plans and builds (ADR-038) — there are no modes. Also handles
-  pause and resume.
+  APEX session orchestrator — runs first every session: orients from docs/status.md,
+  surfaces in-flight work, sets autonomy level, routes to apex-plan/apex-code/apex-debug.
+  One session plans and builds — no modes. Handles pause/resume.
 ---
 
 # APEX Orchestrator

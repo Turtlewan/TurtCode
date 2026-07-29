@@ -178,7 +178,7 @@ reviewer (evaluator-independence). After a UI build completes:
 2. **Score** against the design brief: tokens honoured? forbidden patterns absent? art-direction met?
 3. **Turn findings into a focused fix-spec** for the coder. Typically 2–3 cycles.
 
-Dispatch as a **fresh reviewer** — never self-review the build you just reasoned about. The app must
+Dispatch as a **fresh `model: opus` reviewer** — never self-review the build you just reasoned about. The app must
 be reachable from the host session (local web; Mac-hosted app over LAN / Tailscale).
 
 ---

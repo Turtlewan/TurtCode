@@ -1,20 +1,15 @@
 ---
 skill: apex-context-budget
-version: 1.1.0
-last_updated: 2026-06-03
+version: 1.1.1
+last_updated: 2026-07-29
 sources:
   - ECC context-budget — github.com/affaan-m/ECC
   - donor-analysis (Kiro steering inclusion modes, GSD context tripwire, Cline focus-chain) — docs/research/donor-analysis/
 staleness_threshold: 60d
 description: >
-  Use when auditing or reducing this setup's Claude Code context/token overhead —
-  "how much context am I using", "is my skill set too heavy", "do I have headroom to
-  add more skills/agents/MCP servers", a leanness review, or before adding a batch of
-  components. Planning-mode analysis only: inventories what *actually* loads (the
-  CLAUDE.md chain, matched skills, impl.md cores, agent descriptions, MCP schemas),
-  classifies each as Always/Sometimes/Rarely, and produces ranked token-savings with a
-  forced top-3. Not a coding task; not general latency/perf tuning;
-  not the act of trimming a skill (that's apex-skill-author).
+  Use to audit or reduce Claude Code context/token overhead — "how much context am I
+  using", "is my skill set too heavy", or before adding skills/agents/MCP. Analysis
+  only; apex-skill-author trims.
 ---
 
 # Context Budget — measure APEX's context-rot doctrine
@@ -101,9 +96,8 @@ read "not APEX's to prune" — and that is exactly how 33 `gsd-*` agents survive
 always-on description weight, four times APEX's own**, while the skill built to find bloat was
 forbidden from naming them as removable (deleted 2026-07-14). An always-on cost is an always-on cost
 regardless of who installed it. Measure it, name it, and **recommend deletion** — the user decides,
-but the recommendation is yours to make. Report their **always-on description weight** and flag it to
-decide — never recommend removing another system as if it were APEX overhead. Their bodies are
-latent (don't load unless invoked); only their description lines tax every session.
+but the recommendation is yours to make. Their bodies are latent (don't load unless invoked); only
+their description lines tax every session.
 
 ## Report template
 
@@ -161,6 +155,7 @@ Deleting content is not the only way to cut the always-on floor:
 - **NEVER** edit a component — this skill measures and recommends; trimming is `apex-skill-author`.
 - **NEVER** multiply MCP tool-count × 500 without first subtracting the deferred (name-only) tools.
 - **NEVER** count a whole `impl.md` as always-on cost — only its core sections load per run, and only for *bound* stack skills.
-- **NEVER** recommend deleting a co-installed non-APEX system; report it as informational.
+- **Co-installed non-APEX systems:** measure their always-on weight and recommend removal where
+  warranted — the user decides (§ Scope discipline).
 - **ALWAYS** separate the always-on floor from the latent library — they are different decisions.
 - **ALWAYS** end with a forced top-3 ranked by always-on saving.

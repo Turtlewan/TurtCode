@@ -1,17 +1,15 @@
 ---
 skill: apex-coding-principles
-version: 1.1.0
-last_updated: 2026-06-10
+version: 1.1.1
+last_updated: 2026-07-29
 sources:
   - User-prescribed coding standards specification (2026-06-01, extended 2026-06-10)
   - Cursor rules best practices 2026
 staleness_threshold: 365d
 description: >
-  Universal coding standards enforced on every build via impl.md, which apex-code
-  auto-loads at pre-flight before any code is written. Reference this when reviewing whether
-  code output meets baseline quality standards, or when updating the principles themselves.
-  Covers naming, formatting, error handling, input validation, security, scalability,
-  surgical scope discipline, Git discipline, testing, and maintainability.
+  Universal coding standards (naming, formatting, error handling, input validation,
+  security, scalability, scope discipline, Git discipline, testing, maintainability)
+  apex-code auto-loads via impl.md before writing code; also used to review code quality.
 ---
 
 # Coding Principles

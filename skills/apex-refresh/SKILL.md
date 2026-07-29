@@ -1,15 +1,14 @@
 ---
 skill: apex-refresh
-version: 2.0.0
-last_updated: 2026-07-14
+version: 2.0.2
+last_updated: 2026-07-29
 sources:
   - docs/technical/adr/ADR-036-remove-knowledge-layer.md
 staleness_threshold: 30d
 description: >
-  Use when maintaining the skill SET — refreshing a skill against current fact, auditing staleness,
-  or taking stock of whether the set still earns its keep. Triggers: "refresh apex-X", "is this
-  skill stale", "audit the skills", "skill stocktake", "are my skills still good". Not authoring a
-  new skill (apex-skill-author) or a token/context audit (apex-context-budget).
+  Use when maintaining the skill SET — refreshing against current fact, auditing staleness,
+  or stocktake. Triggers: "refresh apex-X", "is this skill stale", "skill stocktake". Not
+  authoring (apex-skill-author) or context audit (apex-context-budget).
 ---
 
 # Refreshing the skill set
@@ -77,7 +76,8 @@ about to delete:
 The real audit. For each skill, one question: **would an agent WITHOUT this skill produce materially
 worse output on a task the user actually performs?**
 
-Dispatch RED probes in parallel (sandboxed — no planning docs). Then, per skill:
+Dispatch RED probes in parallel, each pinned `model: sonnet` (sandboxed — no planning docs). Then,
+per skill:
 
 - **No behaviour delta** → delete.
 - **Delta, but it's a local/project fact** → keep; it is exactly what a skill is for.

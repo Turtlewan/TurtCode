@@ -1,16 +1,15 @@
 ---
 skill: apex-research
-version: 2.0.0
-last_updated: 2026-07-14
+version: 2.0.1
+last_updated: 2026-07-29
 sources:
   - docs/technical/adr/ADR-015-dispatch-return-contract.md
   - docs/technical/adr/ADR-023-pre-authorise-before-dispatch.md
 staleness_threshold: 30d
 description: >
-  Use when researching before a decision — comparing tools or options, verifying current best
-  practice, or studying an external repo/system to absorb. Triggers: "research X", "compare A vs B",
-  "is this still current", "study repo Y", an absorption pass. Not the decision or spec itself
-  (apex-plan), and not an uncertain-approach deep dive (apex-deep-dive).
+  Use when researching before a decision — comparing options, best practice, or studying a
+  repo to absorb. Triggers: "research X", "compare A vs B", "is this still current" (not
+  apex-plan/apex-deep-dive).
 ---
 
 # Research

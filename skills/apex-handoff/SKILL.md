@@ -1,20 +1,16 @@
 ---
 skill: apex-handoff
-version: 1.6.0
-last_updated: 2026-06-10
+version: 1.6.1
+last_updated: 2026-07-29
 sources:
   - APEX Design Specification 2026-05-24
   - Planning with Files (OthmanAdi) — github.com/OthmanAdi/planning-with-files
   - gstack (garrytan) — github.com/garrytan/gstack
 staleness_threshold: 30d
 description: >
-  Use when writing or consuming a session handoff — the coding→planning narrative inbox
-  (docs/handoff/YYYY-MM-DD.md) or the planning→coding spec boundary. Triggers: "write the
-  handoff", end of any session that built something, "what did the last build learn", draining it
-  at session start, deciding where a fact lives (one-home-per-fact routing).
-  CANONICAL home of the four-section handoff contract — apex-plan, apex-code, and global
-  CLAUDE.md carry summaries of it; on conflict, this file wins. Not the spec format itself
-  (apex-plan) or status.md mechanics (apex-orchestrate templates).
+  Use when writing or consuming handoff — docs/handoff/YYYY-MM-DD.md, or the
+  planning↔coding spec boundary. Triggers: "write the handoff", "what did the last build
+  learn", one-home-per-fact routing. Canonical home; not spec format (apex-plan).
 ---
 
 # APEX Handoff Protocol

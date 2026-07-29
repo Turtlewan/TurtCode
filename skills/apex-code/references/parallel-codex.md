@@ -43,8 +43,8 @@ artifact ownership) before retrying.
 ## Failure / fallback (ADR-027 unchanged)
 A subprocess that exits non-zero / rate-limited → that task falls back to Sonnet 5 (fresh `model: sonnet` worker — ADR-032 as amended by A1, session-79b; quota-out skips the remaining effort rungs — the Codex pool is dead). A
 quota-out on **any** concurrent subprocess means the pool is dead → stop launching further Codex and fall
-back the remaining sub-wave tasks to Opus (sequential). A task that won't converge after honest recovery
-→ fork (capture-at-halt).
+back the remaining sub-wave tasks to Sonnet 5 (sequential — A1/ADR-045; Opus keeps spec-author + high-risk
+reviewer roles only). A task that won't converge after honest recovery → fork (capture-at-halt).
 
 ---
 

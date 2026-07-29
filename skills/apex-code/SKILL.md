@@ -1,7 +1,7 @@
 ---
 skill: apex-code
-version: 2.12.0
-last_updated: 2026-07-19
+version: 2.12.1
+last_updated: 2026-07-29
 sources:
   - docs/technical/adr/ADR-027-codex-primary-opus-fallback-deepseek-archived.md
   - docs/technical/adr/ADR-028-parallel-codex-dispatch.md
@@ -15,8 +15,8 @@ sources:
 staleness_threshold: 30d
 description: >
   APEX build workflow — executes docs/changes/ specs: pre-flight, wave-parallel Codex
-  dispatch, the verify loop against the repo's AGENTS.md, forks, and post-build review.
-  Codex `gpt-5.6-sol` is the coder; Sonnet 5 is the fallback. Loads when building a spec.
+  dispatch, verify loop vs AGENTS.md, forks, post-build review. Codex `gpt-5.6-sol` is
+  the coder; Sonnet 5 fallback. Loads when building a spec.
 ---
 
 # APEX Build Workflow

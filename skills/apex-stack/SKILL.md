@@ -1,7 +1,7 @@
 ---
 skill: apex-stack
-version: 1.2.1
-last_updated: 2026-07-16
+version: 1.2.2
+last_updated: 2026-07-29
 sources:
   - State of JS 2024 — stateofjs.com
   - Next.js Docs — nextjs.org/docs
@@ -13,12 +13,8 @@ sources:
   - docs/technical/adr/ADR-006-buildability-layer-verification-inversion.md
 staleness_threshold: 30d
 description: >
-  Use when choosing a tech stack for a new project, or for any "X or Y?" technology
-  decision — "what stack should I use", "starting a new project", "which
-  framework / database / ORM / language". Runs before apex-init. Selects merit-based
-  across ecosystems (NOT JS-by-default), weighing AI-buildability and verifiability
-  heavily, then writes the chosen stack's verify commands into the repo's AGENTS.md.
-  Not for picking a feature library inside an already-chosen stack.
+  Use when choosing a tech stack, or any "X or Y?" tech decision — "what stack should I
+  use", "starting a new project". Runs before apex-init. Merit-based, NOT JS-by-default.
 ---
 
 # apex-stack — Tech Stack Selection

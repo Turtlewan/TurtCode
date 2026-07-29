@@ -2,10 +2,10 @@
 name: apex-wave-reviewer
 tools: Read, Glob, Grep
 description: >
-  Reviews code output from a completed build wave against the spec's acceptance criteria and
-  baseline coding principles. Returns BLOCK / FLAG / CLEAN findings cited to concrete evidence.
-  Dispatched by apex-code after high-risk waves complete. Sandboxed — reads only the changed
-  files and the criteria it is given; no planning docs, no status.md, no other specs.
+  Reviews completed build wave's code against acceptance criteria and coding principles.
+  Returns BLOCK/FLAG/CLEAN findings. Dispatched by apex-code after high-risk waves.
+  Sandboxed to changed files + criteria — no planning docs.
+model: opus
 ---
 
 # Wave Reviewer

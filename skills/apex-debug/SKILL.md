@@ -1,7 +1,7 @@
 ---
 skill: apex-debug
-version: 1.4.0
-last_updated: 2026-06-13
+version: 1.4.1
+last_updated: 2026-07-29
 sources:
   - APEX Design Specification 2026-05-24
   - Superpowers (obra) — github.com/obra/superpowers
@@ -10,11 +10,9 @@ sources:
   - Agent Skills (addyosmani) — github.com/addyosmani/agent-skills
 staleness_threshold: 30d
 description: >
-  Use when investigating a bug, crash, test failure, regression, or "X is broken / not
-  working / behaves wrong" — reproduce-before-fixing, root-cause via one-hypothesis-at-a-time,
-  regression test, and routing the bug record to its durable home. Triggers: "debug X",
-  "why is X failing", "track down this bug", Bug Fix mode from apex-plan, a production
-  incident (--forensic). Not for adding features or known planned work.
+  Use when investigating a bug, crash, test failure, or regression — "X is broken/not
+  working". Reproduce-then-root-cause, one-hypothesis-at-a-time. Triggers: "debug X",
+  "why is X failing", Bug Fix mode, --forensic. Not new features.
 ---
 
 # APEX Bug Investigation

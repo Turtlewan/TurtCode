@@ -1,7 +1,7 @@
 ---
 skill: apex-governance
-version: 2.2.0
-last_updated: 2026-07-17
+version: 2.2.1
+last_updated: 2026-07-29
 sources:
   - docs/technical/adr/ADR-010-multi-pass-review.md
   - docs/technical/adr/ADR-027-codex-primary-opus-fallback-deepseek-archived.md
@@ -9,10 +9,9 @@ sources:
   - docs/technical/adr/ADR-038-single-session.md
 staleness_threshold: 30d
 description: >
-  The APEX autonomy model — levels L0–L5, Build/AFK vs Edit, approval gates, permanently-forbidden
-  hard blocks, critical-file confirmation, cross-model review, and evaluator independence. Canonical
-  home: apex-orchestrate and apex-code carry summaries; on conflict, this file wins. Triggers: "what
-  level am I at", "set autonomy to L{n}", "is this allowed", reviewing a gate or a hard block.
+  The APEX autonomy model — levels L0–L5, Build/AFK vs Edit, approval gates, blocks,
+  critical-file, cross-model review, evaluator independence. Triggers: "what level am I
+  at", "set autonomy to L{n}", "is this allowed".
 ---
 
 # APEX Governance

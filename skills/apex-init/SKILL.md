@@ -1,7 +1,7 @@
 ---
 skill: apex-init
-version: 1.7.0
-last_updated: 2026-06-22
+version: 1.7.1
+last_updated: 2026-07-29
 sources:
   - APEX Design Specification 2026-05-24
   - GSD (Get Shit Done) — github.com/gsd-build/get-shit-done
@@ -12,11 +12,9 @@ sources:
   - docs/technical/adr/ADR-026-codex-third-model-family.md
 staleness_threshold: 30d
 description: >
-  Use when bootstrapping a brand-new APEX project — triggered automatically by
-  apex-orchestrate when no docs/status.md exists in the project directory.
-  Scaffolds the docs/ tree, seeds PROJECT.md / REQUIREMENTS.md / ROADMAP.md /
-  status.md and the System Overview stub, then hands back. Not for projects that
-  already have a status.md (that's normal orchestration).
+  Use when bootstrapping a brand-new APEX project — triggered automatically when no
+  docs/status.md exists. Scaffolds docs/, seeds PROJECT.md/REQUIREMENTS.md/ROADMAP.md/status.md
+  and the System Overview stub. Not for projects that already have status.md.
 ---
 
 # APEX Init — New Project Bootstrap

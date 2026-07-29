@@ -1,7 +1,7 @@
 ---
 skill: apex-deep-dive
-version: 1.4.0
-last_updated: 2026-06-03
+version: 1.4.2
+last_updated: 2026-07-29
 sources:
   - APEX Design Specification 2026-05-24
   - Firecrawl — github.com/firecrawl/firecrawl
@@ -10,11 +10,9 @@ sources:
   - Planning with Files — github.com/OthmanAdi/planning-with-files
 staleness_threshold: 30d
 description: >
-  Use when you're genuinely uncertain which approach to take and need researched analysis
-  before deciding — 2-3 options compared with trade-offs, risks, and a project-specific
-  recommendation (analysis only, no code or spec). Triggers: "/apex-deep-dive <domain>",
-  "research X deeply", "explore options for Y", "should we do A or B?". Not when the approach
-  is already known (→ apex-plan) or for the implementation itself.
+  Use when genuinely uncertain which approach to take — 2-3 options, trade-offs,
+  recommendation. Triggers: "/apex-deep-dive <domain>", "research X deeply", "should we do
+  A or B?". Not when already known (→ apex-plan).
 ---
 
 # APEX Deep Dive
@@ -144,7 +142,9 @@ Council *replaces* the lone "Opposing View" with three independent dissents.
 1. **Architect — you, in-context.** State the proposal and the reasoning for it. This is the
    anchored voice; everything else exists to counter its bias.
 2. **Three fresh-context voices.** Dispatch three `general-purpose` subagents **in parallel**, each
-   given **only the decision question** — no proposal, no your reasoning, no conversation history.
+   pinned `model: opus` (a `general-purpose` dispatch with no pin silently inherits the session
+   model), given **only the decision question** — no proposal, no your reasoning, no conversation
+   history.
    That deprivation is the mechanism: a voice that never saw the proposed answer cannot anchor to it.
    (No dedicated agent files — the stance lives in the prompt, per ADR-007 leanness.)
 
@@ -154,7 +154,7 @@ to each other) is the *evaluator-independence invariant* in `apex-governance` �
 future vote- or score-based variant, or evaluators game the rule instead of the task (the Odysseus
 council-collusion failure; `docs/research/odysseus-analysis.md`).
 
-**Voice dispatch template** (one per voice, `subagent_type: general-purpose`):
+**Voice dispatch template** (one per voice, `subagent_type: general-purpose`, `model: opus`):
 ```
 You are the {Skeptic | Pragmatist | Critic}. Decision question: "{question}".
 You have ONLY this question — no proposed answer, no prior discussion. Do not assume any

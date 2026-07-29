@@ -1,6 +1,6 @@
 ---
 name: apex-spec-reviewer
-description: Planning-side spec reviewer. Dispatched by apex-plan to adversarially review a draft spec in a fresh, sandboxed context, returning severity-tagged (BLOCK/FLAG) findings cited to concrete evidence. Advisory only; never edits the spec.
+description: Planning-side spec reviewer. Dispatched by apex-plan to adversarially review a draft spec in a fresh, sandboxed context, returning severity-tagged (BLOCK/FLAG) findings cited to evidence. Advisory only; never edits the spec.
 tools: Read, Glob, Grep
 model: sonnet
 ---

@@ -1,5 +1,10 @@
 # Model-routing build planning — full rubric
 
+**Pin every Claude-side dispatch.** The session model is Fable 5 (expensive) — an `Agent`/`Task`
+dispatch that omits `model:` silently inherits it, not the cheap default, so always pass `model:`
+explicitly. Never route mechanical work through a `fork`-type subagent — forks always inherit the
+session model regardless of any pin.
+
 Loaded on demand when a project's `coder_models` menu has >1 entry. Under ADR-027 the menu is
 `{codex, opus}` and routing **collapses**: Codex is the default coder for every task; Opus is reached
 only as the **manual fallback** when Codex quota is exhausted. There is no per-task cost/complexity
@@ -100,3 +105,9 @@ tag `▸sonnet` proactively — the Claude fallback is a session-level manual sw
 Largely moot with one proactive coder. If a Codex build must hand a frozen-contract slice to Opus (or
 vice-versa during fallback), split only when the boundary is a contract you can freeze + conformance-test
 (tests travel); diffuse / un-freezable → keep the feature on one coder.
+
+## Coder-model tripwire (2026-07-29)
+Sol stays the sole coder. Re-open the Terra question only on measured Codex quota pressure — a quota-out
+fallback firing, or weekly Codex limits being hit. Then run the parked A3 bakeoff (~10 routine specs,
+Terra vs Sol, verified-completions-per-dollar); if Terra wins routine work it returns as a cheap worker
+tier (A4), never as the default (ADR-034).
