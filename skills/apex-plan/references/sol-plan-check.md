@@ -24,7 +24,7 @@ simpler structures that meet the same criteria. Findings as BLOCK (spec will fai
 wrong thing) / FLAG (planning should decide) / CLEAN, each with file/line + rationale. Judge
 the spec, do not rewrite it."*
 
-- **Input = spec + repo evidence only.** Never Opus's self-review notes, reviewer findings, or
+- **Input = spec + repo evidence only.** Never the spec AUTHOR's or the host's self-review notes, reviewer findings, or
   planning-discussion text — the cold first read is sacred (evaluator independence).
 - `--sandbox read-only` + no profile: Sol can inspect the repo, writes nothing. **Sol never
   edits the spec** — planning applies accepted amendments itself.
@@ -46,7 +46,7 @@ frontmatter flag (code review — apex-governance § Cross-model review).
 
 Trigger: the **user asks, or the host suggests it and asks — every time** (Council offer-only
 rule, ADR-010). Protocol:
-1. Opus answers each finding into the *same* Sol conversation — **amend** (accept; change the
+1. The host answers each finding into the *same* Sol conversation — **amend** (accept; change the
    spec) or **rebut with evidence** — via `codex exec resume <session-id>` (session id from the
    dispatch's event stream; fallback if resume is unavailable: fresh dispatch carrying the
    prior findings + responses verbatim).

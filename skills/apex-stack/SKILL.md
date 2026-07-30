@@ -1,6 +1,6 @@
 ---
 skill: apex-stack
-version: 1.2.2
+version: 1.2.3
 last_updated: 2026-07-29
 sources:
   - State of JS 2024 — stateofjs.com
@@ -83,7 +83,7 @@ project's answers. Do not start from a default and justify it backwards.
    maintained, swappable choices.
 
 Output the top candidate **plus the runner-up you ruled out and why** — selection is a comparison,
-not a lookup. Record it in ADR-001 (template in impl.md).
+not a lookup. Record it in ADR-001 (template + procedure in `~/.claude/skills/apex-plan/references/adr-and-status-procedures.md`).
 
 ## Candidate menu (cross-ecosystem starting points)
 
@@ -132,8 +132,7 @@ option only if it wins on the criteria above; it sits alongside the others, neve
    **per-project fact**, not model knowledge — that is why it is written down at all.
    **It must be AGENTS.md, not status.md:** Codex reads AGENTS.md natively on every `codex exec` and
    **never sees status.md**. A recipe in status.md is invisible to the coder that runs it.
-   `apex-code` reads AGENTS.md before dispatching; absent a recipe, it falls back to the spec's
-   `## Commands to run`.
+   `apex-code` reads AGENTS.md before dispatching. **Absent a recipe there is no fallback:** the pre-dispatch pre-flight refuses the build with **exit 72** before anything launches, and the host authors the recipe attended before re-dispatching (apex-code § Verify).
 3. **Write only what the model cannot derive.** Real command names, real flags, and any gotcha that
    would otherwise waste a run (e.g. "plain `uv sync` — there is NO `agentic` group; `--group
    agentic` errors"). Do **not** restate framework best practice — an AGENTS.md padded with what the
@@ -164,7 +163,7 @@ option only if it wins on the criteria above; it sits alongside the others, neve
 
 ## Gotchas / edge cases
 
-- **Package name drift**: Package names change (e.g. `next-auth` → `@auth/core` + `next-auth` v5 — status: see § Note on Auth.js v5). The impl.md warns the coder to verify current npm names.
+- **Package name drift**: Package names change (e.g. `next-auth` → `@auth/core` + `next-auth` v5 — status: see § Note on Auth.js v5). Verify current package names against the registry before pinning; the knowledge layer that used to carry this warning was removed (ADR-036).
 - **Supabase dual role**: Supabase appears in both the real-time preset (as a realtime provider) and as a hosted auth option. These are separate choices — you can use Supabase realtime without Supabase Auth.
 - **tRPC scope restriction**: tRPC only works if both client and server are TypeScript in the same repo. If the mobile preset (Expo) is in a separate repo from the API, tRPC doesn't apply.
 - **Deployment ≠ hosting**: Vercel provides features beyond hosting (edge middleware, image optimization). Factor this into lock-in analysis when self-hosting is a future option.

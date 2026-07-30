@@ -33,11 +33,11 @@ Conservative choice rules:
 - Prefer existing patterns over new ones
 - Prefer simpler implementation over clever
 - Prefer more input validation over less
-- Never delete anything — log a flag instead
+- Delete a file ONLY when the spec's `## Files to Change` lists it with `Operation: delete` and its path is non-critical (D7, ADR-046). Any other deletion: don't — log a flag instead.
 
 ## Step 3: Run specified commands
 
-Run each command listed in the spec's ## Commands section that applies to your task.
+Run the repo's `AGENTS.md` → `## Verify commands` recipe (its single home, ADR-037) for the parts that apply to your task. If the spec's `## Permissions` → Commands table lists additional exact commands, run those too.
 Report the actual output — don't summarise or paraphrase.
 
 If a command fails:

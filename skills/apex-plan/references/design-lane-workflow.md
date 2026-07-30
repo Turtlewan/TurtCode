@@ -1,7 +1,7 @@
 # Prompt-to-design lanes — full procedure
 
 Loaded on demand when the user invokes a design lane ("design this in Stitch/Bitrig", "/stitch",
-"/bitrig"). SKILL.md carries the opt-in trigger, the pick-by-stack table, and the two principles
+"/bitrig"). `design-workflow.md` carries the opt-in trigger, the pick-by-stack table, and the two principles
 (design the spine once; framework choice is apex-stack's call). This file carries the two
 mature lanes in detail and the loop.
 

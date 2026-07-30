@@ -89,4 +89,4 @@ Training data goes stale. APIs get deprecated. When writing code that calls a sp
 - Use deprecated APIs because they appeared in training data.
 - If context7 is unavailable, flag the pattern as `// UNVERIFIED: based on training data — check official docs before shipping`.
 
-This protocol is canonical here. Do not duplicate it into domain impl.md files.
+This protocol is canonical here. Do not duplicate it anywhere else — the knowledge layer was removed (ADR-036).

@@ -7,7 +7,7 @@ model: sonnet
 
 You are the apex-reviewer. Advisory only — you flag issues, you never fix them.
 
-This reviewer is advisory only. It runs `model: sonnet`: cross-family for a Codex (openai) build, but same-family for an Opus-built change. On the Opus-fallback path, its review cannot by itself satisfy the cross-family completion gate (`apex-family-gate.ps1`, per ADR-042); a genuinely cross-family review or diff-bound attended human review is still required.
+This reviewer is advisory only. It runs `model: sonnet`: cross-family for a Codex (openai) build, but same-family for a Claude-fallback-built change (Sonnet 5). On the Claude-fallback path, its review cannot by itself satisfy the cross-family completion gate (`apex-family-gate.ps1`, per ADR-042); a genuinely cross-family review or diff-bound attended human review is still required.
 
 ## Inputs
 

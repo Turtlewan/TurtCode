@@ -1,14 +1,19 @@
 # Codex independent review recipe (ADR-026)
 
-Loaded on demand when apex-code runs the family-aware cross-model review (§ Cross-model review). Codex
-(`gpt-5.6-sol`) is the **independent reviewer for Opus-built (fallback) code** (ADR-027 — Codex is the
-default *builder*, so this review path fires only on the Claude fallback — Sonnet 5, per A1); it is **advisory** — it never
-blocks the pipeline and never edits code. Note: Opus builds only when Codex quota is exhausted, so this
-Codex review usually can't run either → apex-code degrades to single-model + human flag.
+Loaded on demand when apex-code runs the family-aware cross-model review (apex-code § Post-build). Codex
+(`gpt-5.6-sol`) is the **independent reviewer for Claude-fallback-built code (Sonnet 5)** (ADR-027 —
+Codex is the default *builder*, so this review path fires only on the Claude fallback — Sonnet 5, per
+A1); it **never edits code**, and its *findings* are advisory — but its **verdict routes**: `BLOCK` →
+exit 67, which is a HARD STOP on the pipeline (do not commit, do not build a dependent spec).
+**The BUILD ORCHESTRATOR adjudicates a build-side review BLOCK and routes it** (ADR-046 D1); the host relays it to
+the user only when the call needs human judgment. It is not auto-dismissable and not merely a suggestion.
+`FLAG` → exit 68, carried into the review. Note: the Claude fallback builds only via the three fallback triggers
+(see model-routing), so this Codex review usually can't run either → apex-code degrades to
+single-model + human flag.
 
 ## Invocation — through the WRAPPER, always
 
-A raw `printf … | codex exec …` is **hard-blocked** by `hooks/codex-dispatch-guard.js` and will be
+A hand-rolled pipe into `codex exec` is **hard-blocked** by `hooks/codex-dispatch-guard.js` and will be
 denied. That is deliberate: the raw path has no ledger, no watchdog, no `-Adopt`, and — the one that
 matters most here — **it does not read the verdict.** Codex exits **0** even when its review returns
 `"verdict": "BLOCK"`, so a hand-rolled review reports success on a blocking result. Two reviews of the
@@ -49,7 +54,7 @@ The wrapper supplies the rest of what this recipe used to spell out by hand:
   writes that final message (cleaner than parsing `--json` JSONL).
 - `-m gpt-5.6-sol` → pin the model (Codex churns IDs — re-check after a Codex upgrade).
 - Guard first: if `codex --version` fails, do **not** silently skip — apex-code records the flag
-  (§ Cross-model review graceful-degrade).
+  (apex-code § Post-build).
 
 ## Review prompt (fill the placeholders)
 > You are an independent code reviewer from a different model family than the author. Review ONLY the
@@ -72,5 +77,5 @@ Also apply the four silent-regression lenses (`references/silent-regression-lens
 ## Output contract
 Schema returns `{ findings: [{severity, file, line?, criterion?, rationale}], verdict }`. apex-code
 surfaces BLOCK/FLAG findings in the build report as **advisory cross-model findings** and combines them
-with apex-reviewer per § Cross-model review (both-raise → high-confidence; one-raises → human-adjudicate).
+with apex-reviewer (apex-code § Post-build) (both-raise → high-confidence; one-raises → human-adjudicate).
 Never feed apex-reviewer's findings into this prompt — the reviewer must stay independent.

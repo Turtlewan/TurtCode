@@ -1,6 +1,6 @@
 # Cheap-mockup workflow — full procedure
 
-Loaded on demand when running the cheap-mode mockup loop. SKILL.md carries the two-loop rule + the
+Loaded on demand when running the cheap-mode mockup loop. `design-workflow.md` carries the two-loop rule + the
 SwiftUI hard gate; this file carries the side-by-side mechanics and the headless-render tiers.
 
 ## Interactive co-review — browser alternative

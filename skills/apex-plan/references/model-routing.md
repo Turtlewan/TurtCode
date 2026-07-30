@@ -5,10 +5,14 @@ dispatch that omits `model:` silently inherits it, not the cheap default, so alw
 explicitly. Never route mechanical work through a `fork`-type subagent — forks always inherit the
 session model regardless of any pin.
 
-Loaded on demand when a project's `coder_models` menu has >1 entry. Under ADR-027 the menu is
-`{codex, opus}` and routing **collapses**: Codex is the default coder for every task; Opus is reached
-only as the **manual fallback** when Codex quota is exhausted. There is no per-task cost/complexity
-routing — both coders are frontier-class and Opus is not a proactive choice.
+Loaded on demand when a build could take more than one coder — i.e. before setting a spec's
+`coder_model` frontmatter, or at a quota-out fallback decision. Under ADR-027 as amended (A1,
+session-79b; ADR-045) the menu is `{codex, sonnet}` and routing **collapses**: Codex is the default
+coder for every task; **Sonnet 5** is reached only through the three fallback triggers
+(quota-out/unavailable · whole-spec `coder_model: sonnet` pin · terminal verify-failure routing by
+the executor). There is no per-task cost/complexity routing, and the fallback is not a proactive
+choice. Opus keeps the spec-author, build-orchestrator, and high-risk-reviewer roles — it is not a
+coder.
 
 ## Legacy `coder_tier_policy` / DeepSeek tiers — ARCHIVED (ADR-027)
 The old DeepSeek Flash/Pro tiers and the `flash < pro < codex` cost-routing are archived (recoverable,
@@ -55,13 +59,17 @@ host-direct argument that reduces to "it's smoother" is that bias, and is reject
 **silent** — "it feels fine" and "it worked last time" are not evidence.
 
 ## Per-task selection — collapses to a default + manual fallback
+
+The Claude fallback (Sonnet 5) fires on exactly three triggers: (1) Codex quota-out or unavailability; (2) a whole-spec `coder_model: sonnet` pin; (3) terminal verify-failure routing by the executor (the orchestrator, or the host as interim executor). Nothing else reaches it.
+
 - **Default: `codex`** for every task — text and image alike (gpt-5.6-sol is sighted, so the old image gate
-  is moot). No cost-tier decision; do not route proactively to Opus.
-- **Fallback: `sonnet` (Sonnet 5 — A1, session-79b)**, reached only when Codex quota runs out mid-build (operator-confirmed) — apex-code's
-  Opus builds the task inline as a fresh worker in this session. This is a build-time event, not a planning-time
-  per-task route. See apex-code § Model fallback on verify-fail or quota-out.
-- A whole-spec `coder_model: opus` frontmatter can pin a spec to Opus up front (e.g. when you already
-  know Codex quota is gone) — bypasses Codex entirely.
+  is moot). No cost-tier decision; do not route proactively to the Claude fallback.
+- **Fallback: `sonnet` (Sonnet 5 — A1, session-79b)** — apex-code builds the task inline as a fresh
+  `model: sonnet` worker in this session. This is a build-time event, not a planning-time per-task
+  route. See apex-code § Model fallback on verify-fail or quota-out.
+- A whole-spec `coder_model: sonnet` frontmatter can pin a spec to the Claude fallback up front
+  (e.g. when you already know Codex quota is gone) — bypasses Codex entirely. The enum is exactly
+  `{codex|sonnet}`; there is no `opus` value.
 
 ## Reasoning-effort dial — the one real per-task lever (ADR-030)
 Model choice collapsed, but Codex's **reasoning-effort dial** is a genuine per-spec cost/quality lever on
@@ -83,7 +91,7 @@ absent unless the spec is clearly off-default.
   deliberate opt-in as a logged escalation.
 
 Cheap to dial up: under config-A the build runs on Codex's **separate pool**, so `high` on a hard spec
-barely touches the scarce Opus pool. Don't blanket-`high` everything — it burns Codex quota faster (→
+barely touches the scarce Anthropic Max pool. Don't blanket-`high` everything — it burns Codex quota faster (→
 earlier Claude fallback). Effort is per-spec; apex-code additionally bumps it one notch on a Codex
 verify-fail retry, up through the final `ultra` rung (ADR-034), before any Claude fallback (build-time, not a planning choice). The `gpt-5.4-mini` cheap
 model is **deferred** (ADR-030) — do not route tasks to a second model; the dial is the cost lever.
@@ -91,8 +99,9 @@ model is **deferred** (ADR-030) — do not route tasks to a second model; the di
 ## Family-aware review routing (when `cross_model_review: true`)
 Reviewer family ≠ builder family:
 - Codex-built task (the default) → **Claude** reviews — Sonnet routine, `model: opus` for the high-risk dual-pass set (ADR-032).
-- Opus-built task (the fallback) → **Codex** reviews (`codex exec`) — but Opus builds only because Codex
-  quota is out, so this usually degrades to single-model + human flag (apex-governance § Cross-model review).
+- Claude-fallback-built task (Sonnet 5) → **Codex** reviews (`codex exec`) — but the fallback most
+  commonly fires on quota-out (one of the three triggers), so this usually degrades to single-model
+  + human flag (apex-governance § Cross-model review).
 
 Preserves evaluator-independence — no task reviewed by its own family. apex-code derives the reviewer
 from the builder at review time.
@@ -102,8 +111,8 @@ With a single proactive coder, emit the normal **untagged** `## Wave plan` (ever
 tag `▸sonnet` proactively — the Claude fallback is a session-level manual switch, not a per-task tag.
 
 ## Splitting a feature across models
-Largely moot with one proactive coder. If a Codex build must hand a frozen-contract slice to Opus (or
-vice-versa during fallback), split only when the boundary is a contract you can freeze + conformance-test
+Largely moot with one proactive coder. If a Codex build must hand a frozen-contract slice to the
+Claude fallback coder (or vice-versa), split only when the boundary is a contract you can freeze + conformance-test
 (tests travel); diffuse / un-freezable → keep the feature on one coder.
 
 ## Coder-model tripwire (2026-07-29)

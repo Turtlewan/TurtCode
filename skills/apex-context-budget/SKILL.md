@@ -1,6 +1,6 @@
 ---
 skill: apex-context-budget
-version: 1.1.1
+version: 1.1.2
 last_updated: 2026-07-29
 sources:
   - ECC context-budget — github.com/affaan-m/ECC
@@ -76,8 +76,8 @@ Sort **every** inventoried item into one bucket with an action:
 | Bucket | Criteria (APEX-specific) | Action |
 |---|---|---|
 | **Always** | CLAUDE.md chain; skill/agent description lists; the orchestrator + active-mode skill; non-deferred MCP schemas | Keep — but trim fat (verbose descriptions, duplicated prose) |
-| **Sometimes** | A specialist SKILL.md matched by this project's domains; an `impl.md` core for a bound stack skill | Fine on-demand; trim only if a recurring per-run cost |
-| **Rarely** | Skills no project domain matches; `references/*.md` tails; agents never dispatched here | Leave latent (no always-on cost) or flag for lazy-load |
+| **Sometimes** | A workflow SKILL.md this session actually routes to; `apex-coding-principles/impl.md`'s core — the only impl load a build takes (the knowledge layer was removed, ADR-036) | Fine on-demand; trim only if a recurring per-run cost |
+| **Rarely** | Workflow skills this session never routes to; `references/*.md` tails; agents never dispatched here | Leave latent (no always-on cost) or flag for lazy-load |
 
 ### Phase 3 — Detect issues
 - **Always-on bloat:** CLAUDE.md prose duplicated in `apex-orchestrate`/`apex-code`; descriptions > 30 words; the same loop documented in three places.
@@ -154,7 +154,7 @@ Deleting content is not the only way to cut the always-on floor:
 
 - **NEVER** edit a component — this skill measures and recommends; trimming is `apex-skill-author`.
 - **NEVER** multiply MCP tool-count × 500 without first subtracting the deferred (name-only) tools.
-- **NEVER** count a whole `impl.md` as always-on cost — only its core sections load per run, and only for *bound* stack skills.
+- **NEVER** count a whole `impl.md` as always-on cost — only `apex-coding-principles/impl.md`'s core loads per run, and only when a build is writing code.
 - **Co-installed non-APEX systems:** measure their always-on weight and recommend removal where
   warranted — the user decides (§ Scope discipline).
 - **ALWAYS** separate the always-on floor from the latent library — they are different decisions.

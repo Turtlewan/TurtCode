@@ -1,6 +1,6 @@
 ---
 skill: apex-research
-version: 2.0.1
+version: 2.0.2
 last_updated: 2026-07-29
 sources:
   - docs/technical/adr/ADR-015-dispatch-return-contract.md
@@ -29,7 +29,7 @@ The most valuable research output is often *"don't."*
 
 | Phase | Who | Why |
 |---|---|---|
-| **1. Plan** | you, in-context (Opus) | frame the decision, derive falsifiable questions, name the sources |
+| **1. Plan** | you, in-context (the host) | frame the decision, derive falsifiable questions, name the sources |
 | **2. Retrieve** | **dispatched cheap agents** (Sonnet/Haiku), in parallel | high-token, low-judgment, embarrassingly parallel |
 | **3. Synthesise** | you, in-context | cross-source contradiction, weighting, the recommendation |
 
@@ -56,7 +56,7 @@ the audit trail — you can re-fetch the one page that matters.
 ## Web access under dispatch — the non-interactive wall
 
 Dispatched agents run **non-interactively**, so a `WebFetch` to a domain not in `permissions.allow`
-**auto-denies with no prompt** ([[background-agents-no-interactive-approval]]). `WebSearch` is
+**auto-denies with no prompt** (a dispatched agent has no interactive approval channel — the denial is silent). `WebSearch` is
 allow-listed and works dispatched; `WebFetch` is gated **per domain**. Open research hits *novel*
 domains, so the retrieve phase silently loses sources unless you clear the gate first (ADR-023).
 
@@ -64,7 +64,9 @@ Resolve it **without breaking the contract — you authorise, you never fetch:**
 
 1. **Pre-authorise in Phase 1.** When the plan names its source domains, add each to
    `permissions.allow` as `WebFetch(domain:<host>)` *before* dispatch. Editing the allow-list is a
-   permission action, not retrieval.
+   permission action, not retrieval. This is not self-widening: a user-approved domain allow during
+   **attended** planning is carved out of the hard block (D4, ADR-046). A background or AFK run never
+   edits permissions.
 2. **Discovery-first when sources are unknown.** Dispatch a `WebSearch` sweep (works dispatched) →
    agents return candidate **URLs** → you authorise the domains → re-dispatch the **fetch** to the
    cheap tier.

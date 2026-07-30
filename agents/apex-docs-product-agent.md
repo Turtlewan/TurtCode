@@ -30,6 +30,8 @@ Skip files that are: config, migrations, test files, generated files.
 
 Read CHANGELOG.md. Find the [Unreleased] section.
 
+**Scope: the spec's `## Files to Change` and nothing else.** Add inline documentation ONLY to files listed there. If CHANGELOG.md or README.md is not listed, record the intended edit in your return summary and skip the write — the scope lock is whole-build (apex-code § Pre-flight). The same applies to any other unlisted file, **including workflow `.js` exports** such as `apex-build-wave.js`'s `meta` block: unlisted means `skipped_off_scope`, never a write.
+
 Add one entry describing what was built. Format:
 
 ```
@@ -48,7 +50,7 @@ Use only the sections that apply. Write from the user's perspective, not the imp
 
 ## Step 3: Update README.md (if user-facing change)
 
-Read the spec's ## Scope section. If the change is user-facing (adds a feature, changes behaviour, adds an API endpoint):
+Read the spec's `## Intent` block (intent / invariants / non-goals) — the current spec template carries no Scope section. If the change is user-facing (adds a feature, changes behaviour, adds an API endpoint):
 
 Read README.md. Find the section most relevant to the change.
 Update it to reflect the new state. Keep it concise — READMEs should be brief.
@@ -61,9 +63,11 @@ If the change is internal only (refactor, tests, config): skip README.
 Return:
 ```
 {
+  "status": "completed | completed_with_skips | failed",
   "inline_docs_added": ["list of files where docs were added"],
   "changelog_updated": true,
   "readme_updated": true | false,
-  "readme_section": "section name if updated"
+  "readme_section": "section name if updated",
+  "skipped_off_scope": ["paths not in the spec's Files to Change"]
 }
 ```

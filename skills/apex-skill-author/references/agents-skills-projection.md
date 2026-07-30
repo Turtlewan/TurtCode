@@ -13,7 +13,7 @@ grounded by reading the repo, not by copying a rulebook.
 
 | Card class | Projects from | Example cards |
 |---|---|---|
-| Bound-stack | the repo's pinned versions + its Verification Recipe (`status.md` / `AGENTS.md`) + hazards that bit *this repo* | `typed-python`, `tauri2`, `swift-concurrency` |
+| Bound-stack | the repo's pinned versions + its Verification Recipe (`AGENTS.md` → `## Verify commands` — its single home, ADR-037; never status.md) + hazards that bit *this repo* | `typed-python`, `tauri2`, `swift-concurrency` |
 | Debug / testing | apex-debug's one-hypothesis + regression-test discipline (process, not knowledge) | `debug-discipline`, `test-discipline` |
 | Domain hazard | security invariants **specific to this codebase** — where auth comes from, how tenants are scoped, where secrets live | `auth-hazards`, `migration-hazards` |
 | Plan-review | Sol's plan-check rubric | `apex-plan-review` |
@@ -70,11 +70,13 @@ description: <activation trigger — when Codex should pull this card; this stri
 
 ## Generation + refresh (never hand-maintained twice)
 
-- Regenerate a card whenever its source APEX skill's *projected sections* change; note
-  "projection refreshed: <repos>" in the source skill's SKILL-HISTORY row.
+- A card has **no source APEX skill** — its source is the repo (ADR-036). Regenerate it when the
+  **repo's own facts** change: a pinned version bump, a changed verify recipe, a new hazard. Note
+  "card refreshed: <repos>" in the session close, not in a skill's SKILL-HISTORY row.
 - Start-set for a new project: bound-stack card(s) + debug/testing. Add hazard cards when the
   domain enters the roadmap. Never pre-build a full grid.
-- Deleting a source skill → delete its cards in consuming repos (flag them in the session close).
+- A card that still cites a deleted APEX skill is a stale rulebook → re-ground it in the repo's
+  own facts, or delete it (flag in the session close).
   **Live as of 2026-07-14:** the 36 domain skills were deleted (ADR-036). Any consuming repo holding
   a card projected from one of them (e.g. Artemis) must have that card re-grounded in the repo's own
   facts or removed — a card citing a skill that no longer exists is a stale rulebook.

@@ -1,6 +1,6 @@
 ---
 skill: apex-plan
-version: 2.1.2
+version: 2.2.0
 last_updated: 2026-07-29
 sources:
   - docs/technical/adr/ADR-010-multi-pass-review.md
@@ -103,7 +103,11 @@ ask-first aesthetic gate, the cheap-mockup loop, the visual review gate).
 ## Writing the spec
 
 Template: `~/.claude/skills/apex-orchestrate/templates/spec-template.md`.
-Write to **`docs/drafts/{short-name}.md`** first — never straight to `docs/changes/`.
+**You do not draft it yourself (ADR-045).** Resolve the open decisions, then dispatch a `model: opus`
+spec-author worker with the plan, the template path, and the target path
+`docs/drafts/{short-name}.md` — never straight to `docs/changes/`. The author drafts; you review its
+draft against the rules below and the readiness gate. The rest of this section is the contract you
+hand the author and grade against.
 
 **Split rule:** >3 files or >2 logical phases → split. When you split (or write alongside other
 pending specs), make the specs **file-disjoint**, with any real dependency as a `## Prerequisites`
@@ -147,12 +151,15 @@ fails that, it is also too far ahead to write.
 3. **One concern layer per task** (API / DB / UI / test). Never manufacture thin tasks to raise
    worker count — spawn overhead exceeds the saving.
 
-**`## Wave plan`** (specs with ≥3 tasks): group tasks into waves from the *stated* dependencies —
-`Wave 1: [1, 2] | Wave 2: [3]`. You are the stronger reasoner; do the analysis here so the build
-executes it verbatim with zero inference. Independence you can't establish → sequential.
+**`## Wave plan`** (specs with ≥3 tasks): derive a **PROPOSED** wave plan from the *stated*
+dependencies — `Wave 1: [1, 2] | Wave 2: [3]`. The **dependencies are binding**; the **grouping is advisory**.
+Final task selection and sequencing are **orchestrator-owned** (ADR-046 D1; interim: the
+host performs them as executor until that agent contract ships). Do the analysis here so the
+executor has a defensible starting point, not so it is spared judgement. Independence you can't
+establish → sequential.
 
 **Frontmatter levers:** `coder_effort: {low|medium|high|xhigh|max|ultra}` (default `medium`; `high`
-for risk:high/auth/security/data) · `coder_model: {codex|opus}` pins a whole spec ·
+for risk:high/auth/security/data) · `coder_model: {codex|sonnet}` pins a whole spec ·
 `cross_model_review: true` for auth/security/data-migration — deliberate, never a default.
 Full rubric → `references/model-routing.md`.
 

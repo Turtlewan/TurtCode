@@ -12,13 +12,14 @@ export const meta = {
 //   wave_label:     string  — e.g. "Wave 2" (for the returned summary)
 //   tasks:          [ { id: string, text: string, files: string[], acceptance: string,
 //                        model?: string } ]
-//                     model — optional per-task coder override. Under ADR-027 the only value that
-//                     reaches this field is 'opus' (the fallback coder, run in the APEX_MODE=coding
-//                     host). Omit → the session default.
+//                     model — optional per-task coder override. Under ADR-027 as amended (A1/ADR-045)
+//                     the only value that reaches this field is 'sonnet' (the Claude fallback coder,
+//                     Sonnet 5, run in the one session — there is no mode split any more, ADR-038).
+//                     Omit → the session default.
 //                     NOTE (ADR-027): Codex — the DEFAULT coder — is NOT dispatched here. agent()
 //                     spawns Claude-Code subagents, not the external Codex CLI; apex-code runs codex
 //                     tasks itself, sequentially, via `codex exec` (subprocess). This workflow / the
-//                     parallel fan-out path is therefore used only for Opus-fallback builds.
+//                     parallel fan-out path is therefore used only for Claude-fallback (Sonnet 5) builds.
 //                     (DeepSeek flash/pro are archived — ADR-027.)
 //   isolate:        boolean — true → run each worker in its own managed git worktree, so
 //                             concurrent build/test recipes don't collide on build artifacts,
@@ -54,7 +55,7 @@ const results = await parallel(
         `Acceptance criterion: ${t.acceptance}`,
         ``,
         `Follow your code-worker contract: read every listed file before writing; implement`,
-        `exactly this task and nothing more; run the spec's applicable commands; verify the`,
+        `exactly this task and nothing more; run the repo's AGENTS.md ## Verify commands recipe; verify the`,
         `acceptance criterion before returning. Make the conservative choice on micro-ambiguity.`,
         `Return ONLY the bounded status object — never a transcript.`,
       ].join('\n'),

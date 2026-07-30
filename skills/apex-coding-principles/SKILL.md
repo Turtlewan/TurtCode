@@ -1,6 +1,6 @@
 ---
 skill: apex-coding-principles
-version: 1.1.1
+version: 1.1.2
 last_updated: 2026-07-29
 sources:
   - User-prescribed coding standards specification (2026-06-01, extended 2026-06-10)

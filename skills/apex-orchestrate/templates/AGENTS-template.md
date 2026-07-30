@@ -9,9 +9,9 @@ repo. Codex reads this before acting; the nearest-directory AGENTS.md wins. Keep
 
 ## How to build a spec (APEX convention — universal)
 When asked to implement `docs/changes/<name>.md`:
-1. **Read the whole spec first.** Implement `## Exact changes` precisely — signatures, file contents, edit locations.
-2. **Surgical scope:** only create/modify files in the spec's `## Files to change`. `git diff --stat` must show only those.
-3. **Run the spec's `## Commands to run`** and make every `## Acceptance criteria` item pass.
+1. **Read the whole spec first.** Implement each `## Tasks` item precisely — the task text names its exact files, mechanism, and done-when.
+2. **Surgical scope:** only create/modify files in the spec's `## Files to Change`. `git diff --stat` must show only those.
+3. **Run this file's `## Verify commands`** (the recipe's single home, ADR-037) and make every `## Acceptance Criteria` item pass. You run it inside your own worktree and iterate to green. That is not the authoritative pass and not a verdict. The host EXECUTES the recipe as mechanics from the orchestrator's wave plan and returns the raw results; the ORCHESTRATOR owns the pass/fail adjudication and the routing that follows.
 4. **Tests are the contract:** if a check fails, fix the *code* and re-run until green. NEVER weaken, skip, or delete a test to make it pass.
 5. **Stop and ask** if a spec's acceptance criteria cannot be met as written — that is a planning question. Note it; do not improvise around the spec.
 
@@ -19,9 +19,9 @@ When asked to implement `docs/changes/<name>.md`:
 On **"build specs"** (or "build the queue" / "build docs/changes"): work through every spec in
 `docs/changes/` (not `done/`):
 1. **Dependency order** — honour each spec's `## Prerequisites`; if order is unclear, ask once then proceed.
-2. **One spec fully at a time** — implement → run the verify recipe → green — before starting the next.
+2. **Scheduling is the orchestrator's call (ADR-029).** Specs that are both dependency-independent (`## Prerequisites`) and file-disjoint (`## Files to Change`) may build concurrently, up to `max_parallel_codex` (default 2). **Third condition (ADR-029 supervision gate):** a **high-risk** spec — `risk: high`, or auth / security / data — runs **foreground and sequential even when it is dependency-independent and file-disjoint**; it never joins the pool. Anything else is one spec at a time. Either way: implement → run the verify recipe → green, and **integrate → verify → commit strictly sequentially, in dependency order**. **That commit is not yours** — the `## Hard rules` no-commit rule above still binds you absolutely. Integration and commits are executed host-side from the orchestrator's plan (ADR-046 D1); you build and verify in the tree you are given and leave it dirty.
 3. **STOP on the first failure** — if verify won't go green or a criterion can't be met, stop, leave the tree as-is, and report which spec + why. Never continue onto a red tree.
-4. **After a spec passes, move it to `docs/changes/done/`** (a file move, not a commit).
+4. **Never move or archive a spec.** Spec archival into `docs/changes/done/` is the `apex-docs-technical-agent`'s host's-pen write, or the host's directly (D6, ADR-046). Report that the spec passed; the close-out does the move.
 5. **Never commit** (hard rule) — leave all built work dirty for owner review at the end.
 6. **End with a summary** — specs passed, specs blocked, final verify status.
 

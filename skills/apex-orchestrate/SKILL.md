@@ -1,12 +1,14 @@
 ---
 skill: apex-orchestrate
-version: 2.0.1
+version: 2.1.0
 last_updated: 2026-07-29
 sources:
   - docs/technical/adr/ADR-015-dispatch-return-contract.md
   - docs/technical/adr/ADR-036-remove-knowledge-layer.md
   - docs/technical/adr/ADR-037-three-context-files.md
   - docs/technical/adr/ADR-038-single-session.md
+  - docs/technical/adr/ADR-045-four-role-split.md
+  - docs/technical/adr/ADR-046-doctrine-audit-resolutions.md
 staleness_threshold: 30d
 description: >
   APEX session orchestrator — runs first every session: orients from docs/status.md,
@@ -50,8 +52,8 @@ half-refactor is unreviewable), then move. Two reads, one line, go.
 
 | Signal | Route to |
 |--------|----------|
-| plan · design · architect · spec · "let's build" · what if | **apex-plan** |
-| build · implement · execute · start build | **apex-code** |
+| plan · design · architect · spec · "let's build" · what if | **apex-plan** — then **dispatch a `model: opus` spec author** to draft the spec/ADR from your plan (author contract: `apex-orchestrate/templates/spec-template.md` + apex-plan § Writing the spec; ADR-045); the host does not author it itself |
+| build · implement · execute · start build | **apex-code**. **Now:** the host runs the build as **interim executor** (ADR-046 D1) — performing the scheduling, routing, and adjudication duties itself, per `apex-code/references/parallel-codex.md`, until the contract below exists. **Target:** dispatch a `model: opus` build orchestrator (Opus 5 — owner amendment 2026-07-29, was Sonnet) that owns scheduling, routing, and adjudication (ADR-045), activating when the **build-orchestrator agent contract** ships (queued retro P1–P7 set). |
 | broken · failing · bug · regression · "why does X" | **apex-debug** |
 | review this spec | apex-plan (dispatched spec review) |
 | review the built code | dispatch `apex-reviewer` on the changed files |
@@ -59,6 +61,10 @@ half-refactor is unreviewable), then move. Two reads, one line, go.
 | research · compare · is this current | apex-research |
 | audit the skills · stocktake | apex-refresh |
 | next · what's next · where are we | auto-detect (below) |
+
+Both dispatches are the ADR-045 role split, tightened by ADR-046 D1: the host reasons and plans, workers build. The host's build-time mechanics are launching and monitoring subprocesses from the orchestrator's wave plan, executing the git operations that plan directs, and returning status/exit codes — never task selection, sequencing, routing, verify adjudication, retries, or close-out.
+
+**Transitional (2026-07-29):** until the build-orchestrator agent contract ships (queued retro P1–P7 spec set), a build executes per `apex-code/references/parallel-codex.md` with the host performing the mechanics directly. Route as above; the dispatch step lands with that contract.
 
 **Debug beats build** when both are present — an unexplained failure is not a feature.
 

@@ -1,6 +1,6 @@
 ---
 skill: apex-handoff
-version: 1.6.1
+version: 1.7.0
 last_updated: 2026-07-29
 sources:
   - APEX Design Specification 2026-05-24
@@ -29,7 +29,7 @@ It is *narrative only* — not a state record. One home per fact:
 |------|----------------------------|
 | What files changed, SHAs | `git log` / `git diff` |
 | Build/test status, known issues | status.md (live state) |
-| Which specs finished | status.md + `docs/changes/done/` |
+| Which specs finished | `docs/changes/done/` + `git log` — **never status.md** (a finished row is DELETED there, ADR-037) |
 | In-progress position (partial/blocked/parked) | status.md **In-Flight** pointer |
 
 The handoff never carries any of the above. If a fact has a home above, it does not
@@ -109,10 +109,9 @@ Happy path barely touches In-Flight (clear it); every unhappy path *lives* in it
 | 🔄 partial | Some tasks done — spec stays in docs/changes/ for resume |
 | ❌ blocked | Could not complete — needs planning intervention |
 
-## Commit status values (status.md In-Flight `Uncommitted` column)
+## Commit status values (recorded in the In-Flight row's `Next` column)
 
-The handoff carries no file table — git is the changelog. Uncommitted risk lives in the
-status.md In-Flight row:
+The handoff carries no file table — git is the changelog. Uncommitted risk, and any drafted-but-unapproved commit message, are recorded in the existing `Next` column of the status.md In-Flight row. **There is no `Uncommitted` column** — the template's columns are `What | State | File | Next`.
 
 | Status | Meaning |
 |--------|---------|
@@ -143,7 +142,7 @@ If context is lost mid-build (crash, `/clear`, rate limit):
 3. Read docs/findings/{spec-name}.md for accumulated research
 4. Resume from the logged checkpoint — no need to re-research
 
-WIP commits: when pausing mid-build, commit with message `wip: {spec-name} — task {n}/{total}` so the checkpoint is in git even if docs/ is lost.
+WIP commits: when pausing mid-build, a checkpoint commit `wip: {spec-name} — task {n}/{total}` puts the work in git even if docs/ is lost. **The standing approval gate applies, with no exception** — draft the message, show it, get approval, then commit (CLAUDE.md; apex-governance § Commit discipline). **An unattended run does NOT commit.** It records the drafted commit message in the status.md In-Flight row's existing **Next** column and queues it for the next attended exchange. D6's AFK carve-out covers the docs agents' *document* writes only — it does not reach git commits (ADR-046 D6 Consequences).
 
 ## Spec lifecycle
 

@@ -5,15 +5,22 @@ makes a long Codex build watchable instead of blind, at ~zero host-context cost.
 0.141.0 (Windows, 2026-06-25): `--json` + `-o` split cleanly.
 
 ## Recipe
-Run the dispatch **backgrounded** (Bash `run_in_background`), splitting Codex's output two ways:
+Dispatch through the wrapper — **always**. `hooks/codex-dispatch-guard.js` hard-blocks a raw
+`codex exec`, so no hand-rolled pipe is a runnable path. The wrapper applies the `--json` event stream
++ `-o <final>` split and writes the log outside the target repo. **It does not background the child**
+— the wrapper blocks on `WaitForExit` until Codex finishes; if you want the dispatch off the
+foreground, background the **wrapper invocation** itself.
 
-```
-printf '%s' "<dispatch pack>" | codex exec -p apex-coder --sandbox workspace-write -m gpt-5.6-sol \
-  -c model_reasoning_effort="<effort>" \
-  -C <repo-or-worktree> --json \
-  --output-schema ~/.claude/skills/apex-code/references/codex-completion-schema.json \
-  -o <scratch>/codex-<task>.final --color never \
-  > <ledgerDir>/codex-logs/codex-<spec>-<task>-<worktreeTag>-<runId8>.log 2>&1
+```powershell
+# -SpecSourcePath: the spec's real home, required on cross-tree builds
+# -Authorized: the task's Files-to-Change paths, WORKTREE-RELATIVE (never absolute)
+# -Effort: omit at medium
+& "$env:USERPROFILE\.claude\skills\apex-code\scripts\codex-dispatch.ps1" `
+  -Spec <spec> -Task <task> -Phase build -Worktree <repo-root> -BaseSha <sha> `
+  -SpecSourcePath <abs path> `
+  -Prompt "<the dispatch pack>" `
+  -Authorized @('src/a.py','tests/test_a.py') `
+  -Effort <coder_effort>
 ```
 
 The log lives **outside the target repo**, beside the ledger — `<ledgerDirectory>\codex-logs\`, i.e.
@@ -41,7 +48,7 @@ worktree.
   **Never a default `coder_effort`, and never reached except as that last automatic rung** — a spec that
   *starts* a task at `ultra` is a deliberate, logged escalation, not routine. Its worth against `max` is
   still gated on a head-to-head eval that has not yet run: ADR-034 promoted it on structural grounds (it is
-  the only rung between `max` and the scarce Opus pool), so if the eval disappoints, cut this rung first.
+  the only rung between `max` and the Claude fallback (Sonnet 5)), so if the eval disappoints, cut this rung first.
 
 The old Sol model rung (ADR-032) is **gone**: `gpt-5.6-sol` *is* the coder now (ADR-034), so there is no
 higher Codex model to escalate to — the dial is the whole ladder.
@@ -89,12 +96,11 @@ The log is a transient build artifact living in the external state dir (`<ledger
 not in the repo — so it never needs `.gitignore` and can never be committed. Prune old
 `codex-logs\*.log` files at worktree/spec teardown.
 
-## Durable dispatcher (ADR-033 A4)
+## What the wrapper adds (ADR-033 A4)
 
-For AFK/unattended builds, `scripts/codex-dispatch.ps1` replaces the raw `codex exec` invocation
-above — same flags, same dispatch pack, same `--json` log and `-o` `.final` schema output — but
-adds three things a long unattended run needs that a one-shot foreground/backgrounded call does
-not: a guaranteed stdin close, a durable run record, and crash recovery.
+`scripts/codex-dispatch.ps1` is the **only** dispatch path, attended or not — a hook denies the
+alternative. Beyond the flags, the dispatch pack, the `--json` log and the `-o` `.final` schema output,
+it adds three things any run needs and a long unattended one cannot do without:
 
 **Why:** ad-hoc `codex exec` launches without an explicit stdin-close can wedge for 40+ minutes
 waiting on an inherited stdin in some launch paths — a real recurring incident this wrapper exists

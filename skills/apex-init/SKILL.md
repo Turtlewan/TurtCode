@@ -1,6 +1,6 @@
 ---
 skill: apex-init
-version: 1.7.1
+version: 1.7.2
 last_updated: 2026-07-29
 sources:
   - APEX Design Specification 2026-05-24
@@ -26,12 +26,12 @@ Sets up the project structure for APEX. Ask the questions, run stack selection, 
 
 Each session starts fresh. Without persistent artifacts,
 context is lost between sessions. These four files survive every session boundary
-and are loaded by every new agent before it acts:
+and are read **on demand**, not preloaded — no agent loads all four before it acts (ADR-037):
 
-- **PROJECT.md** — vision statement (what and who)
-- **REQUIREMENTS.md** — scope boundaries (in-scope / out-of-scope)
-- **ROADMAP.md** — phase breakdown (filled once planning begins)
-- **docs/status.md** — live state (decisions, in-flight work, pending specs)
+- **PROJECT.md** — vision statement (what and who) — read on demand during planning
+- **REQUIREMENTS.md** — scope boundaries (in-scope / out-of-scope) — read on demand during planning
+- **ROADMAP.md** — phase breakdown (filled once planning begins) — read on demand during planning
+- **docs/status.md** — live state — read by the **host** at session start; **Codex never reads it** (the coder's contract is `AGENTS.md`, ADR-037)
 
 ## Step 1: Ask the bootstrap questions (one batch)
 
@@ -145,14 +145,14 @@ Fill in:
       architecture/app-flow.md   ← app-flow: screens + journeys (stub — UI-bearing projects only)
       architecture/design-brief.md ← tokens + art-direction + don'ts the coder reads (stub — UI-bearing only)
     product/        ← user guides, API docs, changelog
-  PROJECT.md        ← vision — loaded by every new agent
-  REQUIREMENTS.md   ← scope boundaries — loaded by every new agent
+  PROJECT.md        ← vision — read on demand during planning
+  REQUIREMENTS.md   ← scope boundaries — read on demand during planning
   ROADMAP.md        ← phase direction — fill this during planning
   CHANGELOG.md
   README.md
   AGENTS.md         ← Codex build instructions (build-a-spec workflow + verify recipe + hard rules)
 
-Running at L2 | Profile: balanced | Mode: planning
+Running at L2 | Coder: Codex gpt-5.6-sol (Sonnet 5 fallback)
 
 What do you want to build first?"
 

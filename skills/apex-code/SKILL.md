@@ -1,6 +1,6 @@
 ---
 skill: apex-code
-version: 2.12.1
+version: 2.13.0
 last_updated: 2026-07-29
 sources:
   - docs/technical/adr/ADR-027-codex-primary-opus-fallback-deepseek-archived.md
@@ -12,6 +12,8 @@ sources:
   - docs/technical/adr/ADR-036-remove-knowledge-layer.md
   - docs/technical/adr/ADR-037-three-context-files.md
   - docs/technical/adr/ADR-038-single-session.md
+  - docs/technical/adr/ADR-045-four-role-split.md
+  - docs/technical/adr/ADR-046-doctrine-audit-resolutions.md
 staleness_threshold: 30d
 description: >
   APEX build workflow — executes docs/changes/ specs: pre-flight, wave-parallel Codex
@@ -46,13 +48,16 @@ not ambient project docs.
 - **`## Assumptions`** — verify each against the codebase *now*. Wrong + impact `Stop` → halt, log,
   report. Wrong + `Caution`/`Low` → log the deviation, proceed.
 - **`## Files to Change`** is a **scope lock** for the whole build. A file not listed is a blocked
-  action: log it, don't touch it, surface it in the handoff. Re-check before touching any file.
+  action: log it, don't touch it, surface it in the handoff. Re-check before touching any file. A fork that needs to build "in the real place" (§ Forks) does **not** widen the lock by prose — prose cannot change the wrapper's `-Authorized` list, so a write there still trips exit 65. **The HOST amends the spec's `## Files to Change` and re-dispatches the task with the updated `-Authorized` list**, recording why in the decisions table and the handoff. The lock is never widened in-flight; it is re-issued.
+- **Load `~/.claude/skills/apex-coding-principles/impl.md`** now — before any dispatch or write, not at verify time.
 - **Invariant freshness (ADR-033 A3):** if the spec predates an ADR shift, check its `## Intent`
   invariants still hold. A contradiction is a wrong `Stop` assumption — halt and flag.
 - **`coder_effort`** frontmatter `{low|medium|high|xhigh|max|ultra}`, default `medium`.
 - AFK build → capture `run_base_sha = git rev-parse HEAD` now (for the end-gate).
 
 ## Wave analysis
+
+**Who does this (ADR-046 D1).** Wave grouping, dispatch sequencing, and completion routing are **orchestrator-owned**. Until the build-orchestrator agent contract ships (queued retro P1–P7 set), the **host performs them as interim executor** — a recorded transition state, not doctrine. The instructions below describe that interim execution.
 
 Two tasks may run in parallel iff `writes(A) ∩ writes(B) = ∅` **and** neither writes what the other
 reads **and** they share no exclusive resource.
@@ -95,7 +100,7 @@ Use the task's `-Authorized` paths, space-separated after `-Paths`. Never use `-
 
 **Host-state authoring:** the six matchers are `docs/status.md`, root `AGENTS.md`, root `CLAUDE.md`,
 `docs/changes/`, `docs/handoff/`, and any path whose basename is `codex-run-ledger.jsonl`.
-Authorizing any of them -- including bare directory grants `docs/changes` or `docs/handoff` -- requires attended `-CriticalFilesConfirmed`; an unattended/AFK dispatch that tries to authorize one refuses with exit **76** by design: **PARK** the task. Remaining gap: a broader directory grant (for example, all of `docs`) still slips literal-token classification until D6 post-hoc write classification (Wave B2); see ADR-044 D3 consequence (a).
+Authorizing any of them -- including bare directory grants `docs/changes` or `docs/handoff` -- requires attended `-CriticalFilesConfirmed`; an unattended/AFK dispatch that tries to authorize one refuses with exit **76** by design: **PARK** the task. **Sole exception (D6, ADR-046):** the docs agents' three host's-pen artifacts — the handoff doc, `docs/status.md`, and spec archival into `docs/changes/done/` — are written by the docs agents during an AFK close-out and reviewed by the host before session close. That exception covers those three artifacts and nothing else; every other host-state authorization still parks. **Interim mechanics:** under AFK the harness may silently deny a docs-agent's off-list write (`dontAsk` inheritance); until the permissions follow-up ships (queued retro set), the **HOST performs the three artifacts' writes itself** — they are host bookkeeping (state-keeping) under the session licence clause, so no gate is crossed. The docs agents are the host's pen whenever the harness permits; the host is always a valid writer of its own three artifacts. Remaining gap: a broader directory grant (for example, all of `docs`) still slips literal-token classification until D6 post-hoc write classification (Wave B2); see ADR-044 D3 consequence (a).
 
 A spec's `## Permissions` text does **not** satisfy Layer A; only a live attended human confirmation
 does. Layer B's exit 76 mechanical backstop proves the confirmation switch was passed, but not who supplied it. Layer A owns that provenance check, so unattended work must park.
@@ -105,12 +110,15 @@ Constraints → Done-when — per `references/dispatch-pack.md`, then **always d
 wrapper**:
 
 ```powershell
-scripts/codex-dispatch.ps1 `
+# -SpecSourcePath: the spec's real home, required on cross-tree builds
+# -Authorized: the task's Files-to-Change paths, WORKTREE-RELATIVE (never absolute)
+# -Effort: omit at medium
+& "$env:USERPROFILE\.claude\skills\apex-code\scripts\codex-dispatch.ps1" `
   -Spec <spec> -Task <task> -Phase build -Worktree <repo-root> -BaseSha <sha> `
-  -SpecSourcePath <abs path> `                    # host always passes the spec's real home on cross-tree builds
+  -SpecSourcePath <abs path> `
   -Prompt "<the dispatch pack>" `
-  -Authorized @('src/a.py','tests/test_a.py') `   # the spec's ## Files to change, VERBATIM
-  -Effort <coder_effort>                          # default medium
+  -Authorized @('src/a.py','tests/test_a.py') `
+  -Effort <coder_effort>
 ```
 
 **Never hand-roll `printf … | codex exec …`.** You now *can't* — a `PreToolUse` hook
@@ -222,22 +230,17 @@ defensively, but pass it properly.
 **Parallel Codex** (2+ independent `▸codex` tasks) → `references/parallel-codex.md`.
 
 **Fallback:** `codex --version` fails, or quota is exhausted mid-run → the task falls back to
-**Sonnet 5**, a fresh `model: sonnet` worker in this session (A1, session-79b: the coding fallback no longer draws the scarce Opus pool; Opus keeps spec-author and high-risk reviewer roles). Logged, never silent. No backend swap, no
-relaunch (ADR-038). Whole-spec pin: `coder_model: {codex|sonnet}` (A1; `opus` remains accepted for a deliberate exception, logged).
+**Sonnet 5**, a fresh `model: sonnet` worker in this session (A1, session-79b: the coding fallback no longer draws the scarce Opus pool; Opus keeps the spec-author, build-orchestrator, and high-risk-reviewer roles). Logged, never silent. No backend swap, no
+relaunch (ADR-038). Whole-spec pin: `coder_model: {codex|sonnet}` (A1). The enum is exactly those two values.
 
 ## Verify
 
-The recipe is the repo's **`AGENTS.md` → `## Verify commands`** (ADR-037). Absent one, fall back to
-the spec's `## Commands to run`; absent that, run the obvious per-ecosystem checks, log the gap, and
-**write a recipe into AGENTS.md so the next build has one**.
+The recipe is the repo's **`AGENTS.md` → `## Verify commands`** (ADR-037), and that is its only home — there is no spec-side fallback section. Absent a recipe, the pre-dispatch pre-flight refuses the build with **exit 72** before launch — you cannot write the recipe from inside a build. Recovery: **the HOST authors `## Verify commands` into AGENTS.md attended** (root AGENTS.md is critical host state — live confirmation required, AFK parks), then re-dispatches. `-SkipBaselineCheck` is the bootstrap escape and is host-authorized only.
 
-Load `~/.claude/skills/apex-coding-principles/impl.md` before writing code.
-
-Run the recipe **per task**, not once at the end. **The host runs it — never the coder subprocess
-judging its own output** (evaluator independence).
+**Two cadences, both required, and the ownership is split three ways.** (a) *During build:* the coder runs the recipe inside its own isolated worktree, per task, and iterates to green — that is its job under AGENTS.md and the dispatch pack. (b) *Authoritative pass:* the recipe is re-run after the task's changes are in the integration tree — per task for a sequential build, once on the integrated wave for a parallel one (`references/parallel-codex.md`). Ownership is split (ADR-046 D1). The host EXECUTES the recipe as mechanics from the orchestrator's wave plan and returns the raw results; the ORCHESTRATOR owns the pass/fail adjudication and the routing that follows. The coder's own pass never satisfies the gate: **the coder does not judge its own output**, and neither the host nor the coder adjudicates (evaluator independence). Executing the recipe, the per-task worktree commit, the path-scoped integration, and the approved per-spec commit are all **host mechanics** — executions taken from the wave plan, not decisions about it.
 
 **On failure, escalate in order**, logging each rung: bump `coder_effort` one notch → … → `max` →
-`ultra` → **Opus** (fresh worker). `ultra` is the only place it fires automatically, and it is
+`ultra` → **Sonnet 5** (fresh `model: sonnet` worker — A1/ADR-045). `ultra` is the only place it fires automatically, and it is
 un-evaled — first rung to cut if the eval disappoints (see status.md).
 
 ### Baseline-green commit hook and dispatch pre-flight (M2a/M2b)
@@ -279,6 +282,8 @@ It runs the dedicated `AGENTS.md → ## Preflight commands` block when present, 
 
 ## Post-build
 
+The docs agents' three host's-pen artifacts — the handoff, `docs/status.md`, and spec archival into `docs/changes/done/` — are **permitted post-build writes outside `## Files to Change`** (D6, ADR-046); they do **not** need to be listed there. **Exactly those three. Nothing else is exempt** — any other write outside the lock is flagged, not applied.
+
 **Pin the tree before you open a gate.** A gate reads the tree at time T and acts on a verdict at
 T+n. Nothing pins T — so if the tree moves in between, the verdict describes a tree that no longer
 exists.
@@ -304,14 +309,14 @@ mechanism: the reviewer reads, the tree moves, the reviewer returns **CLEAN**, a
 code nobody ever looked at. The pin covers **content, not just filenames** — that day the filename
 never changed, only what was inside it, so a `git status` check would have seen nothing.
 
-1. **In parallel:**
+1. **Serialized — the reviewer first:**
    - `apex-reviewer` — spec_path, files_changed, **and `<final>.concerns.md` verbatim** if the coder
      raised any. **Always runs.** It is the evaluator-independence gate; skipping it to save tokens
      trades away the one thing that sees what the coder cannot.
-   - `apex-docs-product-agent` — files_changed, spec_path, date.
+   - `apex-docs-product-agent` — files_changed, spec_path, date. `apex-docs-product-agent` writes inline documentation into source files, so running it alongside an open review moves the tree under the reviewer and VOIDS the verdict (§ Pin the tree before you open a gate). Dispatch it only after the reviewer has returned.
 2. **Cross-family review** (`cross_model_review: true`; auto for auth/security/data/`risk: high`).
    Use the other model family when both are available: **Codex built -> Claude reviews** (`model:
-   opus` for the high-risk set); **Opus built -> Codex reviews** (`references/codex-review.md`).
+   opus` for the high-risk set); **Claude-fallback built (Sonnet 5) -> Codex reviews** (`references/codex-review.md`).
    Give it the spec + diff only -- **never the other reviewer's findings**. A finding both raise ->
    resolve before "complete"; only one -> decisions table, human adjudication. If Codex is still
    unavailable after Claude-fallback builds, a diff-bound attended human review substitutes for the
@@ -364,6 +369,8 @@ never changed, only what was inside it, so a `git status` check would have seen 
    (Same mutex name, 30 s wait, and AbandonedMutexException handling as
    `codex-dispatch.ps1`.) For a cross-family Codex review dispatched through the wrapper, pass
    `-ReviewedRunId <build run_id>` to `codex-dispatch.ps1`; the wrapper records the binding.
+
+   **Known limit — digest binding.** The wrapper-ledger digest binding that `apex-family-gate.ps1` enforces covers **wrapper-launched reviews of a task worktree as the coder left it**. How that binding should extend to integrated-tree reviews and to reviews after the documentation writes is **UNRESOLVED**, and is owned by the queued retro spec set (`~/apex/docs/research/artemis-retro-2026-07-29.md`, items P1–P7). Do not infer a rule for those cases from this one.
 5. **Completion gate -- run it; do not eyeball the ledger:**
 
    ```powershell
@@ -375,9 +382,9 @@ never changed, only what was inside it, so a `git status` check would have seen 
    mark complete. Non-zero (12 = same-family refusal; 13 = unverifiable) -- **REFUSE completion**
    until a cross-family review or build-bound attended human review exists. AFK -- park instead of
    blocking forever. A same-family automated review is advisory only and cannot satisfy this gate.
-6. `apex-docs-technical-agent` -- writes the handoff, archives the spec to `docs/changes/done/`, and
-   folds the shipped capability into `overview.md` as one line (merge-on-archive, ADR-014).
-7. Report: handoff path; reviewer verdict; decisions count.
+6. `apex-docs-technical-agent` -- writes the handoff and archives the spec to `docs/changes/done/`.
+7. **Host review of docs-agent output.** Before the session closes, the host reads what the docs agents wrote and either **accepts** it, or **rejects it and re-dispatches the agent with the findings so the agent REVISES its own artifacts in place**. All three artifacts are rewritable files, so revision is **idempotent by construction** — a re-dispatch overwrites the handoff and `docs/status.md` rather than appending. The one exception is the archival file move: once done it **stands and is not redone**; a re-dispatch skips it. **The host never edits the agents' output itself** — that would be a mechanical edit (ADR-046 D1). This is the control that makes the D6 AFK carve-out safe; without it the carve-out is unbacked.
+8. Report: handoff path; reviewer verdict; decisions count.
 
 ## Autonomy, permissions, hard blocks
 

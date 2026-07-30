@@ -33,8 +33,8 @@ Done when: <the task's done-when clause>
 
 ## Hazard selection (the Constraints slot)
 
-- Source: the loaded impl cores (apex-coding-principles + bound stack NEVER/ALWAYS) + the spec's
-  Specialist Context.
+- Source: the loaded `apex-coding-principles/impl.md` core NEVER/ALWAYS (there are no bound stack
+  skills — ADR-036) + the spec's Specialist Context.
 - Pick **3–7 this task can actually violate** (a DB task gets the schema hazards, not the a11y
   rules). Never paste a whole NEVER/ALWAYS list.
 - Skip generic hygiene entirely (validation, HTTP codes, naming-in-general, DRY,
@@ -51,6 +51,8 @@ genuinely blocked — then say exactly what blocked you. Safe local choice (make
 deviations): which existing pattern to mirror, a local name. Blocker (report in `blocker`, don't
 improvise): an acceptance criterion that cannot pass as written, a needed file outside the
 authorized set, a missing credential."
+
+The coder runs the recipe **inside its own worktree** and iterates to green — that is what this clause instructs. It is not the authoritative pass, and it is not an adjudication. On the integration tree the ownership is split (ADR-046 D1; apex-code § Verify). The host EXECUTES the recipe as mechanics from the orchestrator's wave plan and returns the raw results; the ORCHESTRATOR owns the pass/fail adjudication and the routing that follows. Both cadences are required; neither replaces the other.
 
 ## Reading the completion — the LAST agent_message, never any other
 
@@ -82,13 +84,15 @@ message by construction). If you are reading the **log** instead — a progress 
 regex over `"status":` — you must take the **last** `agent_message` and discard the rest. Never the
 first match, never "the first `done`".
 
-## Completion routing (host reads exit code + `.final` JSON)
+## Completion routing (orchestrator-owned; the host reads the exit code + `.final` JSON and reports them)
 
-| Signal | Meaning | Host action |
+| Signal | Meaning | Orchestrator routing |
 |---|---|---|
 | `status: done` | complete | run the spec's Verification Recipe on the diff (trust but verify) → check the task off |
 | `status: done_with_concerns` | complete + flags | verify as above; copy `deviations` / `unresolved` into the decisions table |
 | `status: blocked` (+ `blocker`) | **spec defect** | route through Forks (capture-at-halt). Never model-fallback — a spec defect survives the swap |
-| non-zero exit / no valid `.final`, log tail shows a rate-limit / quota signature | **paused, not failed** | park the task + checkpoint In-Flight; operator choice: wait for quota reset (re-dispatch Codex) vs Opus fallback now |
+| non-zero exit / no valid `.final`, log tail shows a rate-limit / quota signature | **paused, not failed** | park the task + checkpoint In-Flight; operator choice: wait for quota reset (re-dispatch Codex) vs Claude fallback (Sonnet 5) now |
 | non-zero exit, any other signature | process failure | one re-dispatch; if it repeats, treat as verify-fail (effort ladder → fallback) |
-| verify recipe fails on a `done` diff | verify-fail | effort-bump ladder (ADR-030) → `ultra` rung (ADR-034) → Opus fallback per SKILL.md § Model fallback |
+| verify recipe fails on a `done` diff | verify-fail | effort-bump ladder (ADR-030) → `ultra` rung (ADR-034) → Claude fallback (Sonnet 5) per SKILL.md § Fallback |
+
+The host reads the signal and hands it up; **which rung fires — re-dispatch, effort bump, fork, park — is the orchestrator's call**, not the host's (ADR-046 D1). **Interim:** until the build-orchestrator agent contract ships, the host performs that routing itself as **interim executor** — a recorded transition state, not doctrine.

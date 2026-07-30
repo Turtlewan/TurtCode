@@ -78,7 +78,7 @@ brief as concrete entries. **Guardrail:** if the output is vibes/trends rather t
 replaces it.
 
 **Path B — pull one library style.** Fixed-aesthetic style skills are **not** auto-loaded (they
-collide and tax compliance — [[design-style-on-demand]]); they live shelved in
+collide and tax compliance — that is exactly why the shelf exists); they live shelved in
 `~/.claude/style-library/`.
 1. Read `~/.claude/style-library/INDEX.md`; match the brief's feel to **at most one** style.
 2. Propose it; on confirmation install that one. **Never more than one** — that re-creates the
@@ -88,7 +88,7 @@ A library style's rule never outranks the brief's art-direction + forbidden patt
 
 **Optional — concept mockups to align on direction.** Before locking the brief you may generate a
 few concept mockups to discuss the *feel* (`imagegen-frontend-web` / `-mobile`, `brandkit` for
-identity boards). Opt-in, never reflexive ([[no-reflexive-ui-render-prompt]]). Discussion artifacts —
+identity boards). Opt-in, never reflexive. Discussion artifacts —
 ping-pong to converge, then seed the agreed feel into the brief. A mockup is a reference, never a
 spec the coder traces.
 
@@ -141,7 +141,7 @@ baseline now and fold the feel in later. Set the brief **once** — don't re-run
 - **Interactive co-review (the user's eyes — default when present):** write the mockup to
   **`docs/research/mockups/<name>.html`** (a scratch location for throwaway mockups); the user views it
   in **Cursor's in-editor render** — Claude's edit lands as a live diff *and* the pane updates, one
-  window ([[cursor-coedit-flow]]). Loop: user comments → Claude edits (view-layer) → re-view →
+  window (Cursor co-editing: your edit lands as a live diff in the file the user has open, and the render pane updates in the same window). Loop: user comments → Claude edits (view-layer) → re-view →
   repeat to approval.
 - **Solo self-drive (Claude's eyes):** write logic-free HTML/CSS → render + screenshot via
   **Playwright MCP** (`browser_navigate` → `browser_take_screenshot`) → **Read** the PNG → critique
@@ -156,7 +156,7 @@ prototype the look as a web mockup, lock the brief, then use the target's native
 
 ## Live preview during build
 
-The coder (Codex `gpt-5.6-sol`; Opus on fallback) has **native vision and sees the render** — so a
+The coder (Codex `gpt-5.6-sol`; Sonnet 5 on fallback) has **native vision and sees the render** — so a
 visual divergence is fixed in the build like any other task. The live window is the **human's**
 eyes-on loop, not a capability workaround.
 
@@ -187,7 +187,7 @@ be reachable from the host session (local web; Mac-hosted app over LAN / Tailsca
 
 A fuller alternative to the text-first brief flow, for when the user wants to **design the UI
 visually before building**. **Opt-in only** — never auto-run, never auto-offered
-([[no-reflexive-ui-render-prompt]]). Invoke explicitly: "design this in Stitch/Bitrig", "/stitch",
+(never offer a design lane unprompted — the user invokes it). Invoke explicitly: "design this in Stitch/Bitrig", "/stitch",
 "/bitrig".
 
 | Target stack | Lane |

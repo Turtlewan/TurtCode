@@ -4,11 +4,13 @@ status: draft
 autonomy_level: L2
 # cross_model_review: true   # optional — high-stakes builds (auth / security / data). Runs an
 #                              independent 2nd review by a DIFFERENT model family than the builder
-#                              (family-aware: Codex-built → Opus reviews; Opus-built → Codex reviews).
-#                              Runs via headless `codex exec` on any host (ADR-027). Advisory only.
-# coder_model: codex         # optional — pin this WHOLE spec to one coder. Value from status.md
-#                              coder_models {codex|opus}. Absent → Codex (the default); opus pins the
-#                              whole spec to the Claude fallback coder (Sonnet 5 — A1, session-79b; lineage ADR-027).
+#                              (family-aware: Codex-built → Claude reviews; Claude-fallback-built (Sonnet 5) → Codex reviews).
+#                              Cross-family (ADR-032/034): the Claude side is an `apex-reviewer`
+#                              subagent; the Codex side is headless `codex exec`. Findings are
+#                              advisory, but a Codex BLOCK verdict routes exit 67 — a hard stop.
+# coder_model: codex         # optional — pin this WHOLE spec to one coder. Enum {codex|sonnet}, full
+#                              stop. Absent → codex (the default); sonnet pins the whole spec to the
+#                              Claude fallback coder (Sonnet 5 — A1, session-79b; ADR-045).
 # coder_effort: medium       # optional — Codex reasoning effort {low|medium|high|xhigh|max|ultra}.
 #                              Absent → medium (default). low = trivial/mechanical; high = risk:high /
 #                              auth / security / data / hard; xhigh = hardest async/eval work only;
@@ -17,8 +19,9 @@ autonomy_level: L2
 #                              in-model subagents, counts DOUBLE against max_parallel_codex, not for
 #                              routine use pending head-to-head eval vs max (ADR-030).
 # max_parallel_codex: 2      # optional — cap on concurrent `codex exec` subprocesses per wave
-#                              (ADR-028). 1 = sequential. Absent → status.md default (auto-sized
-#                              min(4, floor(cores/2)−1), fallback 3). Machine-protection, not a quota cap.
+#                              (ADR-028). 1 = sequential. Absent → **2** (A2, session-79b; ADR-028 as
+#                              amended). Formula min(4, floor(cores/2)−1) documented for reference only.
+#                              Machine-protection, not a quota cap.
 ---
 
 # Spec: {title}
@@ -78,17 +81,20 @@ Simplicity check: {considered simpler approach? yes/no — if yes, why this vers
 - [ ] Task 3: {description} — files: {full/path/d.ts} — done when: {observable outcome}
 
 ## Wave plan
-<!-- Required for specs with ≥3 tasks. Planning derives this from stated dependencies; coding
-     executes it verbatim (no dependency inference). Tasks in the same wave run in parallel.
-     Under ADR-027 the coder is Codex by default for every task (Opus is the manual fallback,
-     handled at build time by apex-code) — emit the normal untagged wave plan; don't tag ▸opus
+<!-- Required for specs with ≥3 tasks. Planning derives this from stated dependencies. The emitted
+     plan is a PROPOSAL: dependencies are binding, grouping is advisory, and final selection and
+     sequencing are orchestrator-owned (ADR-046 D1). Tasks in the same proposed wave run in parallel.
+     Under ADR-027 as amended (A1/ADR-045) the coder is Codex by default for every task (Sonnet 5 is the
+     fallback, reached only via the three fallback triggers and handled at build time by apex-code) — emit
+     the normal untagged wave plan; don't tag ▸sonnet
      proactively. Full rubric in apex-plan § Model-routing build planning. -->
 Wave 1: [task 1, task 2] | Wave 2: [task 3]
 
 ## Permissions
 
-The following actions will run autonomously during build.
-Approving this spec approves all of them.
+The following NON-CRITICAL actions will run autonomously during build. Approving this spec approves all of them.
+Critical paths — .env · migrations · auth/authz/crypto · CI config · dependency manifests and lockfiles · infra-as-code · secrets/keys/certs · host-state (docs/status.md, root AGENTS.md, root CLAUDE.md, docs/changes/, docs/handoff/, the run ledger) · the permission settings and the hooks — are NEVER pre-authorised by this section. They need a live attended confirmation at build time, and an AFK run parks them (D3, ADR-046; apex-governance is canonical). (Sole exception: the docs agents' three host's-pen artifacts — the handoff, docs/status.md, and spec archival — under D6.)
+docs/audit/ is different and stricter: TIER-1, refused outright on a path match. No confirmation authorises a write there — not attended, not by any switch, not by this section. (D5's append-only exception is doctrine pending a content-aware classifier change; it is not a live permission.)
 
 ### File Operations
 | Action | Paths |
