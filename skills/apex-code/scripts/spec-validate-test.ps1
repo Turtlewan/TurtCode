@@ -1,9 +1,19 @@
+[CmdletBinding()]
+param(
+    [string]$CorpusManifestPath = 'fixtures/spec-corpus/expected.tsv'
+)
+
 $ErrorActionPreference = 'Stop'
 
 $validator = Join-Path $PSScriptRoot 'apex-spec-validate.ps1'
+$sweep = Join-Path $PSScriptRoot 'spec-contract-sweep.ps1'
+if (-not [System.IO.Path]::IsPathRooted($CorpusManifestPath)) {
+    $CorpusManifestPath = Join-Path $PSScriptRoot $CorpusManifestPath
+}
 $fixtureRoot = Join-Path $env:TEMP ('apex-spec-validate-test-' + [guid]::NewGuid().ToString('N'))
 $utf8 = New-Object System.Text.UTF8Encoding($false)
 $failures = 0
+$assertions = 0
 $tripleBacktick = (([string][char]96) * 3) -join ''
 $tripleTilde = '~' * 3
 $quadrupleTilde = '~' * 4
@@ -38,6 +48,7 @@ function Assert-Case {
         [string]$ExpectedFailure
     )
 
+    $script:assertions++
     $result = Invoke-Validator -SpecPath (Write-Fixture -Name $Name -Content $Content)
     $exitMatches = $result.ExitCode -eq $ExpectedExit
     $failureMatches = $true
@@ -59,6 +70,99 @@ function Assert-Case {
     }
     foreach ($line in $result.Output) {
         Write-Host ('        {0}' -f $line)
+    }
+}
+
+function Get-CheckNameSet {
+    param([string[]]$Output)
+
+    return @(
+        $Output |
+            ForEach-Object {
+                $match = [regex]::Match($_, '^FAIL (?<Check>[A-Z][A-Z0-9-]*):')
+                if ($match.Success) {
+                    $match.Groups['Check'].Value
+                }
+            } |
+            Sort-Object -Unique
+    )
+}
+
+function Assert-CorpusCase {
+    param(
+        [Parameter(Mandatory = $true)][string]$FixturePath,
+        [Parameter(Mandatory = $true)][int]$ExpectedExit,
+        [string[]]$ExpectedChecks = @()
+    )
+
+    $script:assertions++
+    $result = Invoke-Validator -SpecPath $FixturePath
+    $actualChecks = @(Get-CheckNameSet -Output $result.Output)
+    $expectedCheckSet = @($ExpectedChecks | Sort-Object -Unique)
+    $exitMatches = $result.ExitCode -eq $ExpectedExit
+    $checksMatch = [string]::Equals(
+        ($actualChecks -join ','),
+        ($expectedCheckSet -join ','),
+        [System.StringComparison]::Ordinal
+    )
+
+    if ($exitMatches -and $checksMatch) {
+        Write-Host ('  PASS  corpus {0}' -f $FixturePath) -ForegroundColor Green
+        return
+    }
+
+    $script:failures++
+    Write-Host ('  FAIL  corpus {0}' -f $FixturePath) -ForegroundColor Red
+    Write-Host (
+        '        expected exit {0}, checks [{1}]; got exit {2}, checks [{3}]' -f
+            $ExpectedExit,
+            ($expectedCheckSet -join ', '),
+            $result.ExitCode,
+            ($actualChecks -join ', ')
+    ) -ForegroundColor Red
+}
+
+function Invoke-Sweep {
+    param(
+        [Parameter(Mandatory = $true)][string]$Root,
+        [string[]]$Exclude = @()
+    )
+
+    $arguments = @(
+        '-NoProfile',
+        '-ExecutionPolicy', 'Bypass',
+        '-File', $sweep,
+        '-Root', $Root
+    )
+    if ($Exclude.Count -gt 0) {
+        $arguments += '-Exclude'
+        $arguments += $Exclude
+    }
+
+    $output = @(& powershell.exe @arguments 2>&1 | ForEach-Object { $_.ToString() })
+    return [pscustomobject]@{
+        ExitCode = $LASTEXITCODE
+        Output = $output
+    }
+}
+
+function Assert-SuiteCase {
+    param(
+        [Parameter(Mandatory = $true)][string]$Name,
+        [Parameter(Mandatory = $true)][bool]$Passed,
+        [string[]]$Details = @()
+    )
+
+    $script:assertions++
+    if ($Passed) {
+        Write-Host ('  PASS  {0}' -f $Name) -ForegroundColor Green
+        return
+    }
+
+    $script:failures++
+    Write-Host ('  FAIL  {0}' -f $Name) -ForegroundColor Red
+    foreach ($detail in $Details) {
+        Write-Host ('        {0}' -f $detail) -ForegroundColor Red
     }
 }
 
@@ -203,6 +307,124 @@ try {
     $pseudoFenceText = '    ' + $tripleBacktick + "text`nTBD remains visible because the fences are indented four spaces.`n    " + $tripleBacktick
     $pseudoFence = $good.Replace('No specialist context is required.', $pseudoFenceText)
     Assert-Case 'indented-pseudo-fence-marker' $pseudoFence 1 'FAIL NO-UNRESOLVED-MARKERS'
+
+    $manifestFullPath = [System.IO.Path]::GetFullPath($CorpusManifestPath)
+    $corpusRoot = Split-Path -Parent $manifestFullPath
+    $manifestRows = @(
+        [System.IO.File]::ReadAllLines($manifestFullPath, $utf8) |
+            Where-Object { -not [string]::IsNullOrWhiteSpace($_) } |
+            ForEach-Object {
+                $fields = $_ -split "`t", -1
+                if ($fields.Count -ne 3) {
+                    throw ('Invalid corpus manifest row: {0}' -f $_)
+                }
+
+                $expectedChecks = @()
+                if ($fields[2] -ne '-') {
+                    $expectedChecks = @($fields[2] -split ',' | ForEach-Object { $_.Trim() })
+                }
+
+                [pscustomobject]@{
+                    RelativePath = $fields[0]
+                    ExpectedExit = [int]$fields[1]
+                    ExpectedChecks = $expectedChecks
+                }
+            }
+    )
+
+    foreach ($manifestRow in $manifestRows) {
+        $fixturePath = Join-Path $corpusRoot $manifestRow.RelativePath
+        Assert-CorpusCase `
+            -FixturePath $fixturePath `
+            -ExpectedExit $manifestRow.ExpectedExit `
+            -ExpectedChecks $manifestRow.ExpectedChecks
+    }
+
+    $hashesBefore = @{}
+    foreach ($corpusFile in [System.IO.Directory]::GetFiles($corpusRoot, '*', [System.IO.SearchOption]::AllDirectories)) {
+        $hashesBefore[$corpusFile] = (Get-FileHash -LiteralPath $corpusFile -Algorithm SHA256).Hash
+    }
+
+    $expectedPassCount = @($manifestRows | Where-Object { $_.ExpectedExit -eq 0 }).Count
+    $expectedFailCount = @($manifestRows | Where-Object { $_.ExpectedExit -eq 1 }).Count
+    $sweepResult = Invoke-Sweep -Root $corpusRoot
+    $reportLines = @($sweepResult.Output | Where-Object { $_ -match '^(?:PASS|FAIL|ERROR|SKIP) ' })
+    $reportPathsMatch = $reportLines.Count -eq $manifestRows.Count
+    foreach ($manifestRow in $manifestRows) {
+        $normalizedFixturePath = $manifestRow.RelativePath.Replace('\', '/')
+        $escapedFixturePath = [regex]::Escape($normalizedFixturePath)
+        $matchingReportLines = @($reportLines | Where-Object {
+            $_ -match ('^(?:PASS {0}$|(?:FAIL|ERROR) {0}:)' -f $escapedFixturePath)
+        })
+        if ($matchingReportLines.Count -ne 1) {
+            $reportPathsMatch = $false
+            break
+        }
+    }
+    $expectedSummary = 'SWEEP contract 1.0.0 - {0} specs, {1} pass, {2} fail, 0 error' -f `
+        $manifestRows.Count, $expectedPassCount, $expectedFailCount
+    $hashesAfter = @{}
+    foreach ($corpusFile in [System.IO.Directory]::GetFiles($corpusRoot, '*', [System.IO.SearchOption]::AllDirectories)) {
+        $hashesAfter[$corpusFile] = (Get-FileHash -LiteralPath $corpusFile -Algorithm SHA256).Hash
+    }
+    $hashesUnchanged = ($hashesBefore.Count -eq $hashesAfter.Count)
+    foreach ($corpusFile in $hashesBefore.Keys) {
+        if ((-not $hashesAfter.ContainsKey($corpusFile)) -or ($hashesAfter[$corpusFile] -ne $hashesBefore[$corpusFile])) {
+            $hashesUnchanged = $false
+            break
+        }
+    }
+    $sweepPassed = (
+        ($sweepResult.ExitCode -eq 0) -and
+        $reportPathsMatch -and
+        ($sweepResult.Output -contains $expectedSummary) -and
+        $hashesUnchanged
+    )
+    Assert-SuiteCase -Name 'corpus-sweep' -Passed $sweepPassed -Details @(
+        ('expected exit 0, got {0}' -f $sweepResult.ExitCode),
+        ('expected {0} report lines, got {1}' -f $manifestRows.Count, $reportLines.Count),
+        ('one report line per manifest fixture: {0}' -f $reportPathsMatch),
+        ('expected summary "{0}"' -f $expectedSummary),
+        ('corpus hashes unchanged: {0}' -f $hashesUnchanged),
+        ($sweepResult.Output -join [Environment]::NewLine)
+    )
+
+    $excludedRow = $manifestRows[0]
+    $excludedFixtureName = Split-Path -Leaf $excludedRow.RelativePath
+    $excludedPassCount = $expectedPassCount
+    $excludedFailCount = $expectedFailCount
+    if ($excludedRow.ExpectedExit -eq 0) {
+        $excludedPassCount--
+    }
+    else {
+        $excludedFailCount--
+    }
+    $excludedSweepResult = Invoke-Sweep -Root $corpusRoot -Exclude $excludedFixtureName
+    $normalizedExcludedPath = $excludedRow.RelativePath.Replace('\', '/')
+    $expectedSkip = 'SKIP {0} (excluded)' -f $normalizedExcludedPath
+    $expectedExcludedSummary = 'SWEEP contract 1.0.0 - {0} specs, {1} pass, {2} fail, 0 error' -f `
+        $manifestRows.Count, $excludedPassCount, $excludedFailCount
+    $excludedSweepPassed = (
+        ($excludedSweepResult.ExitCode -eq 0) -and
+        ($excludedSweepResult.Output -contains $expectedSkip) -and
+        ($excludedSweepResult.Output -contains $expectedExcludedSummary) -and
+        (@($excludedSweepResult.Output | Where-Object {
+            $_ -match '^(?:PASS|FAIL|ERROR) ' -and $_ -like ('*' + $normalizedExcludedPath + '*')
+        }).Count -eq 0)
+    )
+    Assert-SuiteCase -Name 'corpus-sweep-exclude' -Passed $excludedSweepPassed -Details @(
+        ('expected exit 0, got {0}' -f $excludedSweepResult.ExitCode),
+        ('expected skip "{0}"' -f $expectedSkip),
+        ('expected summary "{0}"' -f $expectedExcludedSummary),
+        ($excludedSweepResult.Output -join [Environment]::NewLine)
+    )
+
+    $missingRoot = Join-Path $fixtureRoot 'missing-corpus-root'
+    $missingRootResult = Invoke-Sweep -Root $missingRoot
+    Assert-SuiteCase `
+        -Name 'corpus-sweep-missing-root' `
+        -Passed ($missingRootResult.ExitCode -eq 2) `
+        -Details @('expected exit 2, got {0}' -f $missingRootResult.ExitCode)
 }
 finally {
     Remove-Item -LiteralPath $fixtureRoot -Recurse -Force -ErrorAction SilentlyContinue
@@ -210,7 +432,7 @@ finally {
 
 Write-Host ''
 if ($failures -eq 0) {
-    Write-Host 'ALL 19 CASES PASS' -ForegroundColor Green
+    Write-Host ('ALL {0} CASES PASS' -f $assertions) -ForegroundColor Green
     exit 0
 }
 

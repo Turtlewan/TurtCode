@@ -1,28 +1,25 @@
 ---
 name: project-deployment
-description: "DeepSeek cloud-API coding backend ALREADY works on Windows (env-var swap). Mac is needed only for macOS tooling (Xcode/Swift/Bitrig). Mac Mini = dev+prod target; AWS = future scale."
+description: "DeepSeek env-var-swap coding backend is ARCHIVED (ADR-027, recovery-only) — Mac is needed only for macOS tooling (Xcode/Swift/Bitrig). Mac Mini = dev+prod target; AWS = future scale."
 metadata: 
   node_type: memory
   type: project
   originSessionId: 9c0e3910-746f-4375-a64f-5fc0800e815b
+  modified: 2026-07-29T09:15:14.344Z
 ---
 
 User's deployment setup: Mac Mini is both the development machine and the production server.
 There is no separate dev/prod environment initially — the same machine runs both.
 
-**Two-machine working model (corrected 2026-06-15 — supersedes the 2026-06-01 "planning-only" claim):**
-The Windows machine is the *default* planning seat, but it is **NOT** code-incapable. A **DeepSeek
-cloud-API coding backend already works on Windows**: `DEEPSEEK_API_KEY` is set (User scope) and
-switching to coding mode is a pure env-var swap — `ANTHROPIC_BASE_URL=https://api.deepseek.com/anthropic`
-+ `ANTHROPIC_AUTH_TOKEN` + `ANTHROPIC_MODEL=deepseek-v4-flash`, then restart `claude` (see
-`apex/BACKEND-ROUTING.md` §Switching backends). The endpoint is Anthropic-compatible cloud, reachable
-from anywhere; mode detection (`backend-session-start.ps1`) keys only on the `deepseek` substring — no
-OS gate. So coding sessions, the write-guard lift, and `build/test/lint` run on Windows today.
+**DeepSeek backend status (corrected 2026-07-29):** the env-var-swap DeepSeek coding backend
+described in earlier sessions is **archived** (ADR-027, recovery-only) — it is not the live coding
+path. The live coder is Codex `gpt-5.6-sol` (fallback Sonnet 5, A1); see [[sol-deliberation-feed-evidence]]
+and the model-routing table in `~/.claude/CLAUDE.md`.
 
 **Two distinct gates — do not conflate them (this conflation was the bug):**
-- **`coding-session`** — needs a DeepSeek coding session. **Runnable on Windows** via the env-var swap.
-  (e.g. destructive-command-guard hook, pro-mode toggle's PowerShell path, context-window probe,
-  cross-model-review.)
+- **`coding-session`** — the Windows machine is code-capable for the current (Codex) coding path, not
+  just planning. (e.g. destructive-command-guard hook, pro-mode toggle's PowerShell path, context-window
+  probe, cross-model-review.)
 - **`mac-gated`** — needs genuine **macOS tooling** (`xcodebuild`/Swift/Xcode, Bitrig). These truly
   cannot run on Windows under any backend.
 
@@ -45,13 +42,13 @@ macOS-tooling items — but "the Mac is being bought" must not be read as "Windo
   Remote Control (full two-way phone drive + push notifications) + Dispatch + Claude Code on Web. No
   VPS needed for *access*. Remote Control/Channels work on the current Windows box today (v2.1.80+) —
   phone access to interactive sessions needs no Mac Mini. The old "build a VPS access layer" framing is wrong.
-- **Scheduled/headless autonomous *coding* bills to DeepSeek's pool, NOT the Anthropic credit pool** —
-  so [[claude-agent-sdk-billing-split]] applies to headless *Claude/planning* runs, not to coding. Cost
-  of unattended coding builds is a non-issue.
+- **Scheduled/headless autonomous *coding* bills to Codex's own subscription/quota, NOT the Anthropic
+  credit pool** — so [[claude-agent-sdk-billing-split]] applies to headless *Claude/planning* runs, not
+  to coding. Cost of unattended coding builds is a non-issue.
 - **Cloud Routines CANNOT run APEX coding** (Claude-only on Anthropic infra, fresh-clone no local state,
-  won't honour the DeepSeek `ANTHROPIC_BASE_URL` swap). The real autonomous-coding path = **headless-local**
-  (`claude -p`/`--bg` + DeepSeek base URL + ready spec + `--permission-mode dontAsk` + allow-list +
-  `--max-budget`) on the always-on Mac Mini, with HITL/alerts over Channels. Build is **host-gated** (Mac
-  Mini), not infra-gated; defer until the host is live, then one small spec wires recipe + safety envelope.
+  can't drive the external Codex CLI subprocess). The real autonomous-coding path = **headless-local**
+  (`claude -p`/`--bg` + ready spec + `--permission-mode dontAsk` + allow-list + `--max-budget`) on the
+  always-on Mac Mini, with HITL/alerts over Channels. Build is **host-gated** (Mac Mini), not
+  infra-gated; defer until the host is live, then one small spec wires recipe + safety envelope.
 
-Related: [[parked-discussion-handover]] · [[claude-agent-sdk-billing-split]]
+Related: [[claude-agent-sdk-billing-split]]

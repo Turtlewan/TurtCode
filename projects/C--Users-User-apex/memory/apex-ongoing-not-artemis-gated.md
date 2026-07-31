@@ -5,6 +5,7 @@ metadata:
   node_type: memory
   type: project
   originSessionId: ef435ab7-d2cc-45b1-83a4-165858bed74b
+  modified: 2026-07-29T09:17:14.393Z
 ---
 
 APEX itself is the product. Improving it (absorbing ideas from other skill-systems, refreshing
@@ -15,4 +16,4 @@ Artemis is one downstream consumer / forcing-function, **not** the sole purpose.
 "Finalisation initiative — gearing APEX for the Artemis platform" section is one initiative among
 many, not the master gate. Do not frame session recaps as "we're only readying APEX for Artemis."
 
-Related: [[apex-sole-coding-workflow]], [[per-project-what-why-docs]].
+Related: [[apex-sole-coding-workflow]].

@@ -34,6 +34,9 @@ down, ask: **would a bare agent, with nothing loaded, already do this?** If yes,
 
 - Draft the message, show it, get approval, then commit. Record the short SHA.
 - Commit per-spec when a spec completes; sweep the remainder at session end.
+- Per-task commits on transient `codex/<task-id>` worktree branches are build mechanics
+  (ADR-046 D1): the draft→show→approve exchange governs integration-branch commits (per-spec,
+  session-end), not those throwaway branches, which are torn down post-integration per D8.
 - Hard blocks, regardless of who asks: push to main · drop a table.
 - **Merging a PR** (amended 2026-07-23, owner-decided): allowed ONLY on explicit approval in
   a **genuine live user message this session** that names the specific PR(s) — never inferred

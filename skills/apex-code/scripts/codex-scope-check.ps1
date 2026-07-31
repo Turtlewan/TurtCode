@@ -529,13 +529,18 @@ if ($EncodingScan) {
 if ($Snapshot) {
     $dirty = Get-DirtySet
     $states = [ordered]@{}
-    foreach ($p in $dirty.Keys) { $states[$p] = Get-PathState $p }
+    $statuses = [ordered]@{}
+    foreach ($p in $dirty.Keys) {
+        $states[$p] = Get-PathState $p
+        $statuses[$p] = [string]$dirty[$p]
+    }
 
     $state = [ordered]@{
         task     = $Task
         head     = (Invoke-Git rev-parse HEAD)
         dirty    = @($dirty.Keys)
         states   = $states
+        statuses = $statuses
         takenUtc = (Invoke-Git log -1 --format=%cI)   # no Get-Date: keep it git-sourced
     }
     $state | ConvertTo-Json -Depth 5 | Out-File -FilePath $snapPath -Encoding utf8
@@ -588,6 +593,10 @@ if ($snap.PSObject.Properties.Name -contains 'states' -and $snap.states) {
 }
 $preDirty = @{}
 foreach ($p in @($snap.dirty)) { $preDirty[(Normalize $p)] = $true }
+$preStatus = @{}
+if ($snap.PSObject.Properties.Name -contains 'statuses' -and $snap.statuses) {
+    foreach ($prop in $snap.statuses.PSObject.Properties) { $preStatus[(Normalize $prop.Name)] = [string]$prop.Value }
+}
 
 # Split on commas as well as array elements: a caller invoking this from bash passes
 # -Authorized 'a.py','b.py' as ONE string "a.py,b.py", which then matches nothing -- and every
@@ -672,12 +681,40 @@ function Test-IsRuntimePath([string]$NormalizedPath) {
     return $false
 }
 
+# Three-way name state:
+#   SANCTIONED: .codex-scratch is the only scratch directory name a coder may create.
+#   DEPRECATED-BUT-EXCLUDED: .scratch, .apex-tmp, and .sandbox-cache remain excluded only to reduce
+#   noise in existing repos; do not use them for new work, and a future revision may stop excluding them.
+#   TOOL CACHES: .pytest_cache, .mypy_cache, and .ruff_cache are shared at tree-pin.ps1 parity.
+# Everything else flags, including invented prefixes and task-suffixed variants.
+$derivedCacheExclusions = @(
+    '.codex-scratch',
+    '.scratch',
+    '.apex-tmp',
+    '.sandbox-cache',
+    '.pytest_cache',
+    '.mypy_cache',
+    '.ruff_cache'
+)
+# These tree-pin.ps1 entries are deliberately NOT shared with scope-check's exact exclusion list.
+$derivedCacheDivergence = @('.venv', 'node_modules/.cache', '__pycache__', '.coverage')
+function Test-IsDerivedCachePath([string]$NormalizedPath) {
+    foreach ($prefix in $derivedCacheExclusions) {
+        if ($NormalizedPath.Equals($prefix, [System.StringComparison]::OrdinalIgnoreCase) -or
+                $NormalizedPath.StartsWith($prefix + '/', [System.StringComparison]::OrdinalIgnoreCase)) {
+            return $true
+        }
+    }
+    return $false
+}
+
 $resolvedRuntimeExclusionRoot = $null
 if (Test-Path -LiteralPath $RuntimeExclusionRoot -PathType Container) {
     $resolvedRuntimeExclusionRoot = (Resolve-Path -LiteralPath $RuntimeExclusionRoot).Path.TrimEnd('\', '/')
 }
 $applyRuntimeExclusions = ($null -ne $resolvedRuntimeExclusionRoot -and
     $repo.TrimEnd('\', '/').Equals($resolvedRuntimeExclusionRoot, [System.StringComparison]::OrdinalIgnoreCase))
+$applyDerivedCacheExclusions = $true
 
 $curatedFiles = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
 $curatedDirs = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
@@ -685,32 +722,32 @@ function Test-IsHostCurated([string]$n) {
     return $curatedFiles.Contains($n) -or $curatedDirs.Contains($n)
 }
 
-if ($applyRuntimeExclusions) {
-    try {
-        $indexInventory = [string]::Join('', [string[]]@(Invoke-Git ls-files -z))
-        $headInventory = [string]::Join('', [string[]]@(Invoke-Git ls-tree -r --name-only -z HEAD))
-        foreach ($inventory in @($indexInventory, $headInventory)) {
-            foreach ($entry in ($inventory -split "`0")) {
-                if ($entry.Length -eq 0) { continue }
-                $curatedPath = Normalize $entry
-                if (-not $curatedPath) { continue }
-                [void]$curatedFiles.Add($curatedPath)
+try {
+    $indexInventory = [string]::Join('', [string[]]@(Invoke-Git ls-files -z))
+    $headInventory = [string]::Join('', [string[]]@(Invoke-Git ls-tree -r --name-only -z HEAD))
+    foreach ($inventory in @($indexInventory, $headInventory)) {
+        foreach ($entry in ($inventory -split "`0")) {
+            if ($entry.Length -eq 0) { continue }
+            $curatedPath = Normalize $entry
+            if (-not $curatedPath) { continue }
+            [void]$curatedFiles.Add($curatedPath)
 
-                $segments = @($curatedPath -split '/')
-                for ($i = 1; $i -lt $segments.Count; $i++) {
-                    [void]$curatedDirs.Add([string]::Join('/', [string[]]$segments[0..($i - 1)]))
-                }
+            $segments = @($curatedPath -split '/')
+            for ($i = 1; $i -lt $segments.Count; $i++) {
+                [void]$curatedDirs.Add([string]::Join('/', [string[]]$segments[0..($i - 1)]))
             }
         }
-    } catch {
-        $applyRuntimeExclusions = $false
-        Write-Host "[scope] WARNING: runtime inventory could not be built, so nothing was excluded." -ForegroundColor Yellow
     }
+} catch {
+    $applyRuntimeExclusions = $false
+    $applyDerivedCacheExclusions = $false
+    Write-Host "[scope] WARNING: runtime inventory could not be built, so nothing was excluded." -ForegroundColor Yellow
 }
 
 $collectWritten = [bool]$WrittenPathsFile
 $writtenSet = $null
 $runtimeExcludedCount = 0
+$derivedCacheExcludedCount = 0
 if ($collectWritten) {
     # Lockstep sibling: the non-collecting branch differs only by omitting writtenSet accumulation;
     # keep its GONE/untouched/isDirty classification line-for-line identical to this branch.
@@ -719,6 +756,24 @@ if ($collectWritten) {
         if ($applyRuntimeExclusions -and (Test-IsRuntimePath $n) -and -not (Test-IsHostCurated $n)) {
             $runtimeExcludedCount++
             continue
+        }
+        if ($applyDerivedCacheExclusions -and (Test-IsDerivedCachePath $n) -and -not (Test-IsHostCurated $n)) {
+            $wasPresentAtSnapshot = $preDirty.ContainsKey($n)
+            $isPresentNow = $false
+            $statusNowForExclusion = $null
+            foreach ($k in $nowDirty.Keys) {
+                if ((Normalize $k) -eq $n) {
+                    $isPresentNow = $true
+                    $statusNowForExclusion = [string]$nowDirty[$k]
+                    break
+                }
+            }
+            if ((-not $wasPresentAtSnapshot -and $isPresentNow -and $statusNowForExclusion -eq '!!') -or
+                    ($wasPresentAtSnapshot -and $preStatus.ContainsKey($n) -and $preStatus[$n] -eq '!!' -and
+                        (($isPresentNow -and $statusNowForExclusion -eq '!!') -or -not $isPresentNow))) {
+                $derivedCacheExcludedCount++
+                continue
+            }
         }
         if (Test-IsAuthorized $n) {
             $wasDirty = $preDirty.ContainsKey($n)
@@ -778,6 +833,24 @@ if ($collectWritten) {
             $runtimeExcludedCount++
             continue
         }
+        if ($applyDerivedCacheExclusions -and (Test-IsDerivedCachePath $n) -and -not (Test-IsHostCurated $n)) {
+            $wasPresentAtSnapshot = $preDirty.ContainsKey($n)
+            $isPresentNow = $false
+            $statusNowForExclusion = $null
+            foreach ($k in $nowDirty.Keys) {
+                if ((Normalize $k) -eq $n) {
+                    $isPresentNow = $true
+                    $statusNowForExclusion = [string]$nowDirty[$k]
+                    break
+                }
+            }
+            if ((-not $wasPresentAtSnapshot -and $isPresentNow -and $statusNowForExclusion -eq '!!') -or
+                    ($wasPresentAtSnapshot -and $preStatus.ContainsKey($n) -and $preStatus[$n] -eq '!!' -and
+                        (($isPresentNow -and $statusNowForExclusion -eq '!!') -or -not $isPresentNow))) {
+                $derivedCacheExcludedCount++
+                continue
+            }
+        }
         if (Test-IsAuthorized $n) { continue }
         if (Test-IsStatePath $n) { continue }
 
@@ -814,6 +887,9 @@ if ($collectWritten) {
 
 if ($runtimeExcludedCount -gt 0) {
     Write-Host "[scope] $runtimeExcludedCount runtime path(s) excluded (session churn under runtime dirs; index/HEAD-tracked paths still checked)."
+}
+if ($derivedCacheExcludedCount -gt 0) {
+    Write-Host "[scope] $derivedCacheExcludedCount derived-cache path(s) excluded (ignored + untracked + exact-list; every other ignored path is still checked)."
 }
 
 if ($WrittenPathsFile) {

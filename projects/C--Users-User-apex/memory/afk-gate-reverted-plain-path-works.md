@@ -5,6 +5,7 @@ metadata:
   node_type: memory
   type: feedback
   originSessionId: 243c0ad7-1738-4738-b48e-8bfe28f78d49
+  modified: 2026-07-29T09:17:10.152Z
 ---
 
 APEX's `!afk` gate (ADR-033 `afk-permission-mode`: `afk.on` flag, terminal arming, `afk-gate.js`
@@ -30,8 +31,7 @@ the list, it was fine. Let's get back to that."*
   armed this and left," check the hardening didn't invert the threat model. Here the round-2 BLOCK
   flipped Bash from denylist to allowlist — correct for a sandbox, fatal for an unattended run.
 - Ceremony added on top of a working path is a regression even when each step is individually
-  defensible. Ask "did the plain path actually fail?" before building the gate. See
-  [[removal-over-prohibition]] and [[one-shot-long-build-initiative]].
+  defensible. Ask "did the plain path actually fail?" before building the gate.
 
 ADR-033's *safety half* (A1 Opus end-of-run pass · A2 silent-regression lenses · A3 invariant
 freshness · A4 durable Codex dispatcher) is untouched and still in force — only the permission gate

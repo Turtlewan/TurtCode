@@ -5,6 +5,7 @@ metadata:
   node_type: memory
   type: feedback
   originSessionId: 3f7452ea-4c1d-4b5e-9bca-26f2ab523e58
+  modified: 2026-07-29T09:16:06.964Z
 ---
 
 On heavy CLIENT (Tauri/npm/cargo) builds, `codex exec` can die with a transient
@@ -31,13 +32,7 @@ residue (`.venv`/`.codex-scratch`) can defeat `git worktree remove` AND `rm -rf`
 after the codex-cleanup trick, `git worktree prune` clears the registry and leftover
 dirs are inert disk residue (elevated delete is the owner's call).
 
-**Third flavor (2026-07-09 mandate run):** `codex exec` can hang indefinitely on
-"Reading additional input from stdin" when dispatched with an open stdin pipe —
-no progress, no exit. Fix: kill and re-dispatch with stdin closed
-(`codex exec ... </dev/null`). Worth putting `</dev/null` in every scripted
-`codex exec` dispatch from the start.
-
-**Fourth flavor (2026-07-17, ask-navigate-client):** the sandbox DETERMINISTICALLY
+**Third flavor (2026-07-17, ask-navigate-client):** the sandbox DETERMINISTICALLY
 blocks vitest (esbuild parent-dir access loading vite.config.ts) — every client
 task ships untested test code, and full-App-mount tests then fail natively one
 missing gateway-mock export per fix round (5 rounds that day; 3 ended as host

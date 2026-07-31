@@ -5,6 +5,7 @@ metadata:
   node_type: memory
   type: project
   originSessionId: 38e016f5-d77a-4bfe-979d-8200d06882ef
+  modified: 2026-07-29T09:17:22.802Z
 ---
 
 The `~/.claude` git repo's `.gitignore` is a blanket `*` + `!.gitignore` — it ignores
@@ -20,4 +21,4 @@ Confirm a file is tracked first with `git ls-files <path>`.
 
 Note: `~/apex` (the APEX docs/history repo, holding `SKILL-HISTORY.md`, `SKILLS.md`, `docs/`)
 uses a normal gitignore — standard `git add` by name works there. The actual skill `.md` files
-live only in `~/.claude/skills/` (not mirrored into `~/apex`). Related: [[skill-authoring-workflow]].
+live only in `~/.claude/skills/` (not mirrored into `~/apex`).

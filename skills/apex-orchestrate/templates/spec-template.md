@@ -22,9 +22,13 @@ autonomy_level: L2
 #                              (ADR-028). 1 = sequential. Absent → **2** (A2, session-79b; ADR-028 as
 #                              amended). Formula min(4, floor(cores/2)−1) documented for reference only.
 #                              Machine-protection, not a quota cap.
+# declared_runtime_paths:    # optional — repo-relative paths this build depends on at RUNTIME that
+#   - path/to/runtime/asset  #   git may not track; the dispatch pre-flight checks DECLARED paths only
+#                            #   (a check cannot discover an undeclared invisible dependency).
 ---
 
 # Spec: {title}
+<!-- Governing contract: references/spec-contract.md (the validator's contract doc owns the version; never restate a number here). -->
 
 **Identity:** {one line — what this builds, for routing/review/recall. NOT rationale.}
 <!-- Optional, on its own line: → why: see docs/technical/adr/ADR-NNN-*.md (a pointer, never the content). -->
@@ -93,7 +97,7 @@ Wave 1: [task 1, task 2] | Wave 2: [task 3]
 ## Permissions
 
 The following NON-CRITICAL actions will run autonomously during build. Approving this spec approves all of them.
-Critical paths — .env · migrations · auth/authz/crypto · CI config · dependency manifests and lockfiles · infra-as-code · secrets/keys/certs · host-state (docs/status.md, root AGENTS.md, root CLAUDE.md, docs/changes/, docs/handoff/, the run ledger) · the permission settings and the hooks — are NEVER pre-authorised by this section. They need a live attended confirmation at build time, and an AFK run parks them (D3, ADR-046; apex-governance is canonical). (Sole exception: the docs agents' three host's-pen artifacts — the handoff, docs/status.md, and spec archival — under D6.)
+Critical paths — .env · migrations · auth/authz/crypto · CI config · dependency manifests and lockfiles · infra-as-code · secrets/keys/certs · host-state (`status.md`, root AGENTS.md, root CLAUDE.md, docs/changes/, docs/handoff/, the run ledger) · the permission settings and the hooks — are NEVER pre-authorised by this section. They need a live attended confirmation at build time, and an AFK run parks them (D3, ADR-046; apex-governance is canonical). (Sole exception: the docs agents' three host's-pen artifacts — the handoff, `status.md`, and spec archival — under D6.)
 docs/audit/ is different and stricter: TIER-1, refused outright on a path match. No confirmation authorises a write there — not attended, not by any switch, not by this section. (D5's append-only exception is doctrine pending a content-aware classifier change; it is not a live permission.)
 
 ### File Operations
@@ -147,6 +151,11 @@ docs/audit/ is different and stricter: TIER-1, refused outright on a path match.
 - [ ] {Step 1} → verify: {what to check — specific, observable}
 - [ ] {Step 2} → verify: {what to check — specific, observable}
 - [ ] {Step 3} → verify: {what to check — specific, observable}
+<!-- Reachability (readiness-gate item): SPEC-LEVEL, or one line per exposed boundary — never per
+     task. Name the wiring, not the mechanism. Typed client/server boundary → ROUND-TRIP test.
+     deny-unknown-fields is a per-repo choice, never mandated by this slot. -->
+- [ ] Reachability — {boundary/entry point} is reached end-to-end from {real caller} → verify:
+      {the wiring test/command — for a typed boundary, the ROUND-TRIP test asserting field equality}
 
 ## Progress
 _(The build writes here — do not edit manually)_

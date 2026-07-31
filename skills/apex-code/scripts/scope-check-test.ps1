@@ -1,5 +1,8 @@
 [CmdletBinding()]
-param()
+param(
+    [ValidateSet('', 'ExtraDerivedCacheExclusion', 'ExtraToolCacheExclusion', 'RenameSanctionedDirectory')]
+    [string]$LockstepProbe = ''
+)
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
@@ -11,6 +14,7 @@ $gitPath = @(Get-Command git.exe -CommandType Application -ErrorAction Stop)[0].
 $failureCount = 0
 $assertionCount = 0
 $suiteExitCode = 1
+$previousGitConfigGlobal = $env:GIT_CONFIG_GLOBAL
 
 function Assert-True {
     param(
@@ -107,7 +111,8 @@ function New-TestRepo {
 function Invoke-ScopeCheck {
     param(
         [Parameter(Mandatory = $true)][string[]]$CheckerArguments,
-        [string]$PathOverride = ''
+        [string]$PathOverride = '',
+        [string]$CheckerPath = $checkerPath
     )
 
     $previousPath = $env:PATH
@@ -116,7 +121,7 @@ function Invoke-ScopeCheck {
     $ErrorActionPreference = 'Continue'
     try {
         $global:LASTEXITCODE = -987654
-        $output = @(& $powerShellPath -NoProfile -ExecutionPolicy Bypass -File $checkerPath @CheckerArguments 2>&1)
+        $output = @(& $powerShellPath -NoProfile -ExecutionPolicy Bypass -File $CheckerPath @CheckerArguments 2>&1)
         $exitCode = $LASTEXITCODE
     }
     finally {
@@ -147,6 +152,83 @@ function New-FailingGitShim {
     )
     [System.IO.File]::WriteAllLines($shimFile, [string[]]$shim, [System.Text.Encoding]::ASCII)
     return $shimPath + [System.IO.Path]::PathSeparator + $env:PATH
+}
+
+function New-IgnoredCacheRepo {
+    param(
+        [Parameter(Mandatory = $true)][string]$Name,
+        [string[]]$IgnoredNames = @(
+            '.codex-scratch',
+            '.scratch',
+            '.apex-tmp',
+            '.sandbox-cache',
+            '.pytest_cache',
+            '.mypy_cache',
+            '.ruff_cache',
+            '.secret-hooks'
+        )
+    )
+
+    # Isolate fixtures from the caller's global excludesFile. Otherwise a host ignore rule can
+    # silently turn the load-bearing ?? cases into !! and make the tests machine-dependent.
+    $scratchGitConfig = Join-Path -Path $testRoot -ChildPath 'derived-cache.gitconfig'
+    $scratchGitIgnore = Join-Path -Path $testRoot -ChildPath 'derived-cache-global-ignore'
+    [System.IO.File]::WriteAllText($scratchGitIgnore, '', [System.Text.UTF8Encoding]::new($false))
+    $scratchGitIgnoreConfigPath = $scratchGitIgnore -replace '\\', '/'
+    [System.IO.File]::WriteAllText(
+        $scratchGitConfig,
+        "[core]`n    excludesFile = $scratchGitIgnoreConfigPath`n",
+        [System.Text.UTF8Encoding]::new($false)
+    )
+    $env:GIT_CONFIG_GLOBAL = $scratchGitConfig
+
+    $repoPath = New-TestRepo -Name $Name
+    $ignorePath = Join-Path -Path $repoPath -ChildPath '.gitignore'
+    $ignoreContent = if ($IgnoredNames.Count -gt 0) {
+        (@($IgnoredNames | ForEach-Object { "/$_/" }) -join "`n") + "`n"
+    } else {
+        ''
+    }
+    [System.IO.File]::WriteAllText($ignorePath, $ignoreContent, [System.Text.UTF8Encoding]::new($false))
+    Invoke-TestGit -RepoPath $repoPath -GitArguments @('add', '--', '.gitignore')
+    Invoke-TestGit -RepoPath $repoPath -GitArguments @('commit', '-q', '-m', 'add fixture ignores')
+    return $repoPath
+}
+
+function Get-PsArrayLiteral {
+    param(
+        [Parameter(Mandatory = $true)][string]$Path,
+        [Parameter(Mandatory = $true)][string]$Name
+    )
+
+    $text = [System.IO.File]::ReadAllText($Path)
+    $assignmentPattern = '(?s)\$' + [regex]::Escape($Name) + '\s*=\s*@\((?<body>.*?)\)'
+    $assignment = [regex]::Match($text, $assignmentPattern)
+    if (-not $assignment.Success) { return @() }
+
+    $body = $assignment.Groups['body'].Value
+    $entryPattern = @'
+(?x)
+(?:'(?<single>(?:[^']|'')*)'|"(?<double>(?:[^"`]|`.)*)")
+'@
+    $entries = @(
+        foreach ($entry in [regex]::Matches($body, $entryPattern)) {
+            if ($entry.Groups['single'].Success) {
+                $entry.Groups['single'].Value.Replace("''", "'")
+            }
+            else {
+                $entry.Groups['double'].Value -replace '`(["`$])', '$1'
+            }
+        }
+    )
+
+    # This helper intentionally accepts only a literal list. Expressions, variables, or a malformed
+    # quote make the parse fail closed rather than returning a plausible partial list.
+    $residue = [regex]::Replace($body, $entryPattern, '')
+    $residue = [regex]::Replace($residue, '(?m)#.*$', '')
+    $residue = $residue -replace '[,\s]', ''
+    if ($residue.Length -ne 0) { return @() }
+    return $entries
 }
 
 try {
@@ -589,6 +671,287 @@ try {
     Assert-WrittenPaths -Name 'runtime ls-tree inventory failure attributes churn' -Path $runtimeLsTreeFile -Expected @('projects', 'projects/session-x.jsonl')
     Assert-True -Name 'runtime ls-tree inventory failure is loud' -Condition ($runtimeLsTree.Output -match 'runtime inventory could not be built') -Detail $runtimeLsTree.Output
 
+    # Derived-cache (1): ignored scratch created during dispatch is excluded and emits nothing.
+    $derivedScratchRepo = New-IgnoredCacheRepo -Name 'derived-scratch-created'
+    $derivedScratchState = Join-Path $testRoot 'state-derived-scratch-created'
+    $derivedScratchFile = Join-Path $testRoot 'written-derived-scratch-created.txt'
+    $derivedScratchSnapshot = Invoke-ScopeCheck -CheckerArguments @('-Snapshot', '-Worktree', $derivedScratchRepo, '-Task', 'derived-scratch-created', '-StateDirectory', $derivedScratchState)
+    Assert-True -Name 'derived-cache 1 snapshot succeeds' -Condition ($derivedScratchSnapshot.ExitCode -eq 0) -Detail ("expected 0, got {0}" -f $derivedScratchSnapshot.ExitCode)
+    $derivedScratchLeaf = Join-Path $derivedScratchRepo '.codex-scratch/log.txt'
+    New-Item -ItemType Directory -Force -Path (Split-Path -Parent $derivedScratchLeaf) | Out-Null
+    [System.IO.File]::WriteAllText($derivedScratchLeaf, "log`r`n", [System.Text.Encoding]::ASCII)
+    $derivedScratch = Invoke-ScopeCheck -CheckerArguments @('-Check', '-Worktree', $derivedScratchRepo, '-Task', 'derived-scratch-created', '-StateDirectory', $derivedScratchState, '-WrittenPathsFile', $derivedScratchFile)
+    Assert-True -Name 'derived-cache 1 ignored scratch exits clean' -Condition ($derivedScratch.ExitCode -eq 0) -Detail ("expected 0, got {0}: {1}" -f $derivedScratch.ExitCode, $derivedScratch.Output)
+    Assert-WrittenPaths -Name 'derived-cache 1 ignored scratch emits no paths' -Path $derivedScratchFile -Expected @()
+
+    # Derived-cache (2): a repo-root tool cache receives the same exact-name treatment.
+    $derivedPytestRepo = New-IgnoredCacheRepo -Name 'derived-pytest-created'
+    $derivedPytestState = Join-Path $testRoot 'state-derived-pytest-created'
+    $derivedPytestSnapshot = Invoke-ScopeCheck -CheckerArguments @('-Snapshot', '-Worktree', $derivedPytestRepo, '-Task', 'derived-pytest-created', '-StateDirectory', $derivedPytestState)
+    $derivedPytestLeaf = Join-Path $derivedPytestRepo '.pytest_cache/v/cache/lastfailed'
+    New-Item -ItemType Directory -Force -Path (Split-Path -Parent $derivedPytestLeaf) | Out-Null
+    [System.IO.File]::WriteAllText($derivedPytestLeaf, "{}`r`n", [System.Text.Encoding]::ASCII)
+    $derivedPytest = Invoke-ScopeCheck -CheckerArguments @('-Check', '-Worktree', $derivedPytestRepo, '-Task', 'derived-pytest-created', '-StateDirectory', $derivedPytestState)
+    Assert-True -Name 'derived-cache 2 ignored pytest cache exits clean' -Condition ($derivedPytestSnapshot.ExitCode -eq 0 -and $derivedPytest.ExitCode -eq 0) -Detail ("snapshot {0}, check {1}: {2}" -f $derivedPytestSnapshot.ExitCode, $derivedPytest.ExitCode, $derivedPytest.Output)
+
+    # Derived-cache (3): ignored-only is insufficient when the root token is not on the exact list.
+    $derivedUnknownRepo = New-IgnoredCacheRepo -Name 'derived-unknown-name'
+    $derivedUnknownState = Join-Path $testRoot 'state-derived-unknown-name'
+    $derivedUnknownFile = Join-Path $testRoot 'written-derived-unknown-name.txt'
+    [void](Invoke-ScopeCheck -CheckerArguments @('-Snapshot', '-Worktree', $derivedUnknownRepo, '-Task', 'derived-unknown-name', '-StateDirectory', $derivedUnknownState))
+    $derivedUnknownLeaf = Join-Path $derivedUnknownRepo '.secret-hooks/post-commit'
+    New-Item -ItemType Directory -Force -Path (Split-Path -Parent $derivedUnknownLeaf) | Out-Null
+    [System.IO.File]::WriteAllText($derivedUnknownLeaf, "hook`r`n", [System.Text.Encoding]::ASCII)
+    $derivedUnknown = Invoke-ScopeCheck -CheckerArguments @('-Check', '-Worktree', $derivedUnknownRepo, '-Task', 'derived-unknown-name', '-StateDirectory', $derivedUnknownState, '-WrittenPathsFile', $derivedUnknownFile)
+    Assert-True -Name 'derived-cache 3 unlisted ignored path exits non-zero' -Condition ($derivedUnknown.ExitCode -ne 0) -Detail ("expected non-zero, got {0}" -f $derivedUnknown.ExitCode)
+    Assert-WrittenPaths -Name 'derived-cache 3 unlisted ignored path is attributed' -Path $derivedUnknownFile -Expected @('.secret-hooks', '.secret-hooks/post-commit')
+
+    # Derived-cache (4): index/HEAD curation wins over an exact ignored cache name.
+    $derivedTrackedRepo = New-IgnoredCacheRepo -Name 'derived-tracked-cache'
+    $derivedTrackedLeaf = Join-Path $derivedTrackedRepo '.pytest_cache/keep.txt'
+    New-Item -ItemType Directory -Force -Path (Split-Path -Parent $derivedTrackedLeaf) | Out-Null
+    [System.IO.File]::WriteAllText($derivedTrackedLeaf, "orig`r`n", [System.Text.Encoding]::ASCII)
+    Invoke-TestGit -RepoPath $derivedTrackedRepo -GitArguments @('add', '-f', '--', '.pytest_cache/keep.txt')
+    Invoke-TestGit -RepoPath $derivedTrackedRepo -GitArguments @('commit', '-q', '-m', 'track cache fixture')
+    $derivedTrackedState = Join-Path $testRoot 'state-derived-tracked-cache'
+    $derivedTrackedFile = Join-Path $testRoot 'written-derived-tracked-cache.txt'
+    [void](Invoke-ScopeCheck -CheckerArguments @('-Snapshot', '-Worktree', $derivedTrackedRepo, '-Task', 'derived-tracked-cache', '-StateDirectory', $derivedTrackedState))
+    Add-Content -LiteralPath $derivedTrackedLeaf -Value 'CODER WORK' -Encoding ASCII
+    $derivedTracked = Invoke-ScopeCheck -CheckerArguments @('-Check', '-Worktree', $derivedTrackedRepo, '-Task', 'derived-tracked-cache', '-StateDirectory', $derivedTrackedState, '-WrittenPathsFile', $derivedTrackedFile)
+    Assert-True -Name 'derived-cache 4 tracked cache exits non-zero' -Condition ($derivedTracked.ExitCode -ne 0) -Detail ("expected non-zero, got {0}" -f $derivedTracked.ExitCode)
+    Assert-WrittenPaths -Name 'derived-cache 4 tracked cache is attributed' -Path $derivedTrackedFile -Expected @('.pytest_cache/keep.txt')
+
+    # Derived-cache (5): ignored scratch present at snapshot may disappear without a GONE verdict.
+    $derivedGoneRepo = New-IgnoredCacheRepo -Name 'derived-gone'
+    $derivedGoneDirectory = Join-Path $derivedGoneRepo '.codex-scratch'
+    New-Item -ItemType Directory -Force -Path $derivedGoneDirectory | Out-Null
+    [System.IO.File]::WriteAllText((Join-Path $derivedGoneDirectory 'log.txt'), "log`r`n", [System.Text.Encoding]::ASCII)
+    $derivedGoneState = Join-Path $testRoot 'state-derived-gone'
+    $derivedGoneFile = Join-Path $testRoot 'written-derived-gone.txt'
+    [void](Invoke-ScopeCheck -CheckerArguments @('-Snapshot', '-Worktree', $derivedGoneRepo, '-Task', 'derived-gone', '-StateDirectory', $derivedGoneState))
+    Remove-Item -LiteralPath $derivedGoneDirectory -Recurse -Force
+    $derivedGone = Invoke-ScopeCheck -CheckerArguments @('-Check', '-Worktree', $derivedGoneRepo, '-Task', 'derived-gone', '-StateDirectory', $derivedGoneState, '-WrittenPathsFile', $derivedGoneFile)
+    Assert-True -Name 'derived-cache 5 snapshot cache deletion exits clean without GONE' -Condition ($derivedGone.ExitCode -eq 0 -and $derivedGone.Output -notmatch '(?m)^\s*GONE\s+\.codex-scratch(?:/|$)') -Detail ("exit {0}: {1}" -f $derivedGone.ExitCode, $derivedGone.Output)
+    Assert-WrittenPaths -Name 'derived-cache 5 snapshot cache deletion emits no paths' -Path $derivedGoneFile -Expected @()
+
+    # Derived-cache (6): the names are anchored at the repository root.
+    $derivedNestedRepo = New-IgnoredCacheRepo -Name 'derived-nested' -IgnoredNames @('src/.codex-scratch')
+    $derivedNestedState = Join-Path $testRoot 'state-derived-nested'
+    $derivedNestedFile = Join-Path $testRoot 'written-derived-nested.txt'
+    [void](Invoke-ScopeCheck -CheckerArguments @('-Snapshot', '-Worktree', $derivedNestedRepo, '-Task', 'derived-nested', '-StateDirectory', $derivedNestedState))
+    $derivedNestedLeaf = Join-Path $derivedNestedRepo 'src/.codex-scratch/x'
+    New-Item -ItemType Directory -Force -Path (Split-Path -Parent $derivedNestedLeaf) | Out-Null
+    [System.IO.File]::WriteAllText($derivedNestedLeaf, "x`r`n", [System.Text.Encoding]::ASCII)
+    $derivedNested = Invoke-ScopeCheck -CheckerArguments @('-Check', '-Worktree', $derivedNestedRepo, '-Task', 'derived-nested', '-StateDirectory', $derivedNestedState, '-WrittenPathsFile', $derivedNestedFile)
+    Assert-True -Name 'derived-cache 6 nested exact-name directory exits non-zero' -Condition ($derivedNested.ExitCode -ne 0) -Detail ("expected non-zero, got {0}" -f $derivedNested.ExitCode)
+    Assert-WrittenPaths -Name 'derived-cache 6 nested exact-name directory is attributed' -Path $derivedNestedFile -Expected @('src/.codex-scratch', 'src/.codex-scratch/x')
+
+    # Derived-cache (7): exclusion is deliberately visible in the check transcript.
+    Assert-True -Name 'derived-cache 7 exclusion count note is loud' -Condition ($derivedScratch.Output -match 'derived-cache path\(s\) excluded') -Detail $derivedScratch.Output
+
+    # Derived-cache (8): the non-WrittenPathsFile branch uses the identical predicate.
+    $derivedNoCollectRepo = New-IgnoredCacheRepo -Name 'derived-no-written-paths'
+    $derivedNoCollectState = Join-Path $testRoot 'state-derived-no-written-paths'
+    [void](Invoke-ScopeCheck -CheckerArguments @('-Snapshot', '-Worktree', $derivedNoCollectRepo, '-Task', 'derived-no-written-paths', '-StateDirectory', $derivedNoCollectState))
+    $derivedNoCollectLeaf = Join-Path $derivedNoCollectRepo '.codex-scratch/log.txt'
+    New-Item -ItemType Directory -Force -Path (Split-Path -Parent $derivedNoCollectLeaf) | Out-Null
+    [System.IO.File]::WriteAllText($derivedNoCollectLeaf, "log`r`n", [System.Text.Encoding]::ASCII)
+    $derivedNoCollect = Invoke-ScopeCheck -CheckerArguments @('-Check', '-Worktree', $derivedNoCollectRepo, '-Task', 'derived-no-written-paths', '-StateDirectory', $derivedNoCollectState)
+    Assert-True -Name 'derived-cache 8 non-collecting branch exits clean' -Condition ($derivedNoCollect.ExitCode -eq 0 -and $derivedNoCollect.Output -match '(?m)^\[scope\].* clean -') -Detail ("exit {0}: {1}" -f $derivedNoCollect.ExitCode, $derivedNoCollect.Output)
+
+    # Derived-cache (9): inventory failure disables this exclusion class fail-closed.
+    $derivedInventoryRepo = New-IgnoredCacheRepo -Name 'derived-inventory-failure'
+    $derivedInventoryState = Join-Path $testRoot 'state-derived-inventory-failure'
+    $derivedInventoryFile = Join-Path $testRoot 'written-derived-inventory-failure.txt'
+    [void](Invoke-ScopeCheck -CheckerArguments @('-Snapshot', '-Worktree', $derivedInventoryRepo, '-Task', 'derived-inventory-failure', '-StateDirectory', $derivedInventoryState))
+    $derivedInventoryLeaf = Join-Path $derivedInventoryRepo '.codex-scratch/log.txt'
+    New-Item -ItemType Directory -Force -Path (Split-Path -Parent $derivedInventoryLeaf) | Out-Null
+    [System.IO.File]::WriteAllText($derivedInventoryLeaf, "log`r`n", [System.Text.Encoding]::ASCII)
+    $derivedInventoryShim = New-FailingGitShim -Name 'shim-derived-ls-files' -FailCommand 'ls-files'
+    $derivedInventory = Invoke-ScopeCheck -CheckerArguments @('-Check', '-Worktree', $derivedInventoryRepo, '-Task', 'derived-inventory-failure', '-StateDirectory', $derivedInventoryState, '-WrittenPathsFile', $derivedInventoryFile) -PathOverride $derivedInventoryShim
+    Assert-True -Name 'derived-cache 9 inventory failure exits non-zero and is loud' -Condition ($derivedInventory.ExitCode -ne 0 -and $derivedInventory.Output -match 'runtime inventory could not be built') -Detail ("exit {0}: {1}" -f $derivedInventory.ExitCode, $derivedInventory.Output)
+    Assert-WrittenPaths -Name 'derived-cache 9 inventory failure re-attributes scratch' -Path $derivedInventoryFile -Expected @('.codex-scratch', '.codex-scratch/log.txt')
+
+    # Derived-cache (10): ACCEPTED CONTENT-BLINDNESS GAP. Exclusion is by name; contents, including
+    # executable-class files, are never examined by ANY control.
+    $derivedExecutableRepo = New-IgnoredCacheRepo -Name 'derived-executable-gap'
+    $derivedExecutableState = Join-Path $testRoot 'state-derived-executable-gap'
+    $derivedExecutableFile = Join-Path $testRoot 'written-derived-executable-gap.txt'
+    [void](Invoke-ScopeCheck -CheckerArguments @('-Snapshot', '-Worktree', $derivedExecutableRepo, '-Task', 'derived-executable-gap', '-StateDirectory', $derivedExecutableState))
+    $derivedExecutableLeaf = Join-Path $derivedExecutableRepo '.codex-scratch/hook.ps1'
+    New-Item -ItemType Directory -Force -Path (Split-Path -Parent $derivedExecutableLeaf) | Out-Null
+    [System.IO.File]::WriteAllText($derivedExecutableLeaf, "Write-Host gap`r`n", [System.Text.Encoding]::ASCII)
+    $derivedExecutable = Invoke-ScopeCheck -CheckerArguments @('-Check', '-Worktree', $derivedExecutableRepo, '-Task', 'derived-executable-gap', '-StateDirectory', $derivedExecutableState, '-WrittenPathsFile', $derivedExecutableFile)
+    Assert-True -Name 'derived-cache 10 accepted executable content-blindness gap exits clean' -Condition ($derivedExecutable.ExitCode -eq 0) -Detail ("expected 0, got {0}: {1}" -f $derivedExecutable.ExitCode, $derivedExecutable.Output)
+    Assert-WrittenPaths -Name 'derived-cache 10 accepted executable content-blindness gap emits no paths' -Path $derivedExecutableFile -Expected @()
+
+    # Derived-cache (11): exact name alone is insufficient; current status must be !!, not ??.
+    $derivedQuestionRepo = New-IgnoredCacheRepo -Name 'derived-current-question' -IgnoredNames @()
+    $derivedQuestionState = Join-Path $testRoot 'state-derived-current-question'
+    $derivedQuestionFile = Join-Path $testRoot 'written-derived-current-question.txt'
+    [void](Invoke-ScopeCheck -CheckerArguments @('-Snapshot', '-Worktree', $derivedQuestionRepo, '-Task', 'derived-current-question', '-StateDirectory', $derivedQuestionState))
+    $derivedQuestionLeaf = Join-Path $derivedQuestionRepo '.codex-scratch/log.txt'
+    New-Item -ItemType Directory -Force -Path (Split-Path -Parent $derivedQuestionLeaf) | Out-Null
+    [System.IO.File]::WriteAllText($derivedQuestionLeaf, "log`r`n", [System.Text.Encoding]::ASCII)
+    $derivedQuestion = Invoke-ScopeCheck -CheckerArguments @('-Check', '-Worktree', $derivedQuestionRepo, '-Task', 'derived-current-question', '-StateDirectory', $derivedQuestionState, '-WrittenPathsFile', $derivedQuestionFile)
+    Assert-True -Name 'derived-cache 11 nonignored exact name exits non-zero' -Condition ($derivedQuestion.ExitCode -ne 0) -Detail ("expected non-zero, got {0}" -f $derivedQuestion.ExitCode)
+    Assert-WrittenPaths -Name 'derived-cache 11 nonignored exact name is attributed' -Path $derivedQuestionFile -Expected @('.codex-scratch', '.codex-scratch/log.txt')
+
+    # Derived-cache (12): a snapshot-present ?? exact name cannot use the deletion arm.
+    $derivedPreQuestionRepo = New-IgnoredCacheRepo -Name 'derived-snapshot-question' -IgnoredNames @()
+    $derivedPreQuestionDirectory = Join-Path $derivedPreQuestionRepo '.codex-scratch'
+    New-Item -ItemType Directory -Force -Path $derivedPreQuestionDirectory | Out-Null
+    [System.IO.File]::WriteAllText((Join-Path $derivedPreQuestionDirectory 'log.txt'), "log`r`n", [System.Text.Encoding]::ASCII)
+    $derivedPreQuestionState = Join-Path $testRoot 'state-derived-snapshot-question'
+    $derivedPreQuestionFile = Join-Path $testRoot 'written-derived-snapshot-question.txt'
+    [void](Invoke-ScopeCheck -CheckerArguments @('-Snapshot', '-Worktree', $derivedPreQuestionRepo, '-Task', 'derived-snapshot-question', '-StateDirectory', $derivedPreQuestionState))
+    Remove-Item -LiteralPath $derivedPreQuestionDirectory -Recurse -Force
+    $derivedPreQuestion = Invoke-ScopeCheck -CheckerArguments @('-Check', '-Worktree', $derivedPreQuestionRepo, '-Task', 'derived-snapshot-question', '-StateDirectory', $derivedPreQuestionState, '-WrittenPathsFile', $derivedPreQuestionFile)
+    Assert-True -Name 'derived-cache 12 snapshot question-status deletion exits non-zero' -Condition ($derivedPreQuestion.ExitCode -ne 0) -Detail ("expected non-zero, got {0}" -f $derivedPreQuestion.ExitCode)
+    Assert-WrittenPaths -Name 'derived-cache 12 snapshot question-status deletion is attributed' -Path $derivedPreQuestionFile -Expected @('.codex-scratch')
+
+    # Derived-cache (13): git's collapsed ignored-directory key carries a trailing slash.
+    $derivedSlashRepo = New-IgnoredCacheRepo -Name 'derived-trailing-slash'
+    $derivedSlashState = Join-Path $testRoot 'state-derived-trailing-slash'
+    [void](Invoke-ScopeCheck -CheckerArguments @('-Snapshot', '-Worktree', $derivedSlashRepo, '-Task', 'derived-trailing-slash', '-StateDirectory', $derivedSlashState))
+    $derivedSlashLeaf = Join-Path $derivedSlashRepo '.codex-scratch/x'
+    New-Item -ItemType Directory -Force -Path (Split-Path -Parent $derivedSlashLeaf) | Out-Null
+    [System.IO.File]::WriteAllText($derivedSlashLeaf, "x`r`n", [System.Text.Encoding]::ASCII)
+    [string[]]$derivedSlashPorcelain = @(& $gitPath -C $derivedSlashRepo status --porcelain=v1 --ignored)
+    $derivedSlash = Invoke-ScopeCheck -CheckerArguments @('-Check', '-Worktree', $derivedSlashRepo, '-Task', 'derived-trailing-slash', '-StateDirectory', $derivedSlashState)
+    Assert-True -Name 'derived-cache 13 trailing-slash porcelain key is excluded' -Condition (($derivedSlashPorcelain -contains '!! .codex-scratch/') -and $derivedSlash.ExitCode -eq 0) -Detail ("porcelain [{0}], exit {1}: {2}" -f ($derivedSlashPorcelain -join ', '), $derivedSlash.ExitCode, $derivedSlash.Output)
+
+    # Derived-cache (14): old snapshots without statuses fail closed even for a still-ignored cache.
+    $derivedOldRepo = New-IgnoredCacheRepo -Name 'derived-old-snapshot'
+    $derivedOldDirectory = Join-Path $derivedOldRepo '.codex-scratch'
+    New-Item -ItemType Directory -Force -Path $derivedOldDirectory | Out-Null
+    [System.IO.File]::WriteAllText((Join-Path $derivedOldDirectory 'before.txt'), "before`r`n", [System.Text.Encoding]::ASCII)
+    $derivedOldState = Join-Path $testRoot 'state-derived-old-snapshot'
+    $derivedOldFile = Join-Path $testRoot 'written-derived-old-snapshot.txt'
+    [void](Invoke-ScopeCheck -CheckerArguments @('-Snapshot', '-Worktree', $derivedOldRepo, '-Task', 'derived-old-snapshot', '-StateDirectory', $derivedOldState))
+    $derivedOldSnapshotPath = Join-Path $derivedOldState 'scope-derived-old-snapshot.snapshot.json'
+    $derivedOldSnapshot = Get-Content -LiteralPath $derivedOldSnapshotPath -Raw | ConvertFrom-Json
+    $derivedOldFormat = [ordered]@{
+        task = $derivedOldSnapshot.task
+        head = $derivedOldSnapshot.head
+        dirty = @($derivedOldSnapshot.dirty)
+        states = $derivedOldSnapshot.states
+        takenUtc = $derivedOldSnapshot.takenUtc
+    }
+    $derivedOldFormat | ConvertTo-Json -Depth 5 | Out-File -LiteralPath $derivedOldSnapshotPath -Encoding utf8
+    [System.IO.File]::WriteAllText((Join-Path $derivedOldDirectory 'after.txt'), "after`r`n", [System.Text.Encoding]::ASCII)
+    $derivedOld = Invoke-ScopeCheck -CheckerArguments @('-Check', '-Worktree', $derivedOldRepo, '-Task', 'derived-old-snapshot', '-StateDirectory', $derivedOldState, '-WrittenPathsFile', $derivedOldFile)
+    Assert-True -Name 'derived-cache 14 old snapshot without statuses exits non-zero' -Condition ($derivedOld.ExitCode -ne 0) -Detail ("expected non-zero, got {0}" -f $derivedOld.ExitCode)
+    Assert-WrittenPaths -Name 'derived-cache 14 old snapshot without statuses is attributed' -Path $derivedOldFile -Expected @('.codex-scratch', '.codex-scratch/after.txt', '.codex-scratch/before.txt')
+
+    # LOCKSTEP COVERAGE BOUNDARY: this block catches LIST and PRESCRIPTION drift plus per-entry
+    # behaviour. Guard-LOGIC weakening is caught by Task 2 cases (3), (4), (6), (11), (12), and
+    # (14). Parse and probe only scratch copies: no authorized or read-only source is mutated.
+    $lockstepRoot = Join-Path $testRoot 'lockstep-copies'
+    New-Item -ItemType Directory -Force -Path $lockstepRoot | Out-Null
+    $lockstepChecker = Join-Path $lockstepRoot 'codex-scope-check.ps1'
+    $lockstepTreePin = Join-Path $lockstepRoot 'tree-pin.ps1'
+    $lockstepDispatchPack = Join-Path $lockstepRoot 'dispatch-pack.md'
+    Copy-Item -LiteralPath $checkerPath -Destination $lockstepChecker
+    Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'tree-pin.ps1') -Destination $lockstepTreePin
+    Copy-Item -LiteralPath (Join-Path (Split-Path -Parent $PSScriptRoot) 'references/dispatch-pack.md') -Destination $lockstepDispatchPack
+
+    if ($LockstepProbe -eq 'ExtraDerivedCacheExclusion') {
+        $probeText = [System.IO.File]::ReadAllText($lockstepChecker)
+        $probeText = $probeText -replace "(?s)(\`$derivedCacheExclusions\s*=\s*@\(.*?)(\r?\n\))", "`$1,`r`n    '.lockstep-probe-cache'`$2"
+        [System.IO.File]::WriteAllText($lockstepChecker, $probeText, [System.Text.UTF8Encoding]::new($false))
+    }
+    elseif ($LockstepProbe -eq 'ExtraToolCacheExclusion') {
+        $probeText = [System.IO.File]::ReadAllText($lockstepTreePin)
+        $probeText = $probeText -replace "(?s)(\`$toolCacheExclusions\s*=\s*@\(.*?)(\r?\n\s*\))", "`$1,`r`n        '.lockstep-probe-tool-cache'`$2"
+        [System.IO.File]::WriteAllText($lockstepTreePin, $probeText, [System.Text.UTF8Encoding]::new($false))
+    }
+    elseif ($LockstepProbe -eq 'RenameSanctionedDirectory') {
+        $probeText = [System.IO.File]::ReadAllText($lockstepDispatchPack).Replace('.codex-scratch/', '.codex-work/')
+        [System.IO.File]::WriteAllText($lockstepDispatchPack, $probeText, [System.Text.UTF8Encoding]::new($false))
+    }
+
+    [string[]]$lockstepDerived = @(Get-PsArrayLiteral -Path $lockstepChecker -Name 'derivedCacheExclusions')
+    [string[]]$lockstepDivergence = @(Get-PsArrayLiteral -Path $lockstepChecker -Name 'derivedCacheDivergence')
+    [string[]]$lockstepTool = @(Get-PsArrayLiteral -Path $lockstepTreePin -Name 'toolCacheExclusions')
+    Assert-True -Name 'lockstep parse derivedCacheExclusions is nonempty' -Condition ($lockstepDerived.Count -gt 0) -Detail ("parsed [{0}]" -f ($lockstepDerived -join ', '))
+    Assert-True -Name 'lockstep parse derivedCacheDivergence is nonempty' -Condition ($lockstepDivergence.Count -gt 0) -Detail ("parsed [{0}]" -f ($lockstepDivergence -join ', '))
+    Assert-True -Name 'lockstep parse toolCacheExclusions is nonempty' -Condition ($lockstepTool.Count -gt 0) -Detail ("parsed [{0}]" -f ($lockstepTool -join ', '))
+
+    $derivedLookup = @{}
+    foreach ($name in $lockstepDerived) { $derivedLookup[$name.ToLowerInvariant()] = $true }
+    $divergenceLookup = @{}
+    foreach ($name in $lockstepDivergence) { $divergenceLookup[$name.ToLowerInvariant()] = $true }
+
+    [string[]]$overlap = @($lockstepDerived | Where-Object { $divergenceLookup.ContainsKey($_.ToLowerInvariant()) })
+    Assert-True -Name 'lockstep derived exclusion and divergence lists are disjoint' -Condition ($overlap.Count -eq 0) -Detail ("overlap [{0}]" -f ($overlap -join ', '))
+    foreach ($name in $lockstepTool) {
+        $key = $name.ToLowerInvariant()
+        Assert-True -Name ("lockstep tool-cache coverage {0}" -f $name) -Condition ($derivedLookup.ContainsKey($key) -or $divergenceLookup.ContainsKey($key)) -Detail 'tree-pin entry must be an exclusion or an explicit divergence'
+    }
+
+    # Mechanical coverage: every parsed exclusion gets both predicate arms in fresh repositories.
+    for ($entryIndex = 0; $entryIndex -lt $lockstepDerived.Count; $entryIndex++) {
+        $name = $lockstepDerived[$entryIndex]
+
+        $ignoredRepo = New-IgnoredCacheRepo -Name ("lockstep-ignored-{0}" -f $entryIndex) -IgnoredNames @($name)
+        $ignoredState = Join-Path $testRoot ("state-lockstep-ignored-{0}" -f $entryIndex)
+        [void](Invoke-ScopeCheck -CheckerArguments @('-Snapshot', '-Worktree', $ignoredRepo, '-Task', ("lockstep-ignored-{0}" -f $entryIndex), '-StateDirectory', $ignoredState) -CheckerPath $lockstepChecker)
+        $ignoredLeaf = Join-Path $ignoredRepo ($name + '/created-during-dispatch.txt')
+        New-Item -ItemType Directory -Force -Path (Split-Path -Parent $ignoredLeaf) | Out-Null
+        [System.IO.File]::WriteAllText($ignoredLeaf, "derived`r`n", [System.Text.Encoding]::ASCII)
+        $ignoredResult = Invoke-ScopeCheck -CheckerArguments @('-Check', '-Worktree', $ignoredRepo, '-Task', ("lockstep-ignored-{0}" -f $entryIndex), '-StateDirectory', $ignoredState) -CheckerPath $lockstepChecker
+        Assert-True -Name ("lockstep per-entry ignored dispatch exclusion {0}" -f $name) -Condition ($ignoredResult.ExitCode -eq 0) -Detail ("expected 0, got {0}: {1}" -f $ignoredResult.ExitCode, $ignoredResult.Output)
+
+        $questionRepo = New-IgnoredCacheRepo -Name ("lockstep-question-{0}" -f $entryIndex) -IgnoredNames @()
+        $questionState = Join-Path $testRoot ("state-lockstep-question-{0}" -f $entryIndex)
+        [void](Invoke-ScopeCheck -CheckerArguments @('-Snapshot', '-Worktree', $questionRepo, '-Task', ("lockstep-question-{0}" -f $entryIndex), '-StateDirectory', $questionState) -CheckerPath $lockstepChecker)
+        $questionLeaf = Join-Path $questionRepo ($name + '/created-during-dispatch.txt')
+        New-Item -ItemType Directory -Force -Path (Split-Path -Parent $questionLeaf) | Out-Null
+        [System.IO.File]::WriteAllText($questionLeaf, "untracked`r`n", [System.Text.Encoding]::ASCII)
+        [string[]]$questionStatus = @(& $gitPath -C $questionRepo status --porcelain=v1 --untracked-files=all -- $name)
+        $questionResult = Invoke-ScopeCheck -CheckerArguments @('-Check', '-Worktree', $questionRepo, '-Task', ("lockstep-question-{0}" -f $entryIndex), '-StateDirectory', $questionState) -CheckerPath $lockstepChecker
+        Assert-True -Name ("lockstep per-entry question-status flags {0}" -f $name) -Condition (@($questionStatus | Where-Object { $_ -match '^\?\?' }).Count -gt 0 -and $questionResult.ExitCode -ne 0) -Detail ("status [{0}], exit {1}: {2}" -f ($questionStatus -join ', '), $questionResult.ExitCode, $questionResult.Output)
+    }
+
+    $dispatchText = [System.IO.File]::ReadAllText($lockstepDispatchPack)
+    [string[]]$sanctionedNames = @(
+        foreach ($match in [regex]::Matches($dispatchText, '(?im)(?:create\s+|exactly one sanctioned scratch directory name:\s*)`(?<name>\.[^`/]+)(?:/)?`[^\r\n]*(?:sanctioned name)?')) {
+            $match.Groups['name'].Value
+        }
+    ) | Sort-Object -Unique
+    Assert-True -Name 'lockstep prescription sole sanctioned scratch directory' -Condition ($sanctionedNames.Count -eq 1 -and $sanctionedNames[0] -ceq '.codex-scratch') -Detail ("sanctioned names [{0}]" -f ($sanctionedNames -join ', '))
+    $prescriptionPaired = $sanctionedNames.Count -eq 1 -and
+        $sanctionedNames[0] -ceq '.codex-scratch' -and
+        $derivedLookup.ContainsKey($sanctionedNames[0].ToLowerInvariant())
+    Assert-True -Name 'lockstep prescription pairs sanctioned name with derived exclusions' -Condition $prescriptionPaired -Detail ("sanctioned [{0}], derived exclusions [{1}]" -f ($sanctionedNames -join ', '), ($lockstepDerived -join ', '))
+
+    [string[]]$deprecatedNames = @('.scratch', '.apex-tmp', '.sandbox-cache')
+    foreach ($deprecatedName in @('.scratch', '.apex-tmp', '.sandbox-cache')) {
+        $escapedDeprecated = [regex]::Escape($deprecatedName)
+        $deprecatedMentions = @([regex]::Matches($dispatchText, "``$escapedDeprecated/?``"))
+        $nonDeprecatedMentions = @(
+            foreach ($mention in $deprecatedMentions) {
+                $contextStart = [Math]::Max(0, $mention.Index - 200)
+                $contextLength = [Math]::Min($dispatchText.Length - $contextStart, $mention.Length + 400)
+                if ($dispatchText.Substring($contextStart, $contextLength) -notmatch '(?i)DEPRECATED') {
+                    $mention.Value
+                }
+            }
+        )
+        $onlyDeprecatedExamples = $nonDeprecatedMentions.Count -eq 0
+        Assert-True -Name ("lockstep prescription deprecated-only {0}" -f $deprecatedName) -Condition ($onlyDeprecatedExamples -and $sanctionedNames -notcontains $deprecatedName) -Detail ("found {0} mention(s), {1} outside deprecated context; sanctioned [{2}]" -f $deprecatedMentions.Count, $nonDeprecatedMentions.Count, ($sanctionedNames -join ', '))
+    }
+
+    $toolLookup = @{}
+    foreach ($name in $lockstepTool) { $toolLookup[$name.ToLowerInvariant()] = $true }
+    foreach ($name in $lockstepDerived) {
+        $classified = $sanctionedNames -contains $name -or
+            $deprecatedNames -contains $name -or
+            $toolLookup.ContainsKey($name.ToLowerInvariant())
+        Assert-True -Name ("lockstep derived exclusion classification {0}" -f $name) -Condition $classified -Detail 'entry must come from the sole sanctioned prescription, deprecated examples, or the parsed tool-cache list'
+    }
+
     if ($failureCount -gt 0) {
         Write-Output ("FAILED -- {0} of {1} scope-check assertions failed." -f $failureCount, $assertionCount)
         $suiteExitCode = 1
@@ -603,6 +966,11 @@ catch {
     $suiteExitCode = 1
 }
 finally {
+    if ($null -eq $previousGitConfigGlobal) {
+        Remove-Item Env:GIT_CONFIG_GLOBAL -ErrorAction SilentlyContinue
+    } else {
+        $env:GIT_CONFIG_GLOBAL = $previousGitConfigGlobal
+    }
     if (Test-Path -LiteralPath $testRoot) {
         try {
             Remove-Item -LiteralPath $testRoot -Recurse -Force -ErrorAction Stop

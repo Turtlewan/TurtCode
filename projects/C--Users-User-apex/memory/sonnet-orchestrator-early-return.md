@@ -1,10 +1,11 @@
 ---
 name: sonnet-orchestrator-early-return
-description: "Sonnet build-orchestrator subagents return early (\"I'll wait for the notification\") instead of supervising background codex exec; SendMessage nudge to foreground-poll fixes it — or avoid by dispatching codex exec as a foreground Bash call"
+description: "Sonnet build-orchestrators reliably end their turn early after backgrounding a codex exec dispatch and re-wake remains unproven — keep the SendMessage nudge / host-bypass pipeline; but as of the 2026-07-30 harness the backgrounded process itself SURVIVES the turn end (kill behavior refuted by live probes, version-pinned)"
 metadata: 
   node_type: memory
   type: project
   originSessionId: c3092c51-f27d-4fc7-aecc-baaaf9f1c3e1
+  modified: 2026-07-30T11:26:29.025Z
 ---
 
 Sonnet-model orchestrator subagents driving `codex exec` builds (role split per [[model-role-registry-doctrine]]) repeatedly stop early: they launch codex via a background Bash task, say "I'll wait for the completion notification", and exit — but their exit is the host's only signal, so the build dangles unsupervised. Happened 3× in one session (2026-07-06, W2-1/W2-2 builds), **even when the dispatch prompt pre-emptively demanded foreground supervision**.
@@ -35,4 +36,24 @@ report entirely** — host-verify + commit directly; if doing so, SendMessage th
 the host took over, else its late report misreads the committed tree as a phantom parallel session
 (happened with the pinning build).
 
+**Merged (2026-07-29, folded from two now-deleted source memories on dispatch survival and subagent
+wake reliability):** Sonnet build-orchestrators reliably end their turn
+early after backgrounding a codex exec dispatch and are never re-woken on completion — only
+host-native `run_in_background` (Bash/PowerShell tool, not a subagent's own `Start-Job`) or a
+subagent's own FOREGROUND-BLOCKING call survives the turn boundary. A subagent-owned background
+dispatch dies when the subagent ends its turn; a subagent that blocks in its own foreground on one
+`codex exec` call (fits under the ~10-min Bash timeout) completes in-turn and needs no nudge — proven
+2026-07-17 round-8 W1, a Sonnet orchestrator spawning 6 foreground-blocking code-workers across two
+sub-waves, whole build clean. For a dispatch that must background (long build, turn must stay free),
+recover via a SendMessage nudge telling the orchestrator to resume and POLL in its own foreground
+(sleep-and-check on the expected artifact, e.g. the wrapper's `*.final` report) rather than passively
+waiting — treat this nudge as a standard pipeline step, budgeted at ~1 per build, not an exception.
+If a nudged orchestrator goes quiet again, bypass it entirely: check the worktree directly
+(`git -C <wt> status/log`), host-verify + integrate, and SendMessage the orchestrator that the host
+took over (else its late report misreads the committed tree as a phantom parallel session). A
+`Wait-Process`-on-the-codex-PID background watcher is a clean host-side completion signal independent
+of the orchestrator.
+
 (migrated from Artemis memory 2026-07-19)
+
+**2026-07-30 live reverification (issue-13 root-cause probes, `apex/docs/research/issue13-kill-ceiling-rootcause-2026-07-30.md`):** the *process-death* half of this memory no longer reproduces on the current harness — a subagent-backgrounded process now SURVIVES the subagent's turn end (ran 200/200 heartbeats over 17 min, through the old 8–10-min kill band), and a foreground tool-timeout now MIGRATES the call to background instead of killing the tree. Still true and still the operative guidance: orchestrators may end their turn early and their re-wake on background completion remains unproven — keep the SendMessage nudge / host-bypass pipeline. What changed is the blast radius: an early return no longer kills the dispatch *while the session stays active*; the codex child keeps running and the worktree/ledger can be host-verified directly. Resolved same evening: a 40-min host-backgrounded probe survived ~29 min of fully idle session and completed (idle-reap refuted); the two terminated probes (E4/E5a) coincided with the owner's active window and were classified manual stops. Net: on the 2026-07-30 harness, background dispatches survive turn end AND session idle; no kill ceiling exists. Behavior is harness-version-pinned — re-verify with a ≥12-min probe before relying on it in a shipped workflow.

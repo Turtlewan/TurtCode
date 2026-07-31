@@ -16,13 +16,24 @@ and transient extensions (.exe, .dll, .bat, .cmd, .com, .log, .jsonl, .lock,
 and .tmp) are mechanically exempt. Path matching is a case-insensitive,
 separator-normalized, component-boundary suffix comparison.
 #>
-[CmdletBinding()]
+[CmdletBinding(DefaultParameterSetName = 'Validate')]
 param(
-    [Parameter(Mandatory = $true)]
-    [string]$SpecPath
+    [Parameter(Mandatory = $true, ParameterSetName = 'Validate')]
+    [string]$SpecPath,
+
+    [Parameter(ParameterSetName = 'Version')]
+    [switch]$Version
 )
 
+$SpecContractVersion = '1.0.0'
 $ErrorActionPreference = 'Stop'
+
+if ($Version) {
+    Write-Output ('apex-spec-validate contract {0}' -f $SpecContractVersion)
+    exit 0
+}
+
+Write-Host ('[spec-validate] contract {0}' -f $SpecContractVersion)
 
 $excludedExtensions = New-Object 'System.Collections.Generic.HashSet[string]' ([System.StringComparer]::OrdinalIgnoreCase)
 foreach ($extension in @('.exe', '.dll', '.bat', '.cmd', '.com', '.log', '.jsonl', '.lock', '.tmp')) {

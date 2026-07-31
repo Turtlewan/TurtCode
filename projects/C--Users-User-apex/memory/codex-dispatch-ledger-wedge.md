@@ -5,6 +5,7 @@ metadata:
   node_type: memory
   type: project
   originSessionId: 87f80b66-3b53-448b-99e7-5906719ce0d5
+  modified: 2026-07-29T09:15:59.297Z
 ---
 
 `scripts/codex-dispatch.ps1` can hang **before launching Codex at all** — no PID in the ledger, an
@@ -37,6 +38,10 @@ wrapper mid-run, the codex process died with it (log stops mid-item, no `.final`
 ledger row stuck at `running`, which then feeds the stale-row jam above. It *looked* alive for an
 hour (stale row + old log). Liveness check: `Get-Process -Id <ledger pid>` + log LastWriteTime,
 not the row.
+
+**Caveat (2026-07-29):** `apex-code` now formalizes shared-worktree conflicts as a clean **exit 71**
+— re-verify the pre-launch wedge above still reproduces before trusting this diagnosis; it may now
+surface as a clean exit 71 instead of a silent hang.
 
 Related: [[codex-exec-stdin-wedge]], [[codex-dispatch-needs-a-quiet-tree]],
 [[codex-dispatch-baseline-must-be-green]].

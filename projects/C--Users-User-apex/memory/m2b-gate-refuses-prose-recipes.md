@@ -5,6 +5,7 @@ metadata:
   node_type: memory
   type: project
   originSessionId: 04486d28-1528-4572-bab2-2f8a50197759
+  modified: 2026-07-29T09:18:00.870Z
 ---
 
 2026-07-17 (step-2.5 build): a build dispatched into `~/apex` was refused by the live M2b pre-flight
@@ -23,4 +24,4 @@ build with `-SkipBaselineCheck` (the M2b bootstrap escape's exact purpose — ho
 orchestrator's call). (3) Verify with `apex-baseline-check.ps1 -Preflight -Worktree <repo>` → GREEN.
 Recorded in ADR-041. Also: the orchestrator ticking spec checkboxes writes `docs/changes/<spec>.md`,
 which is in `~/apex`; if it ticks DURING a `~/apex` dispatch's scope check, the spec file shows as an
-out-of-scope write — tick after the same-tree scope check closes ([[host-writes-void-open-gates]]).
+out-of-scope write — tick after the same-tree scope check closes.

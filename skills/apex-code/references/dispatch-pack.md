@@ -21,6 +21,7 @@ Done when: <the task's done-when clause>
 
 ## Constraints
 - Surgical scope: only the files listed above; `git diff --stat` must show only those.
+- Scratch: if you need a scratch directory, create `.codex-scratch/` at the repo root and nowhere else — it is the only sanctioned name. `.scratch`, `.apex-tmp` and `.sandbox-cache` are DEPRECATED: they are still excluded from the scope check on existing repos, so they raise no violation, but they may lose that exclusion in a future revision — do not use them for new work. Any other invented or task-suffixed variant (`.codex-scratch-task2`) IS reported as an out-of-scope write. If this repo does not gitignore `.codex-scratch/`, it will flag as a scope violation — report that, and do NOT add gitignore entries yourself.
 - <3–7 task-relevant hazards — selection rule below>
 - <autonomy clause verbatim — below>
 
@@ -41,6 +42,19 @@ Done when: <the task's done-when clause>
   no-silent-errors) — native to GPT-5.6; injecting it degrades output via instruction competition.
 - Phrase positively; check the assembled pack for internal consistency before dispatch
   (contradictions burn GPT-5 reasoning) — rewrite conflicts, never stack them.
+
+## Scratch directory (the Constraints slot)
+
+There is exactly one sanctioned scratch directory name: `.codex-scratch/`, anchored at the repo
+root. It is the only scratch location a coder may create. For noise reduction on existing repos,
+`codex-scope-check.ps1` additionally excludes three DEPRECATED names (`.scratch`, `.apex-tmp`,
+`.sandbox-cache`) and three tool caches (`.pytest_cache`, `.mypy_cache`, `.ruff_cache`). Those
+names raise no violation today, may lose the exclusion in a future revision, and are not for new
+work. See the script for the exclusion mechanism and its guards.
+
+The exclusion depends on the target repo already ignoring the name. Coders never add gitignore
+entries themselves; if the repo does not already gitignore `.codex-scratch/`, report the resulting
+scope violation. Repo seeding is a wave-2 item.
 
 ## Autonomy clause (verbatim — closes the Constraints slot)
 
