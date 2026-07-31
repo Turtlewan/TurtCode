@@ -86,6 +86,18 @@ try {
         }
 
         $propertyNames = @($row.PSObject.Properties.Name)
+        $rowKind = if ($propertyNames -ccontains 'row_kind') {
+            [string]$row.row_kind
+        }
+        else {
+            'dispatch'
+        }
+        # Obligation and lease event schemas intentionally omit dispatch identity/state fields.
+        # They are operational artifacts, never build attempts, so exclude them before validating
+        # the stricter dispatch schema.
+        if ($rowKind -cne 'dispatch') {
+            continue
+        }
         if (($propertyNames -cnotcontains 'spec') -or ($row.spec -cne $Spec)) {
             continue
         }
@@ -129,10 +141,20 @@ catch {
     exit 13
 }
 
-# Select from every build attempt first; filtering success earlier let a newer failed/running build be masked.
+# Select from every dispatch build attempt first; filtering success earlier let a newer failed/running build be masked.
 $buildRows = @(
     $matchingRows | Where-Object {
-        $_.Row.phase -ceq 'build'
+        $rowPropertyNames = @($_.Row.PSObject.Properties.Name)
+        $rowKind = if ($rowPropertyNames -ccontains 'row_kind') {
+            [string]$_.Row.row_kind
+        }
+        else {
+            'dispatch'
+        }
+
+        ($_.Row.phase -ceq 'build') -and
+            ($rowKind -ceq 'dispatch') -and
+            (@('leasing', 'orphaned', 'abandoned-unadopted') -cnotcontains [string]$_.Row.status)
     }
 )
 

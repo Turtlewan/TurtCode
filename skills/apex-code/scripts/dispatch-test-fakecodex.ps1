@@ -113,6 +113,14 @@ if ($finalPath -and $env:FAKE_CODEX_NO_REPORT -ne '1') {
     } elseif ($reportStatus -eq 'done_with_concerns') {
         $report.unresolved = @('Live WSL2 tests require host re-verification.')
     }
+    if ($env:FAKE_CODEX_UNRESOLVED_JSON) {
+        switch -CaseSensitive ($env:FAKE_CODEX_UNRESOLVED_JSON) {
+            '[]' { $report.unresolved = @() }
+            '[" "]' { $report.unresolved = @(' ') }
+            '["", " "]' { $report.unresolved = @('', ' ') }
+            default { throw "Unsupported FAKE_CODEX_UNRESOLVED_JSON fixture: $env:FAKE_CODEX_UNRESOLVED_JSON" }
+        }
+    }
     [System.IO.File]::WriteAllText($finalPath, ($report | ConvertTo-Json -Depth 8),
         [System.Text.UTF8Encoding]::new($false))
     Write-Output "FAKE-CODEX: wrote report ($reportStatus) to $finalPath"

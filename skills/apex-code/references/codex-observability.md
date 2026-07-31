@@ -23,11 +23,11 @@ foreground, background the **wrapper invocation** itself.
   -Effort <coder_effort>
 ```
 
-The log lives **outside the target repo**, beside the ledger — `<ledgerDirectory>\codex-logs\`, i.e.
-`%LOCALAPPDATA%\apex\progress\codex-logs\` (or `%APEX_STATE_DIR%\progress\codex-logs\`). The wrapper
-moved it out of the tree because the harness must not write into the tree it is judging (a log inside
-`docs/progress/` read as an unauthorized write and failed every clean build). Never write it into the
-worktree.
+The log lives **outside the target repo**. Do not reconstruct its path from the spec, task, state root,
+or ledger directory: read the ledger row's `log_path` (the wrapper also prints the exact path). The
+wrapper moved it out of the tree because the harness must not write into the tree it is judging (a
+log inside `docs/progress/` read as an unauthorized write and failed every clean build). Never write
+it into the worktree.
 
 - `-c model_reasoning_effort="<effort>"` → the spec's `coder_effort` frontmatter (`{low|medium|high|xhigh|max|ultra}`,
   default `medium`; ADR-030). Omit the flag when the spec is at `medium` to keep the default behaviour.
@@ -53,7 +53,7 @@ worktree.
 The old Sol model rung (ADR-032) is **gone**: `gpt-5.6-sol` *is* the coder now (ADR-034), so there is no
 higher Codex model to escalate to — the dial is the whole ladder.
 - `--json` → Codex's event stream (reasoning, every shell command it runs, and per-turn `usage` token
-  counts) as JSONL to the external `codex-logs\` log (path above). **This is the live feed** — both the user's
+  counts) as JSONL to the ledger row's `log_path`. **This is the live feed** — both the user's
   deep-inspection file and the host's pulse source (below). The `usage` events make the log a live
   Codex-cost/quota meter.
 - `-o <…>.final` → the schema-constrained completion JSON (ADR-031: status / changed_files /
@@ -69,9 +69,9 @@ user actually looks) until it exits, and a raw JSONL file they aren't tailing is
 backgrounded dispatch runs, **the host emits a one-line progress pulse to chat at each natural check-in**
 (when you poll the background shell, and at most ~every 60–90s — never busy-loop):
 
-1. Read only the **tail** of the background output (Bash `BashOutput` on the bg shell, or the last lines of
-   the external `codex-logs\` log, `%LOCALAPPDATA%\apex\progress\codex-logs\codex-<spec>-<task>-<worktreeTag>-<runId8>.log`
-   — or `%APEX_STATE_DIR%\progress\codex-logs\...`) — never the whole log.
+1. Read only the **tail** of the background output (Bash `BashOutput` on the bg shell, or the last lines
+   of the file named by the ledger row's `log_path`) — never reconstruct the path and never read the
+   whole log.
 2. Extract three things from the newest events: the latest shell command / file Codex touched, the latest
    test/verify result if any, and the most recent `usage` total.
 3. Emit **one line**, then discard the read — do not keep log text in context:
@@ -92,9 +92,8 @@ also why the ADR-029 supervision gate's foreground specs were never truly "watch
 for every spec; the gate's real reason is host *supervision/intervention*, not raw visibility.
 
 ## Teardown
-The log is a transient build artifact living in the external state dir (`<ledgerDirectory>\codex-logs\`),
-not in the repo — so it never needs `.gitignore` and can never be committed. Prune old
-`codex-logs\*.log` files at worktree/spec teardown.
+The log at the ledger row's `log_path` is a transient build artifact outside the repo, so it never
+needs `.gitignore` and can never be committed. Prune that exact file at worktree/spec teardown.
 
 ## What the wrapper adds (ADR-033 A4)
 
@@ -106,28 +105,37 @@ it adds three things any run needs and a long unattended one cannot do without:
 waiting on an inherited stdin in some launch paths — a real recurring incident this wrapper exists
 to make structurally impossible, not just documented against.
 
-**Params:** `-Spec -Task -Worktree -BaseSha -Phase -Prompt [-SpecSourcePath <abs>] [-Effort medium] [-NoOutputTimeoutMin 8]
-[-Adopt]`. `-Prompt` is the assembled dispatch pack text (same four-slot pack as any `▸codex`
-dispatch — `references/dispatch-pack.md`).
+**Params:** `-Spec -Task -Worktree -BaseSha -Phase -Prompt [-SpecSourcePath <abs>] [-Effort medium]
+[-MachineCeiling 4] [-Attended:$true|$false] [-OwnedWorktree] [-NoOutputTimeoutMin 8]`.
+Recovery/close-out controls are `-Adopt -RunId <id>`, attended-only
+`-Attended -AbandonRunId <id> -AbandonReason <why>`, and standalone `-ListObligations`. `-Prompt` is
+the assembled dispatch pack text (same four-slot pack as any `▸codex` dispatch —
+`references/dispatch-pack.md`).
 
 **Mechanics:**
 - Launches Codex via `System.Diagnostics.Process` (not `Start-Process`), writes the dispatch pack
   to the child's redirected stdin, then **immediately closes it** — this is the load-bearing fix.
-- Appends a row to the external ledger `<ledgerDirectory>\codex-run-ledger.jsonl` =
-  `%LOCALAPPDATA%\apex\progress\codex-run-ledger.jsonl` (JSONL, one object per line) **before**
-  launch: `{run_id, pid, worktree, spec, task, base_sha, phase, started, log_path, status:
-  "running"}`. On exit, the same row is rewritten in place (temp-file + atomic replace, mutex-
-  serialized across concurrent wrappers) with `status: "done"|"failed"` + `ended`.
+- Under the shared ledger mutex, appends a pre-flight lease and turns it into a dispatch only at the
+  launch boundary. Every new lease/dispatch carries `log_path`, `effort`, and `attended` (`true`,
+  `false`, or `null` when omitted). Lease-scoped refusals append a close event rather than creating a
+  dispatch record or log.
+- `row_kind` vocabulary is exact: `dispatch` = launched run; `lease` = pre-launch reservation;
+  `lease_close` = append-only lease-resolution event; `obligation` = standalone creator-teardown work
+  for a refusal that had no lease/dispatch row. New telemetry fields are `row_kind`, `effort`,
+  `attended`, `refusal_exit`, `cleanup_obligation`, `branch_teardown_obligation`,
+  `teardown_main_repo`, `teardown_sha`, `teardown_branch`, and `teardown_worktree`.
 - **Watchdog:** polls the `--json` log's last-write time every ~15s. No new bytes for
   `-NoOutputTimeoutMin` minutes (default 8) → the ledger row flips to `status: "stalled"` and the
   wrapper exits `124`. It does **not** kill the child process — process ownership stays with the
   caller, who decides whether to terminate a stalled run.
-- **`-Adopt -Spec <X> -Phase <Y>`:** reads the ledger, finds the newest row matching that spec+phase,
-  prints its `worktree` and `git -C <worktree> diff <base_sha>..HEAD` — recovers an orphaned run's
-  work after a session crash without re-dispatching.
+- **`-Adopt -RunId <id> -Spec <X> -Phase <Y> -Worktree <path>`:** claims the exact dead dispatch row,
+  then runs the scope, critical-file, digest/pin, encoding, and verdict gates the dead wrapper missed.
+  Dead unresolved dispatches become `orphaned`; dead open leases become `orphaned` only when no
+  matching `lease_close` exists. A closed lease is resolved. Adopt a dispatch, or explicitly abandon
+  a clean dead row with attended `-AbandonRunId`/`-AbandonReason`; a lease dispatched nothing and must
+  be abandoned, not adopted.
 - Windows npm-shim note: `codex` resolves to a `.ps1`/`.cmd` shim that `UseShellExecute=$false`
   cannot execute directly; the wrapper resolves the real `node.exe` + `codex.js` entry point and
   invokes that instead.
-- The ledger is runtime state, not source — do not hand-edit it; the external
-  `<ledgerDirectory>\codex-logs\` already holds the per-task `--json` logs the ledger's `log_path`
-  field points at.
+- The ledger is runtime state, not source — do not hand-edit it. Read each row's `log_path` to locate
+  that run's `--json` log.

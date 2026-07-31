@@ -178,6 +178,26 @@ Assert-Ok ($LASTEXITCODE -eq 0) 'a clean in-scope build exits 0' "exit $LASTEXIT
 Assert-Ok (-not (Test-Path (Join-Path $repo 'docs\progress'))) 'the harness wrote NOTHING into the worktree' 'no docs/progress/'
 Remove-Item Env:\FAKE_CODEX_INSCOPE_ONLY, Env:\FAKE_CODEX_STATUS, Env:\FAKE_CODEX_NO_REPORT, Env:\FAKE_CODEX_REPO -ErrorAction SilentlyContinue
 
+Write-Host "`n--- #21  -Attended:`$false is still unattended ---" -ForegroundColor Cyan
+# A switch can be explicitly bound false. Checking only whether the parameter was bound lets an AFK
+# caller reach an escape that waives all five adoption gates.
+$ledgerPath = Join-Path $progressRoot.FullName 'codex-run-ledger.jsonl'
+$ledgerBefore = [System.IO.File]::ReadAllText($ledgerPath)
+& $dispatch -AbandonRunId 'careless-false-attendance' -AbandonReason 'not actually attended' `
+    -Attended:$false *> $null
+$falseAttendanceExit = $LASTEXITCODE
+$ledgerAfter = [System.IO.File]::ReadAllText($ledgerPath)
+Assert-Ok ($falseAttendanceExit -eq 83) '-Attended:$false refuses the escape' "exit $falseAttendanceExit (want 83)"
+Assert-Ok ($ledgerAfter -ceq $ledgerBefore) '-Attended:$false mutates no ledger row' 'ledger bytes unchanged'
+
+Write-Host "`n--- #22  whitespace is not an abandonment reason ---" -ForegroundColor Cyan
+$ledgerBefore = [System.IO.File]::ReadAllText($ledgerPath)
+& $dispatch -AbandonRunId 'careless-whitespace-reason' -AbandonReason '   ' -Attended *> $null
+$whitespaceReasonExit = $LASTEXITCODE
+$ledgerAfter = [System.IO.File]::ReadAllText($ledgerPath)
+Assert-Ok ($whitespaceReasonExit -eq 74) 'whitespace-only abandonment reason is rejected' "exit $whitespaceReasonExit (want 74)"
+Assert-Ok ($ledgerAfter -ceq $ledgerBefore) 'whitespace-only reason mutates no ledger row' 'ledger bytes unchanged'
+
 Write-Host ''
 if ($failures -eq 0) {
     Write-Host 'ALL CARELESS-CODER CASES PASS.' -ForegroundColor Green

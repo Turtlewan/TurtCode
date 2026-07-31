@@ -1,8 +1,9 @@
-# Regression tests for two codex-dispatch.ps1 wrapper fixes (session 73):
+# Regression tests for codex-dispatch.ps1 encoding fixes:
 #   (1) stdin is written as explicit UTF-8 bytes, so a prompt with non-ASCII (em-dash) reaches codex
 #       intact instead of being rejected as "input is not valid UTF-8".
 #   (2) the encoding scan is SKIPPED on a read-only (review/end-gate) dispatch, so a review no longer
 #       fails on pre-existing mojibake in the owner's dirty tree (e.g. transcript .err files).
+#   (3) wrapper-owned ledger and concerns writes are UTF-8 without a BOM and round-trip byte-exactly.
 # Fully isolated: throwaway repos, isolated APEX_STATE_DIR, powershell.exe fakes (no real codex).
 # Dispatches are called DIRECTLY (the wrapper's own watchdog bounds them); the fakes exit in <1s.
 
@@ -24,7 +25,23 @@ function Check($label, $cond, $detail) {
     Write-Host ("  {0}  {1,-46} {2}" -f $mark, $label, $detail) -ForegroundColor $col
 }
 
+function Test-ByteArraysEqual($left, $right) {
+    if ($null -eq $left -or $null -eq $right -or $left.Length -ne $right.Length) { return $false }
+    for ($i = 0; $i -lt $left.Length; $i++) {
+        if ($left[$i] -ne $right[$i]) { return $false }
+    }
+    return $true
+}
+
+function Test-StartsWithUtf8Bom($bytes) {
+    return ($bytes.Length -ge 3 -and $bytes[0] -eq 0xEF -and
+        $bytes[1] -eq 0xBB -and $bytes[2] -eq 0xBF)
+}
+
 Write-Host "`n=== codex-dispatch.ps1 wrapper fixes ===" -ForegroundColor Cyan
+$encodingConstructorMatches = @(Select-String -LiteralPath $dispatch -Pattern 'UTF8Encoding')
+Check 'one UTF-8 encoder construction per write helper' `
+    ($encodingConstructorMatches.Count -eq 3) "matches=$($encodingConstructorMatches.Count)"
 
 # --- Test 1: stdin reaches the child as valid UTF-8 -----------------------------------------------
 $utf8Fake = Join-Path $parent 'utf8-fake.ps1'
@@ -44,7 +61,7 @@ try {
 } catch { $result = 'INVALID-UTF8' }
 [System.IO.File]::WriteAllText($env:UTF8_MARKER, $result, [System.Text.UTF8Encoding]::new($false))
 $final = $null; for ($i = 0; $i -lt $args.Count - 1; $i++) { if ($args[$i] -eq '-o') { $final = $args[$i + 1]; break } }
-if ($final) { $r = [ordered]@{ status='done'; changed_files=@(); commands_run=@(); deviations=@(); unresolved=@(); blocker=$null }; [System.IO.File]::WriteAllText($final, ($r | ConvertTo-Json), [System.Text.UTF8Encoding]::new($false)) }
+if ($final) { $r = [ordered]@{ status='done_with_concerns'; changed_files=@(); commands_run=@(); deviations=@(); unresolved=@(('verify ' + [char]0x2014 + ' bytes')); blocker=$null }; [System.IO.File]::WriteAllText($final, ($r | ConvertTo-Json), [System.Text.UTF8Encoding]::new($false)) }
 exit 0
 '@
 $repo1 = Join-Path $parent 'utf8-repo'; New-Item -ItemType Directory -Force -Path $repo1 | Out-Null
@@ -53,11 +70,57 @@ try { git init -q; git config user.email 't@t.t'; git config user.name 't'; Writ
 $state1 = Join-Path $parent 'utf8-state'; New-Item -ItemType Directory -Force -Path $state1 | Out-Null
 $marker = Join-Path $parent 'utf8-marker.txt'
 $emDash = [char]0x2014
+$utf8Spec = "utf8$emDash spec"
+$utf8Task = "task$emDash name"
 $env:APEX_STATE_DIR = $state1; $env:UTF8_MARKER = $marker
-& $dispatch -Spec 'utf8' -Task 't' -Phase 'build' -Worktree $repo1 -BaseSha $sha1 -Prompt ("Implement it $emDash with an em-dash.") -Authorized @('src/a.py') -SkipScopeCheck -SkipBaselineCheck `
+& $dispatch -Spec $utf8Spec -Task $utf8Task -Phase 'build' -Worktree $repo1 -BaseSha $sha1 -Prompt ("Implement it $emDash with an em-dash.") -Authorized @('src/a.py') -SkipScopeCheck -SkipBaselineCheck `
     -CodexExecutable 'powershell.exe' -CodexExecutableArgumentPrefix @('-NoProfile','-ExecutionPolicy','Bypass','-File',$utf8Fake) -ScratchDirectory $state1 *> $null
 $markerVal = if (Test-Path $marker) { [System.IO.File]::ReadAllText($marker) } else { '(none)' }
 Check 'non-ASCII prompt reaches child as valid UTF-8' ($markerVal -eq 'UTF8-OK') "marker=$markerVal"
+
+$ledger1 = Join-Path $state1 'progress\codex-run-ledger.jsonl'
+$ledgerBytes = if (Test-Path -LiteralPath $ledger1) {
+    [System.IO.File]::ReadAllBytes($ledger1)
+}
+else {
+    [byte[]]@()
+}
+$strictUtf8 = [System.Text.UTF8Encoding]::new($false, $true)
+$ledgerText = $null
+$ledgerRoundTrips = $false
+try {
+    $ledgerText = $strictUtf8.GetString($ledgerBytes)
+    $ledgerRoundTrips = Test-ByteArraysEqual $ledgerBytes ($strictUtf8.GetBytes($ledgerText))
+}
+catch { }
+$dispatchRow = @($ledgerText -split "`r?`n" | ForEach-Object {
+        if ([string]::IsNullOrWhiteSpace($_)) { return }
+        try { $_ | ConvertFrom-Json } catch { }
+    } | Where-Object {
+        $_.row_kind -ceq 'dispatch' -and $_.spec -ceq $utf8Spec -and $_.task -ceq $utf8Task
+    } | Select-Object -First 1)
+Check 'ledger starts without UTF-8 BOM' (-not (Test-StartsWithUtf8Bom $ledgerBytes)) "bytes=$($ledgerBytes.Length)"
+Check 'ledger UTF-8 round-trips byte-identically' ($ledgerRoundTrips -and $dispatchRow.Count -eq 1) "matching rows=$($dispatchRow.Count)"
+
+$concerns1 = if ($dispatchRow.Count -eq 1) { "$($dispatchRow[0].final_path).concerns.md" } else { '' }
+$concernsBytes = if (-not [string]::IsNullOrWhiteSpace($concerns1) -and
+        (Test-Path -LiteralPath $concerns1)) {
+    [System.IO.File]::ReadAllBytes($concerns1)
+}
+else {
+    [byte[]]@()
+}
+$concernsText = $null
+$concernsRoundTrips = $false
+try {
+    $concernsText = $strictUtf8.GetString($concernsBytes)
+    $concernsRoundTrips = Test-ByteArraysEqual $concernsBytes ($strictUtf8.GetBytes($concernsText))
+}
+catch { }
+$expectedHeading = "# Coder-reported concerns -- $utf8Spec / $utf8Task"
+Check 'concerns starts without UTF-8 BOM' (-not (Test-StartsWithUtf8Bom $concernsBytes)) "bytes=$($concernsBytes.Length)"
+Check 'concerns UTF-8 round-trips byte-identically' `
+    ($concernsRoundTrips -and $concernsText.StartsWith($expectedHeading)) "path=$concerns1"
 
 # --- Test 2: encoding scan is skipped on a read-only review ---------------------------------------
 $revFake = Join-Path $parent 'review-fake.ps1'

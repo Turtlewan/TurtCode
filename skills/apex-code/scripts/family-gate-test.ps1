@@ -187,6 +187,52 @@ try {
     )
 
     $newCases = @(
+        New-TestCase -Name 'newer-refused-lease-with-close-ignored' -ExpectedExitCode 0 -Rows @(
+            New-FixtureRow -Spec 'family-gate-test/newer-refused-lease-with-close-ignored' -Task 'task-newer-refused-lease-with-close-ignored' -WorktreeKey 'worktree-newer-refused-lease-with-close-ignored' -Phase 'build' -RunId 'build-before-refused-lease' -BuilderFamily 'openai' -Status 'done' -Started '2026-02-05T00:00:00Z'
+            New-FixtureRow -Spec 'family-gate-test/newer-refused-lease-with-close-ignored' -Task 'task-newer-refused-lease-with-close-ignored' -WorktreeKey 'worktree-newer-refused-lease-with-close-ignored' -Phase 'review' -RunId 'review-before-refused-lease' -ReviewerFamily 'anthropic' -ReviewedRunId 'build-before-refused-lease' -Status 'done' -Started '2026-02-05T00:01:00Z'
+            New-FixtureRow -Spec 'family-gate-test/newer-refused-lease-with-close-ignored' -Task 'task-newer-refused-lease-with-close-ignored' -WorktreeKey 'worktree-newer-refused-lease-with-close-ignored' -Phase 'build' -RunId 'refused-lease' -Status 'leasing' -Started '2026-02-05T01:00:00Z' -ExtraFields ([ordered]@{ row_kind = 'lease' })
+            [pscustomobject][ordered]@{
+                run_id = 'refused-lease'
+                row_kind = 'lease_close'
+                status = 'refused-preflight'
+                refusal_exit = 78
+                ended = '2026-02-05T01:01:00Z'
+            }
+        )
+        New-TestCase -Name 'newer-orphaned-artifact-ignored' -ExpectedExitCode 0 -Rows @(
+            New-FixtureRow -Spec 'family-gate-test/newer-orphaned-artifact-ignored' -Task 'task-newer-orphaned-artifact-ignored' -WorktreeKey 'worktree-newer-orphaned-artifact-ignored' -Phase 'build' -RunId 'build-before-orphan' -BuilderFamily 'openai' -Status 'done' -Started '2026-02-06T00:00:00Z'
+            New-FixtureRow -Spec 'family-gate-test/newer-orphaned-artifact-ignored' -Task 'task-newer-orphaned-artifact-ignored' -WorktreeKey 'worktree-newer-orphaned-artifact-ignored' -Phase 'review' -RunId 'review-before-orphan' -ReviewerFamily 'anthropic' -ReviewedRunId 'build-before-orphan' -Status 'done' -Started '2026-02-06T00:01:00Z'
+            New-FixtureRow -Spec 'family-gate-test/newer-orphaned-artifact-ignored' -Task 'task-newer-orphaned-artifact-ignored' -WorktreeKey 'worktree-newer-orphaned-artifact-ignored' -Phase 'build' -RunId 'orphaned-artifact' -Status 'orphaned' -Started '2026-02-06T01:00:00Z'
+        )
+        New-TestCase -Name 'newer-abandoned-unadopted-artifact-ignored' -ExpectedExitCode 0 -Rows @(
+            New-FixtureRow -Spec 'family-gate-test/newer-abandoned-unadopted-artifact-ignored' -Task 'task-newer-abandoned-unadopted-artifact-ignored' -WorktreeKey 'worktree-newer-abandoned-unadopted-artifact-ignored' -Phase 'build' -RunId 'build-before-abandoned' -BuilderFamily 'openai' -Status 'done' -Started '2026-02-07T00:00:00Z'
+            New-FixtureRow -Spec 'family-gate-test/newer-abandoned-unadopted-artifact-ignored' -Task 'task-newer-abandoned-unadopted-artifact-ignored' -WorktreeKey 'worktree-newer-abandoned-unadopted-artifact-ignored' -Phase 'review' -RunId 'review-before-abandoned' -ReviewerFamily 'anthropic' -ReviewedRunId 'build-before-abandoned' -Status 'done' -Started '2026-02-07T00:01:00Z'
+            New-FixtureRow -Spec 'family-gate-test/newer-abandoned-unadopted-artifact-ignored' -Task 'task-newer-abandoned-unadopted-artifact-ignored' -WorktreeKey 'worktree-newer-abandoned-unadopted-artifact-ignored' -Phase 'build' -RunId 'abandoned-unadopted-artifact' -Status 'abandoned-unadopted' -Started '2026-02-07T01:00:00Z'
+        )
+        New-TestCase -Name 'newer-obligation-event-ignored' -ExpectedExitCode 0 -Rows @(
+            New-FixtureRow -Spec 'family-gate-test/newer-obligation-event-ignored' -Task 'task-newer-obligation-event-ignored' -WorktreeKey 'worktree-newer-obligation-event-ignored' -Phase 'build' -RunId 'build-before-obligation' -BuilderFamily 'openai' -Status 'done' -Started '2026-02-08T00:00:00Z'
+            New-FixtureRow -Spec 'family-gate-test/newer-obligation-event-ignored' -Task 'task-newer-obligation-event-ignored' -WorktreeKey 'worktree-newer-obligation-event-ignored' -Phase 'review' -RunId 'review-before-obligation' -ReviewerFamily 'anthropic' -ReviewedRunId 'build-before-obligation' -Status 'done' -Started '2026-02-08T00:01:00Z'
+            # Exact standalone obligation shape emitted by Save-CreatorTeardownRecord.
+            [pscustomobject][ordered]@{
+                run_id = 'obligation-event'
+                row_kind = 'obligation'
+                spec = 'family-gate-test/newer-obligation-event-ignored'
+                task = 'task-newer-obligation-event-ignored'
+                refusal_exit = 79
+                ended = '2026-02-08T01:00:00Z'
+                teardown_main_repo = 'C:\fixtures\main'
+                teardown_sha = '0123456789abcdef0123456789abcdef01234567'
+                teardown_branch = 'codex/obligation-event'
+                teardown_worktree = 'C:\fixtures\obligation-event'
+                cleanup_obligation = 'worktree retained: live sibling'
+                branch_teardown_obligation = ''
+            }
+        )
+        New-TestCase -Name 'newer-dispatch-still-masks' -ExpectedExitCode 13 -Rows @(
+            New-FixtureRow -Spec 'family-gate-test/newer-dispatch-still-masks' -Task 'task-newer-dispatch-still-masks' -WorktreeKey 'worktree-newer-dispatch-still-masks' -Phase 'build' -RunId 'build-before-new-dispatch' -BuilderFamily 'openai' -Status 'done' -Started '2026-02-09T00:00:00Z'
+            New-FixtureRow -Spec 'family-gate-test/newer-dispatch-still-masks' -Task 'task-newer-dispatch-still-masks' -WorktreeKey 'worktree-newer-dispatch-still-masks' -Phase 'review' -RunId 'review-before-new-dispatch' -ReviewerFamily 'anthropic' -ReviewedRunId 'build-before-new-dispatch' -Status 'done' -Started '2026-02-09T00:01:00Z'
+            New-FixtureRow -Spec 'family-gate-test/newer-dispatch-still-masks' -Task 'task-newer-dispatch-still-masks' -WorktreeKey 'worktree-newer-dispatch-still-masks' -Phase 'build' -RunId 'newer-running-dispatch' -BuilderFamily 'anthropic' -Status 'running' -Started '2026-02-09T01:00:00Z' -ExtraFields ([ordered]@{ row_kind = 'dispatch' })
+        )
         New-TestCase -Name 'tree-moved-true-review' -ExpectedExitCode 12 -Rows @(
             New-FixtureRow -Spec 'family-gate-test/tree-moved-true-review' -Task 'task-tree-moved-true-review' -WorktreeKey 'worktree-tree-moved-true-review' -Phase 'build' -RunId 'build-tree-moved-true' -BuilderFamily 'openai' -Status 'done' -Started '2026-01-19T00:00:00Z'
             New-FixtureRow -Spec 'family-gate-test/tree-moved-true-review' -Task 'task-tree-moved-true-review' -WorktreeKey 'worktree-tree-moved-true-review' -Phase 'review' -RunId 'review-tree-moved-true' -ReviewerFamily 'anthropic' -ReviewedRunId 'build-tree-moved-true' -Status 'done' -Started '2026-01-19T00:01:00Z' -ExtraFields ([ordered]@{ tree_moved = $true })

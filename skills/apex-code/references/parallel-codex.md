@@ -14,6 +14,20 @@ behaviour). The default is **2** (A2; ADR-028 as amended); a spec's `max_paralle
 sub-waves of ≤cap (mirrors `worker_cap`). Each `codex exec` runs the full local toolchain, so keep the
 cap well below the Workflow's `min(16, cores−2)`.
 
+The wrapper enforces capacity per resolved state root, not by host-side counting. Before pre-flight it
+holds the shared ledger mutex while it marks dead unresolved rows `orphaned`, totals live `leasing`,
+`running`, `stalled`, and `adopting` build rows, checks both `-MachineCeiling` (state-root-wide) and the
+spec's `max_parallel_codex`, and appends the new `row_kind:"lease"`. Normal build leases weigh 1 and
+`ultra` leases weigh 2; review/read-only leases weigh 0. Wrappers using different state roots are not
+in one capacity pool. A successful launch converts its lease to `row_kind:"dispatch"`; a pre-flight
+refusal closes the lease with an append-only `row_kind:"lease_close"` event.
+
+**Exit 79 is a queue signal, not model failure.** The refused task stays queued and is retried only
+after an occupying lease/dispatch reaches terminal state; do not fall back, lower/bypass the cap, or
+launch outside the wrapper. Because capacity refusal occurs before lease acquisition, it leaves no
+lease, dispatch row, or dispatch log. The sole possible artifact is a `row_kind:"obligation"` event
+when `-OwnedWorktree` teardown could not discharge its creator-owned cleanup.
+
 ## Isolation = git-worktree-per-task
 For each parallel task: `git worktree add <path> -b codex/<spec>-<task-id>` from HEAD.
 

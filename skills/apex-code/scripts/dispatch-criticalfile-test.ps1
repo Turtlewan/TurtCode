@@ -167,6 +167,29 @@ function Get-LedgerRowsForSpec {
     return @($matches)
 }
 
+function Test-LeaseScopedRefusal {
+    param(
+        [Parameter(Mandatory)]$Result,
+        [Parameter(Mandatory)][int]$ExitCode
+    )
+
+    $leaseRows = @($Result.Rows | Where-Object { [string]$_.row_kind -ceq 'lease' })
+    if ($leaseRows.Count -ne 1) { return $false }
+    $runId = [string]$leaseRows[0].run_id
+    $runRows = @(
+        foreach ($line in [System.IO.File]::ReadAllLines($ledgerPath)) {
+            if ([string]::IsNullOrWhiteSpace($line)) { continue }
+            $row = $line | ConvertFrom-Json
+            if ([string]$row.run_id -ceq $runId) { $row }
+        }
+    )
+    $dispatchRows = @($runRows | Where-Object { [string]$_.row_kind -ceq 'dispatch' })
+    $closeRows = @($runRows | Where-Object { [string]$_.row_kind -ceq 'lease_close' })
+    return ($dispatchRows.Count -eq 0 -and $closeRows.Count -eq 1 -and
+        [string]$closeRows[0].status -ceq 'refused-preflight' -and
+        [int]$closeRows[0].refusal_exit -eq $ExitCode)
+}
+
 function Set-LedgerRowProperty {
     param(
         [Parameter(Mandatory)][string]$RunId,
@@ -334,15 +357,15 @@ exit 0
     $result = Invoke-DispatchCase -CaseName '1 HARD-BLOCK confirmed' -Spec $spec -Fixture $fixtures[1] `
         -Authorized @('docs/audit/x.md') -ExtraParameters @{ CriticalFilesConfirmed = $true }
     Assert-Case -Label 'case 1 hard block remains refused' `
-        -Condition ($result.ExitCode -eq 76 -and $result.Rows.Count -eq 0) `
-        -Detail ("exit={0}, rows={1}; expected exit=76, rows=0" -f $result.ExitCode, $result.Rows.Count)
+        -Condition ($result.ExitCode -eq 76 -and (Test-LeaseScopedRefusal -Result $result -ExitCode 76)) `
+        -Detail ("exit={0}, spec rows={1}; expected lease+close and no dispatch" -f $result.ExitCode, $result.Rows.Count)
 
     $spec = 'critfile-critical-unconfirmed'
     $result = Invoke-DispatchCase -CaseName '2 CRITICAL unconfirmed' -Spec $spec -Fixture $fixtures[2] `
         -Authorized @('config/.env')
     Assert-Case -Label 'case 2 unconfirmed critical file is refused' `
-        -Condition ($result.ExitCode -eq 76 -and $result.Rows.Count -eq 0) `
-        -Detail ("exit={0}, rows={1}; expected exit=76, rows=0" -f $result.ExitCode, $result.Rows.Count)
+        -Condition ($result.ExitCode -eq 76 -and (Test-LeaseScopedRefusal -Result $result -ExitCode 76)) `
+        -Detail ("exit={0}, spec rows={1}; expected lease+close and no dispatch" -f $result.ExitCode, $result.Rows.Count)
 
     $spec = 'critfile-absolute-host-state-unconfirmed'
     $absoluteStatusPath = Join-Path $fixtures[11].Path 'docs\status.md'
@@ -350,9 +373,9 @@ exit 0
     $result = Invoke-DispatchCase -CaseName '11 absolute host-state grant unconfirmed' -Spec $spec `
         -Fixture $fixtures[11] -Authorized @($absoluteStatusPath)
     Assert-Case -Label 'case 11 absolute host-state grant is refused by classifier' `
-        -Condition ($result.ExitCode -eq 76 -and $result.Rows.Count -eq 0 -and
+        -Condition ($result.ExitCode -eq 76 -and (Test-LeaseScopedRefusal -Result $result -ExitCode 76) -and
             $result.Output.Contains($expectedCriticalLine)) `
-        -Detail ("exit={0}, rows={1}, output contains '{2}'={3}; expected exit=76, rows=0, output match=True" -f
+        -Detail ("exit={0}, rows={1}, output contains '{2}'={3}; expected lease refusal and output match=True" -f
             $result.ExitCode, $result.Rows.Count, $expectedCriticalLine, $result.Output.Contains($expectedCriticalLine))
 
     # The shared fake always edits src/a.py. Direct that fake-only write to a disposable sink so
@@ -378,36 +401,36 @@ exit 0
     $result = Invoke-DispatchCase -CaseName '8 classifier returns without exit' -Spec $spec -Fixture $fixtures[8] `
         -Authorized @('src/a.py') -ExtraParameters @{ CriticalFilesScript = $noExitClassifier }
     Assert-Case -Label 'case 8 no-exit classifier fails closed after exit 0' `
-        -Condition ($result.ExitCode -eq 76 -and $result.Rows.Count -eq 0) `
-        -Detail ("exit={0}, rows={1}; expected exit=76, rows=0" -f $result.ExitCode, $result.Rows.Count)
+        -Condition ($result.ExitCode -eq 76 -and (Test-LeaseScopedRefusal -Result $result -ExitCode 76)) `
+        -Detail ("exit={0}, spec rows={1}; expected lease+close and no dispatch" -f $result.ExitCode, $result.Rows.Count)
 
     $spec = 'critfile-critical-skip-baseline'
     $result = Invoke-DispatchCase -CaseName '4 CRITICAL unconfirmed with SkipBaselineCheck' -Spec $spec -Fixture $fixtures[4] `
         -Authorized @('config/.env') -ExtraParameters @{ SkipBaselineCheck = $true }
     Assert-Case -Label 'case 4 baseline bypass does not bypass critical gate' `
-        -Condition ($result.ExitCode -eq 76 -and $result.Rows.Count -eq 0) `
-        -Detail ("exit={0}, rows={1}; expected exit=76, rows=0" -f $result.ExitCode, $result.Rows.Count)
+        -Condition ($result.ExitCode -eq 76 -and (Test-LeaseScopedRefusal -Result $result -ExitCode 76)) `
+        -Detail ("exit={0}, spec rows={1}; expected lease+close and no dispatch" -f $result.ExitCode, $result.Rows.Count)
 
     $spec = 'critfile-scope-unlocked-unconfirmed'
     $result = Invoke-DispatchCase -CaseName '5 SCOPE-UNLOCKED unconfirmed' -Spec $spec -Fixture $fixtures[5] `
         -Authorized @() -ExtraParameters @{ ScopeUnlocked = $true; ScopeUnlockedReason = 'x' }
     Assert-Case -Label 'case 5 unconfirmed scope unlock is refused' `
-        -Condition ($result.ExitCode -eq 76 -and $result.Rows.Count -eq 0) `
-        -Detail ("exit={0}, rows={1}; expected exit=76, rows=0" -f $result.ExitCode, $result.Rows.Count)
+        -Condition ($result.ExitCode -eq 76 -and (Test-LeaseScopedRefusal -Result $result -ExitCode 76)) `
+        -Detail ("exit={0}, spec rows={1}; expected lease+close and no dispatch" -f $result.ExitCode, $result.Rows.Count)
 
     $spec = 'critfile-classifier-missing'
     $result = Invoke-DispatchCase -CaseName '6 missing classifier' -Spec $spec -Fixture $fixtures[6] `
         -Authorized @('src/a.py') -ExtraParameters @{ CriticalFilesScript = $missingClassifier }
     Assert-Case -Label 'case 6 missing classifier fails closed' `
-        -Condition ($result.ExitCode -eq 76 -and $result.Rows.Count -eq 0) `
-        -Detail ("exit={0}, rows={1}; expected exit=76, rows=0" -f $result.ExitCode, $result.Rows.Count)
+        -Condition ($result.ExitCode -eq 76 -and (Test-LeaseScopedRefusal -Result $result -ExitCode 76)) `
+        -Detail ("exit={0}, spec rows={1}; expected lease+close and no dispatch" -f $result.ExitCode, $result.Rows.Count)
 
     $spec = 'critfile-classifier-unexpected-code'
     $result = Invoke-DispatchCase -CaseName '7 classifier returns unexpected code' -Spec $spec -Fixture $fixtures[7] `
         -Authorized @('src/a.py') -ExtraParameters @{ CriticalFilesScript = $unexpectedClassifier }
     Assert-Case -Label 'case 7 unexpected classifier code maps to refusal' `
-        -Condition ($result.ExitCode -eq 76 -and $result.Rows.Count -eq 0) `
-        -Detail ("exit={0}, rows={1}; expected exit=76, rows=0" -f $result.ExitCode, $result.Rows.Count)
+        -Condition ($result.ExitCode -eq 76 -and (Test-LeaseScopedRefusal -Result $result -ExitCode 76)) `
+        -Detail ("exit={0}, spec rows={1}; expected lease+close and no dispatch" -f $result.ExitCode, $result.Rows.Count)
 
     $spec = 'critfile-noncritical-build'
     $result = Invoke-DispatchCase -CaseName '9 NON-critical build' -Spec $spec -Fixture $fixtures[9] `
@@ -428,9 +451,9 @@ exit 0
             NoTreePin = $true
             NoTreePinReason = 'review ledger fixture'
         } -FakeEnvironment @{ FAKE_CODEX_VERDICT = 'CLEAN' }
-    Assert-Case -Label 'case 10 missing ReviewedRunId target fails before reservation' `
-        -Condition ($result.ExitCode -eq 78 -and $result.Rows.Count -eq 0) `
-        -Detail ("exit={0}, rows={1}; expected exit=78, rows=0" -f $result.ExitCode, $result.Rows.Count)
+    Assert-Case -Label 'case 10 missing ReviewedRunId target closes its lease' `
+        -Condition ($result.ExitCode -eq 78 -and (Test-LeaseScopedRefusal -Result $result -ExitCode 78)) `
+        -Detail ("exit={0}, spec rows={1}; expected lease+close and no dispatch" -f $result.ExitCode, $result.Rows.Count)
 
     # Seed each binding case through a real BUILD dispatch so the source row has the same terminal
     # shape and real end_tree_digest as production. The review fake writes into a separate sink so it

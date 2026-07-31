@@ -15,9 +15,19 @@ param(
     [string]$Phase,
     [ValidateSet('low', 'medium', 'high', 'xhigh', 'max', 'ultra')]
     [string]$Effort = 'medium',
+    [ValidateRange(1, 16)]
+    [int]$MachineCeiling = 4,
     [ValidateRange(1, 2147483647)]
     [int]$NoOutputTimeoutMin = 8,
     [switch]$Adopt,
+    # Declares that this invocation owns the supplied linked worktree's lifecycle.
+    [switch]$OwnedWorktree,
+    # Reads and prints actionable creator-cleanup obligations without dispatching.
+    [switch]$ListObligations,
+    [string]$RunId,
+    [switch]$Attended,
+    [string]$AbandonRunId,
+    [string]$AbandonReason,
     # The spec's '## Files to change' list. Given, the scope lock is ENFORCED (snapshot before
     # launch, diff + path-scoped revert after exit). Omitted, it is prose only -- and prose has
     # already failed: Codex has written outside a scope lock it was explicitly given.
@@ -70,12 +80,29 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
+$script:pendingExitCode = 'unknown'
+$script:abandonRequested = $PSBoundParameters.ContainsKey('AbandonRunId')
+$script:attendedTelemetry = $(if ($PSBoundParameters.ContainsKey('Attended')) { [bool]$Attended } else { $null })
 
+if (-not $ListObligations) {
 # Exit 74 = caller-contract error, refused before any I/O; no state dir touched.
 # -Phase cannot use ValidateSet: Windows PowerShell rejects an unknown value before this body runs
 # and reports exit 1, which is already the wrapper's child-failure meaning.
-if (@('build', 'review') -cnotcontains $Phase) {
+if (-not $script:abandonRequested -and @('build', 'review') -cnotcontains $Phase) {
     Write-Host "[dispatch] REFUSED (exit 74): -Phase must be exactly 'build' or 'review' (got '$Phase')" -ForegroundColor Red
+    exit 74
+}
+if ($script:abandonRequested -and [string]::IsNullOrWhiteSpace($AbandonReason)) {
+    Write-Host '[dispatch] REFUSED (exit 74): -AbandonRunId requires a non-empty -AbandonReason' -ForegroundColor Red
+    exit 74
+}
+if ($script:abandonRequested -and
+        (-not $PSBoundParameters.ContainsKey('Attended') -or -not [bool]$Attended)) {
+    Write-Host '[dispatch] REFUSED (exit 83): -AbandonRunId requires -Attended:$true' -ForegroundColor Red
+    exit 83
+}
+if ($script:abandonRequested -and $Adopt) {
+    Write-Host '[dispatch] REFUSED (exit 74): -AbandonRunId and -Adopt are mutually exclusive' -ForegroundColor Red
     exit 74
 }
 if ($ScopeUnlocked -and $Authorized.Count -gt 0) {
@@ -121,9 +148,48 @@ if (-not $Adopt -and $Phase -ceq 'review' -and $Sandbox -cne 'read-only') {
     Write-Host "[dispatch] -Phase/-Schema '$Phase/$Schema' forces -Sandbox read-only (a reviewer must not edit what it judges)." -ForegroundColor DarkGray
     $Sandbox = 'read-only'
 }
+}
 
 function Get-UtcTimestamp {
     return (Get-Date).ToUniversalTime().ToString('o')
+}
+
+# One canonical value serves the main completion path and the adoption mirror. The durable ledger
+# field is the contractual evidence; Write-Host below is only a best-effort human display whose
+# rendering may wrap independently of the stored value.
+$emptyConcernBlockerText = 'Coder reported done_with_concerns and named no unresolved item. Either report done, or name a concern.'
+
+# Residual risk: when the ledger does not exist, apex-ledger-append.ps1 may create it first with
+# Add-Content -Encoding utf8, which emits a BOM on Windows PowerShell 5.1. Readers tolerate that
+# leading BOM; the hook is intentionally out of scope here.
+function Write-Utf8NoBomText {
+    param(
+        [Parameter(Mandatory)][string]$Path,
+        [Parameter(Mandatory)][AllowEmptyString()][string]$Text
+    )
+
+    $encoding = [System.Text.UTF8Encoding]::new($false)
+    [System.IO.File]::WriteAllText($Path, $Text, $encoding)
+}
+
+function Add-Utf8NoBomText {
+    param(
+        [Parameter(Mandatory)][string]$Path,
+        [Parameter(Mandatory)][AllowEmptyString()][string]$Text
+    )
+
+    $encoding = [System.Text.UTF8Encoding]::new($false)
+    [System.IO.File]::AppendAllText($Path, $Text, $encoding)
+}
+
+function Write-Utf8NoBomLines {
+    param(
+        [Parameter(Mandatory)][string]$Path,
+        [Parameter(Mandatory)][AllowEmptyCollection()][AllowEmptyString()][string[]]$Lines
+    )
+
+    $encoding = [System.Text.UTF8Encoding]::new($false)
+    [System.IO.File]::WriteAllLines($Path, $Lines, $encoding)
 }
 
 function Get-ModelFamily([string]$model) {
@@ -137,6 +203,104 @@ function ConvertTo-SafeFileName {
     param([Parameter(Mandatory)][string]$Value)
 
     return ($Value -replace '[<>:"/\\|?*]', '_')
+}
+
+function Get-SpecFrontmatterValue {
+    param([Parameter(Mandatory)][string]$Key)
+
+    # The in-worktree spec is authoritative. -SpecSourcePath is only the documented fallback for a
+    # cross-tree dispatch whose spec is not present in the target tree.
+    $specPath = Join-Path (Join-Path $Worktree 'docs\changes') "$Spec.md"
+    if (-not (Test-Path -LiteralPath $specPath -PathType Leaf)) {
+        $specPath = $SpecSourcePath
+    }
+    if ([string]::IsNullOrWhiteSpace($specPath) -or
+            -not (Test-Path -LiteralPath $specPath -PathType Leaf)) {
+        return $null
+    }
+
+    $lines = [System.IO.File]::ReadAllLines($specPath)
+    if ($lines.Count -eq 0 -or $lines[0].Trim() -cne '---') { return $null }
+
+    $frontmatterEnd = -1
+    for ($i = 1; $i -lt $lines.Count; $i++) {
+        if ($lines[$i].Trim() -ceq '---') {
+            $frontmatterEnd = $i
+            break
+        }
+    }
+    if ($frontmatterEnd -lt 0) { return $null }
+
+    $keyPattern = '^(?<indent>\s*)' + [regex]::Escape($Key) + '\s*:(?<value>.*)$'
+    for ($i = 1; $i -lt $frontmatterEnd; $i++) {
+        if ($lines[$i] -cnotmatch $keyPattern) { continue }
+
+        $indent = $Matches.indent.Length
+        $rawValue = ([string]$Matches.value).Trim()
+        if ($rawValue.Length -gt 0) {
+            if ($rawValue.StartsWith('[')) {
+                if (-not $rawValue.EndsWith(']')) {
+                    return '__APEX_FRONTMATTER_UNPARSEABLE__'
+                }
+                $flowBody = $rawValue.Substring(1, $rawValue.Length - 2).Trim()
+                if ($flowBody.Length -eq 0) {
+                    return ,([string[]]@())
+                }
+                $flowItems = @()
+                foreach ($itemText in $flowBody.Split(',')) {
+                    $item = $itemText.Trim()
+                    if ($item.Length -eq 0 -or $item -match '[[\]{}]') {
+                        return '__APEX_FRONTMATTER_UNPARSEABLE__'
+                    }
+                    if (($item.StartsWith("'") -and $item.EndsWith("'")) -or
+                            ($item.StartsWith('"') -and $item.EndsWith('"'))) {
+                        if ($item.Length -lt 2) { return '__APEX_FRONTMATTER_UNPARSEABLE__' }
+                        $item = $item.Substring(1, $item.Length - 2)
+                    }
+                    $flowItems += [string]$item
+                }
+                return ,([string[]]$flowItems)
+            }
+            if ($rawValue -match '^[\[{]') {
+                return '__APEX_FRONTMATTER_UNPARSEABLE__'
+            }
+            if (($rawValue.StartsWith("'") -and $rawValue.EndsWith("'")) -or
+                    ($rawValue.StartsWith('"') -and $rawValue.EndsWith('"'))) {
+                if ($rawValue.Length -lt 2) { return '__APEX_FRONTMATTER_UNPARSEABLE__' }
+                $rawValue = $rawValue.Substring(1, $rawValue.Length - 2)
+            }
+            return [string]$rawValue
+        }
+
+        $sequenceItems = @()
+        $sawSequenceLine = $false
+        for ($j = $i + 1; $j -lt $frontmatterEnd; $j++) {
+            $candidate = [string]$lines[$j]
+            if ([string]::IsNullOrWhiteSpace($candidate)) { continue }
+            $candidateIndent = $candidate.Length - $candidate.TrimStart().Length
+            if ($candidateIndent -le $indent) { break }
+            $sawSequenceLine = $true
+            if ($candidate.Trim() -cnotmatch '^-\s+(?<item>.+)$') {
+                return '__APEX_FRONTMATTER_UNPARSEABLE__'
+            }
+            $sequenceItem = ([string]$Matches.item).Trim()
+            if ($sequenceItem.Length -eq 0 -or $sequenceItem -match '^[\[{]') {
+                return '__APEX_FRONTMATTER_UNPARSEABLE__'
+            }
+            if (($sequenceItem.StartsWith("'") -and $sequenceItem.EndsWith("'")) -or
+                    ($sequenceItem.StartsWith('"') -and $sequenceItem.EndsWith('"'))) {
+                if ($sequenceItem.Length -lt 2) { return '__APEX_FRONTMATTER_UNPARSEABLE__' }
+                $sequenceItem = $sequenceItem.Substring(1, $sequenceItem.Length - 2)
+            }
+            $sequenceItems += [string]$sequenceItem
+        }
+        if (-not $sawSequenceLine) {
+            return '__APEX_FRONTMATTER_UNPARSEABLE__'
+        }
+        return ,([string[]]$sequenceItems)
+    }
+
+    return $null
 }
 
 function ConvertTo-ProcessArgument {
@@ -198,12 +362,6 @@ $harnessStateDir = Join-Path $apexStateRoot 'gates'
 $ledgerDirectory = Join-Path $apexStateRoot 'progress'
 $ledgerPath = Join-Path $ledgerDirectory 'codex-run-ledger.jsonl'
 
-# Carry the existing ledger over once, so -Adopt can still find a run recorded before the move.
-$legacyLedger = Join-Path (Join-Path $dispatcherRoot 'docs\progress') 'codex-run-ledger.jsonl'
-if ((Test-Path -LiteralPath $legacyLedger) -and -not (Test-Path -LiteralPath $ledgerPath)) {
-    [System.IO.Directory]::CreateDirectory($ledgerDirectory) | Out-Null
-    Copy-Item -LiteralPath $legacyLedger -Destination $ledgerPath -Force -ErrorAction SilentlyContinue
-}
 $schemaFile = switch ($Schema) {
     'endgate' { 'afk-endgate-schema.json' }
     'review' { 'codex-review-schema.json' }
@@ -214,43 +372,189 @@ $digestScript = if ($TreePinScript) { $TreePinScript } else { Join-Path $PSScrip
 $ledgerMutex = [System.Threading.Mutex]::new($false, 'ApexCodexRunLedger')
 
 function Invoke-WithLedgerLock {
-    param([Parameter(Mandatory)][scriptblock]$Action)
+    param(
+        [Parameter(Mandatory)][scriptblock]$Action,
+        [System.Threading.Mutex]$Mutex = $ledgerMutex
+    )
 
     $acquired = $false
     try {
         try {
-            $acquired = $ledgerMutex.WaitOne([TimeSpan]::FromSeconds(30))
+            $acquired = $Mutex.WaitOne([TimeSpan]::FromSeconds(30))
         } catch [System.Threading.AbandonedMutexException] {
             $acquired = $true
         }
         if (-not $acquired) { throw 'Timed out waiting for the Codex run-ledger lock.' }
         & $Action
     } finally {
-        if ($acquired) { $ledgerMutex.ReleaseMutex() }
+        if ($acquired) { $Mutex.ReleaseMutex() }
+    }
+}
+
+# Carry the existing ledger over once, so -Adopt can still find a run recorded before the move.
+# Initialization joins the same mutex protocol as every later ledger read and mutation; otherwise
+# two first-use wrappers can race a copy with the capacity scan or with each other.
+$legacyLedger = Join-Path (Join-Path $dispatcherRoot 'docs\progress') 'codex-run-ledger.jsonl'
+Invoke-WithLedgerLock {
+    if ((Test-Path -LiteralPath $legacyLedger) -and -not (Test-Path -LiteralPath $ledgerPath)) {
+        [System.IO.Directory]::CreateDirectory($ledgerDirectory) | Out-Null
+        Copy-Item -LiteralPath $legacyLedger -Destination $ledgerPath -Force
+    }
+}
+
+function Invoke-LedgerFileReplace {
+    param(
+        [Parameter(Mandatory)][string]$TemporaryPath,
+        [Parameter(Mandatory)][string]$BackupPath,
+        [Parameter(Mandatory)][string]$Caller,
+        [Parameter(Mandatory)][int]$RowsChanged
+    )
+
+    [System.IO.File]::Replace($TemporaryPath, $ledgerPath, $BackupPath)
+    if (-not [string]::IsNullOrWhiteSpace($env:APEX_LEDGER_REPLACE_LOG)) {
+        $replaceLogDirectory = Split-Path $env:APEX_LEDGER_REPLACE_LOG -Parent
+        if (-not [string]::IsNullOrWhiteSpace($replaceLogDirectory)) {
+            [System.IO.Directory]::CreateDirectory($replaceLogDirectory) | Out-Null
+        }
+        Add-Utf8NoBomText -Path $env:APEX_LEDGER_REPLACE_LOG -Text `
+            (('{0}|{1}|{2}' -f (Get-UtcTimestamp), $Caller, $RowsChanged) +
+                [Environment]::NewLine)
+    }
+}
+
+function Set-LedgerLines {
+    param(
+        [Parameter(Mandatory)][AllowEmptyCollection()][AllowEmptyString()][string[]]$Lines,
+        [Parameter(Mandatory)][string]$Caller,
+        [Parameter(Mandatory)][int]$RowsChanged
+    )
+
+    $replacementId = [guid]::NewGuid().ToString('N')
+    $temporaryPath = "$($ledgerPath).$replacementId.tmp"
+    $backupPath = "$($ledgerPath).$replacementId.bak"
+    try {
+        Write-Utf8NoBomLines -Path $temporaryPath -Lines $Lines
+        Invoke-LedgerFileReplace -TemporaryPath $temporaryPath -BackupPath $backupPath `
+            -Caller $Caller -RowsChanged $RowsChanged
+    } finally {
+        if (Test-Path -LiteralPath $temporaryPath) {
+            Remove-Item -LiteralPath $temporaryPath -Force
+        }
+        if (Test-Path -LiteralPath $backupPath) {
+            Remove-Item -LiteralPath $backupPath -Force
+        }
     }
 }
 
 function Add-LedgerRow {
-    param([Parameter(Mandatory)][hashtable]$Row)
+    param(
+        [Parameter(Mandatory)][hashtable]$Row,
+        [System.Threading.Mutex]$Mutex = $ledgerMutex
+    )
+
+    Invoke-WithLedgerLock -Mutex $Mutex {
+        [System.IO.Directory]::CreateDirectory($ledgerDirectory) | Out-Null
+        $json = $Row | ConvertTo-Json -Compress -Depth 8
+        Add-Utf8NoBomText -Path $ledgerPath -Text ($json + [Environment]::NewLine)
+    }
+}
+
+function Add-LeaseCloseRow {
+    param(
+        [Parameter(Mandatory)][string]$RunId,
+        [Parameter(Mandatory)][string]$Status,
+        [Parameter(Mandatory)][AllowNull()][object]$RefusalExit
+    )
+
+    $closeRow = [ordered]@{
+        run_id = $RunId
+        row_kind = 'lease_close'
+        status = $Status
+        refusal_exit = $RefusalExit
+        ended = (Get-UtcTimestamp)
+        log_path = $logPath
+        effort = $Effort
+        attended = $script:attendedTelemetry
+    }
 
     Invoke-WithLedgerLock {
         [System.IO.Directory]::CreateDirectory($ledgerDirectory) | Out-Null
-        $json = $Row | ConvertTo-Json -Compress -Depth 8
-        [System.IO.File]::AppendAllText(
-            $ledgerPath,
-            $json + [Environment]::NewLine,
-            [System.Text.UTF8Encoding]::new($false)
-        )
+        if (Test-Path -LiteralPath $ledgerPath -PathType Leaf) {
+            foreach ($ledgerLine in [System.IO.File]::ReadAllLines($ledgerPath)) {
+                if ([string]::IsNullOrWhiteSpace($ledgerLine)) { continue }
+                try { $existingRow = $ledgerLine | ConvertFrom-Json } catch { continue }
+                if ([string]$existingRow.run_id -ceq $RunId -and
+                        [string]$existingRow.row_kind -ceq [string]$closeRow.row_kind) {
+                    throw "Refusing to append a second $([string]$closeRow.row_kind) ledger row for run_id $RunId."
+                }
+            }
+        }
+        $ledgerSeparator = ''
+        if ((Test-Path -LiteralPath $ledgerPath) -and (Get-Item -LiteralPath $ledgerPath).Length -gt 0) {
+            $ledgerText = [System.IO.File]::ReadAllText($ledgerPath)
+            if (-not $ledgerText.EndsWith("`n") -and -not $ledgerText.EndsWith("`r")) {
+                $ledgerSeparator = [Environment]::NewLine
+            }
+        }
+        Add-Utf8NoBomText -Path $ledgerPath -Text (
+            $ledgerSeparator + ($closeRow | ConvertTo-Json -Compress -Depth 8) +
+                [Environment]::NewLine)
     }
+}
+
+function Get-OpenLeaseRunIds {
+    param([AllowNull()][AllowEmptyCollection()][AllowEmptyString()][string[]]$LedgerLines)
+
+    $leaseRunIds = [System.Collections.Generic.HashSet[string]]::new(
+        [System.StringComparer]::Ordinal)
+    $closedRunIds = [System.Collections.Generic.HashSet[string]]::new(
+        [System.StringComparer]::Ordinal)
+
+    $readLeaseRows = {
+        foreach ($line in $LedgerLines) {
+            if ([string]::IsNullOrWhiteSpace($line)) { continue }
+            try { $row = $line | ConvertFrom-Json } catch { continue }
+            $leaseRunId = [string]$row.run_id
+            if ([string]::IsNullOrWhiteSpace($leaseRunId)) { continue }
+            if ([string]$row.row_kind -ceq 'lease') {
+                [void]$leaseRunIds.Add($leaseRunId)
+            }
+            elseif ([string]$row.row_kind -ceq 'lease_close') {
+                [void]$closedRunIds.Add($leaseRunId)
+            }
+        }
+    }
+    if ($PSBoundParameters.ContainsKey('LedgerLines')) {
+        & $readLeaseRows
+    }
+    else {
+        Invoke-WithLedgerLock {
+            if (-not (Test-Path -LiteralPath $ledgerPath -PathType Leaf)) { return }
+            $LedgerLines = [System.IO.File]::ReadAllLines($ledgerPath)
+            & $readLeaseRows
+        }
+    }
+
+    foreach ($closedRunId in $closedRunIds) {
+        [void]$leaseRunIds.Remove($closedRunId)
+    }
+    return @($leaseRunIds)
+}
+
+function Exit-Dispatch([int]$Code) {
+    $script:pendingExitCode = $Code
+    exit $Code
 }
 
 function Update-LedgerRow {
     param(
         [Parameter(Mandatory)][string]$RunId,
-        [Parameter(Mandatory)][hashtable]$Changes
+        [Parameter(Mandatory)][string]$RowKind,
+        [Parameter(Mandatory)][hashtable]$Changes,
+        [System.Threading.Mutex]$Mutex = $ledgerMutex
     )
 
-    Invoke-WithLedgerLock {
+    Invoke-WithLedgerLock -Mutex $Mutex {
         if (-not (Test-Path -LiteralPath $ledgerPath)) {
             throw "Codex run ledger does not exist: $ledgerPath"
         }
@@ -268,7 +572,12 @@ function Update-LedgerRow {
                 $line
                 continue
             }
-            if ($row.run_id -eq $RunId) {
+            $existingRowKind = if (@($row.PSObject.Properties.Name) -ccontains 'row_kind') {
+                [string]$row.row_kind
+            } else {
+                'dispatch'
+            }
+            if ($row.run_id -eq $RunId -and $existingRowKind -eq $RowKind) {
                 foreach ($change in $Changes.GetEnumerator()) {
                     $row | Add-Member -NotePropertyName $change.Key -NotePropertyValue $change.Value -Force
                 }
@@ -279,29 +588,124 @@ function Update-LedgerRow {
             }
         }
 
-        if (-not $updated) { throw "Codex run ledger row not found for run_id $RunId." }
+        if (-not $updated) {
+            throw "Codex run ledger row not found for run_id $RunId and row_kind $RowKind."
+        }
 
         # A same-directory temporary file plus File.Replace makes a completed
         # status update atomic for readers; the named mutex serializes wrappers.
-        $replacementId = [guid]::NewGuid().ToString('N')
-        $temporaryPath = "$($ledgerPath).$replacementId.tmp"
-        $backupPath = "$($ledgerPath).$replacementId.bak"
-        try {
-            [System.IO.File]::WriteAllLines(
-                $temporaryPath,
-                [string[]]$outputLines,
-                [System.Text.UTF8Encoding]::new($false)
-            )
-            [System.IO.File]::Replace($temporaryPath, $ledgerPath, $backupPath)
-        } finally {
-            if (Test-Path -LiteralPath $temporaryPath) {
-                Remove-Item -LiteralPath $temporaryPath -Force
+        Set-LedgerLines -Lines ([string[]]$outputLines) -Caller 'Update-LedgerRow' -RowsChanged 1
+    }
+}
+
+function Invoke-AbandonRun {
+    Write-Host '[dispatch] -AbandonRunId is an ATTENDED-ONLY escape: it waives scope/critical/digest/pin/encoding without running them. An AFK run must park instead.' -ForegroundColor Yellow
+    $script:abandonMatch = $null
+    Invoke-WithLedgerLock {
+        if (-not (Test-Path -LiteralPath $ledgerPath -PathType Leaf)) {
+            Write-Host "[dispatch] REFUSED (exit 82): run_id '$AbandonRunId' was not found (observed status: not-found)." -ForegroundColor Red
+            Exit-Dispatch 82
+        }
+
+        $ledgerLines = [System.IO.File]::ReadAllLines($ledgerPath)
+        $matches = [System.Collections.Generic.List[object]]::new()
+        for ($lineIndex = 0; $lineIndex -lt $ledgerLines.Count; $lineIndex++) {
+            $line = $ledgerLines[$lineIndex]
+            if ([string]::IsNullOrWhiteSpace($line)) { continue }
+            try { $candidate = $line | ConvertFrom-Json } catch { continue }
+            $candidateRowKind = if (@($candidate.PSObject.Properties.Name) -ccontains 'row_kind') {
+                [string]$candidate.row_kind
             }
-            if (Test-Path -LiteralPath $backupPath) {
-                Remove-Item -LiteralPath $backupPath -Force
+            else {
+                'dispatch'
+            }
+            if ([string]$candidate.run_id -ceq $AbandonRunId -and
+                    @('dispatch', 'lease') -ccontains $candidateRowKind) {
+                $matches.Add([pscustomobject]@{
+                    Index = $lineIndex
+                    Row = $candidate
+                    RowKind = $candidateRowKind
+                })
             }
         }
+
+        if ($matches.Count -ne 1) {
+            $observedStatus = if ($matches.Count -eq 0) { 'not-found' } else { 'ambiguous' }
+            Write-Host "[dispatch] REFUSED (exit 82): run_id '$AbandonRunId' cannot be abandoned (observed status: $observedStatus)." -ForegroundColor Red
+            Exit-Dispatch 82
+        }
+
+        $selected = $matches[0]
+        $row = $selected.Row
+        $observedStatus = [string]$row.status
+        $recoverable = $observedStatus -ceq 'orphaned'
+        if (@('leasing', 'running', 'stalled') -ccontains $observedStatus) {
+            $recoverable = -not (Test-LedgerRowLive -Row $row)
+        }
+        if (-not $recoverable) {
+            Write-Host "[dispatch] REFUSED (exit 82): run_id '$AbandonRunId' has observed status '$observedStatus' and is not a dead recoverable row." -ForegroundColor Red
+            Exit-Dispatch 82
+        }
+
+        $previousErrorActionPreference = $ErrorActionPreference
+        $ErrorActionPreference = 'Continue'
+        try {
+            & cmd /c exit 99
+            $gitStatusLines = @(& git -C ([string]$row.worktree) status --porcelain 2>&1)
+            $gitStatusExit = $LASTEXITCODE
+        }
+        finally {
+            $ErrorActionPreference = $previousErrorActionPreference
+        }
+        $gitStatusText = ([string[]]$gitStatusLines -join [Environment]::NewLine).Trim()
+        if ($gitStatusExit -ne 0 -or -not [string]::IsNullOrWhiteSpace($gitStatusText)) {
+            $gitStatusPreview = $gitStatusText
+            if ($gitStatusPreview.Length -gt 200) {
+                $gitStatusPreview = $gitStatusPreview.Substring(0, 200)
+            }
+            Write-Host "[dispatch] REFUSED (exit 82): recorded worktree is dirty or unreadable (git exit $gitStatusExit): $gitStatusPreview" -ForegroundColor Red
+            Exit-Dispatch 82
+        }
+
+        $row | Add-Member -NotePropertyName 'status' -NotePropertyValue 'abandoned-unadopted' -Force
+        $row | Add-Member -NotePropertyName 'ended' -NotePropertyValue (Get-UtcTimestamp) -Force
+        $row | Add-Member -NotePropertyName 'abandon_reason' -NotePropertyValue $AbandonReason -Force
+        $row | Add-Member -NotePropertyName 'waived_gates' `
+            -NotePropertyValue @('scope', 'critical', 'digest', 'pin', 'encoding') -Force
+        $ledgerLines[$selected.Index] = $row | ConvertTo-Json -Compress -Depth 8
+        Set-LedgerLines -Lines ([string[]]$ledgerLines) -Caller 'AbandonRun' -RowsChanged 1
+        $script:abandonMatch = $row
     }
+
+    Write-Host ($script:abandonMatch | ConvertTo-Json -Compress -Depth 8)
+    exit 0
+}
+
+function Get-UnresolvedWorktreeRows {
+    param(
+        [Parameter(Mandatory)][string]$WorktreeKey,
+        [Parameter(Mandatory)][AllowEmptyCollection()][AllowEmptyString()][string[]]$LedgerLines,
+        [string]$ExcludeRunId
+    )
+
+    $openLeaseRunIds = @(Get-OpenLeaseRunIds -LedgerLines $LedgerLines)
+    $matches = @()
+    foreach ($line in $LedgerLines) {
+        if ([string]::IsNullOrWhiteSpace($line)) { continue }
+        try { $row = $line | ConvertFrom-Json } catch { continue }
+        $rowStatus = [string]$row.status
+        if (@('leasing', 'running', 'stalled', 'adopting', 'orphaned') -cnotcontains $rowStatus) {
+            continue
+        }
+        if ($ExcludeRunId -and [string]$row.run_id -ceq $ExcludeRunId) { continue }
+        if ([string]$row.worktree_key -cne $WorktreeKey) { continue }
+        if ($rowStatus -ceq 'leasing' -and
+                $openLeaseRunIds -cnotcontains [string]$row.run_id) {
+            continue
+        }
+        $matches += $row
+    }
+    return @($matches)
 }
 
 # --- Worktree identity: CANONICAL, never lexical -------------------------------------------------
@@ -441,11 +845,21 @@ function Test-MalformedLedgerLineCouldBelongToWorktree {
 }
 
 function Get-LiveDispatches {
-    param([Parameter(Mandatory)][string]$WorktreeKey)
+    param(
+        [Parameter(Mandatory)][string]$WorktreeKey,
+        [string]$ExcludeRunId,
+        [AllowNull()][AllowEmptyCollection()][AllowEmptyString()][string[]]$LedgerLines
+    )
 
-    if (-not (Test-Path -LiteralPath $ledgerPath)) { return @() }
+    if (-not $PSBoundParameters.ContainsKey('LedgerLines')) {
+        $LedgerLines = @(Invoke-WithLedgerLock {
+            if (-not (Test-Path -LiteralPath $ledgerPath -PathType Leaf)) { return }
+            [System.IO.File]::ReadAllLines($ledgerPath)
+        })
+    }
     $live = @()
-    foreach ($line in [System.IO.File]::ReadAllLines($ledgerPath)) {
+    $openLeaseRunIds = @(Get-OpenLeaseRunIds -LedgerLines $LedgerLines)
+    foreach ($line in $LedgerLines) {
         if ([string]::IsNullOrWhiteSpace($line)) { continue }
         try {
             $row = $line | ConvertFrom-Json
@@ -462,11 +876,339 @@ function Get-LiveDispatches {
         # 'adopting' is LIVE: adoption is still running that run's gates. Treating it as terminal
         # freed the worktree mid-adoption -- and if adoption then threw (a missing helper), the row
         # stayed 'adopting' forever while the next dispatch happily launched into the same tree.
-        if ($row.status -ne 'running' -and $row.status -ne 'stalled' -and $row.status -ne 'adopting') { continue }
+        if (@('leasing', 'running', 'stalled', 'adopting') -cnotcontains [string]$row.status) { continue }
+        if ($ExcludeRunId -and [string]$row.run_id -ceq $ExcludeRunId) { continue }
+        if ([string]$row.status -ceq 'leasing' -and
+                $openLeaseRunIds -cnotcontains [string]$row.run_id) { continue }
         if ([string]$row.worktree_key -ne $WorktreeKey) { continue }
         if (Test-LedgerRowLive -Row $row) { $live += $row }
     }
     return $live
+}
+
+function Invoke-CreatorGit {
+    param([Parameter(Mandatory)][string[]]$Arguments)
+
+    $previous = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
+    try {
+        & cmd /c exit 99
+        $gitLines = @(& git @Arguments 2>&1 | ForEach-Object { [string]$_ })
+        $gitExit = $LASTEXITCODE
+    }
+    catch {
+        $gitLines = @($_.Exception.Message)
+        $gitExit = 99
+    }
+    finally {
+        $ErrorActionPreference = $previous
+    }
+    return [pscustomobject]@{
+        Lines = [string[]]$gitLines
+        ExitCode = [int]$gitExit
+        Text = ([string[]]$gitLines -join [Environment]::NewLine).Trim()
+    }
+}
+
+function Get-CreatorTeardownCommand {
+    param(
+        [Parameter(Mandatory)][string]$MainRepo,
+        [Parameter(Mandatory)][string]$Worktree
+    )
+
+    return ('git -C "{0}" worktree remove "{1}"' -f $MainRepo, $Worktree)
+}
+
+function Save-CreatorTeardownRecord {
+    param(
+        [Parameter(Mandatory)][string]$RunId,
+        [Parameter(Mandatory)][hashtable]$Record,
+        [Parameter(Mandatory)][AllowEmptyCollection()][AllowEmptyString()][string[]]$LedgerLines,
+        [Parameter(Mandatory)][System.Threading.Mutex]$Mutex
+    )
+
+    $targetRowKind = $null
+    foreach ($line in $LedgerLines) {
+        if ([string]::IsNullOrWhiteSpace($line)) { continue }
+        try { $candidate = $line | ConvertFrom-Json } catch { continue }
+        if ([string]$candidate.run_id -cne $RunId) { continue }
+        $candidateKind = if (@($candidate.PSObject.Properties.Name) -ccontains 'row_kind') {
+            [string]$candidate.row_kind
+        }
+        else {
+            'dispatch'
+        }
+        if ($candidateKind -ceq 'dispatch') {
+            $targetRowKind = 'dispatch'
+            break
+        }
+        if ($candidateKind -ceq 'lease') {
+            $targetRowKind = 'lease'
+        }
+        elseif ($candidateKind -ceq 'obligation' -and -not $targetRowKind) {
+            # A teardown may record successfully and then throw. The outer catch retries with a
+            # fresh ledger snapshot; target that existing event instead of appending a duplicate.
+            $targetRowKind = 'obligation'
+        }
+    }
+
+    if ($targetRowKind) {
+        Update-LedgerRow -RunId $RunId -RowKind $targetRowKind -Changes $Record -Mutex $Mutex
+        return
+    }
+
+    # Only the post-identity pre-lease/refusal exits are permitted to create a standalone obligation.
+    if (@('79', '80', '81') -cnotcontains [string]$script:pendingExitCode) { return }
+    $obligationRow = @{
+        run_id = $RunId
+        row_kind = 'obligation'
+        spec = $Spec
+        task = $Task
+        refusal_exit = [int]$script:pendingExitCode
+        ended = (Get-UtcTimestamp)
+    }
+    foreach ($field in $Record.GetEnumerator()) {
+        $obligationRow[$field.Key] = $field.Value
+    }
+    Add-LedgerRow -Row $obligationRow -Mutex $Mutex
+}
+
+function Invoke-CreatorTeardown {
+    param(
+        [Parameter(Mandatory)][string]$Worktree,
+        [Parameter(Mandatory)][string]$RunId
+    )
+
+    # Seed every structured field before the first fallible operation so the outer catch can write
+    # the same actionable schema even when identity capture itself fails.
+    $record = @{
+        teardown_main_repo = ''
+        teardown_sha = ''
+        teardown_branch = ''
+        teardown_worktree = $Worktree
+        cleanup_obligation = ''
+        branch_teardown_obligation = ''
+    }
+    $script:creatorTeardownRecord = $record
+
+    if (Test-Path -LiteralPath $Worktree -PathType Container) {
+        $record.teardown_worktree = (Resolve-Path -LiteralPath $Worktree).Path
+    }
+
+    # Capture all identity while the linked worktree still exists. The first porcelain record is the
+    # main checkout; using the linked worktree itself as `git -C` for removal is self-referential.
+    $worktreeList = Invoke-CreatorGit -Arguments @(
+        '-C', $record.teardown_worktree, 'worktree', 'list', '--porcelain')
+    if ($worktreeList.ExitCode -ne 0) {
+        throw "git worktree list failed: $($worktreeList.Text)"
+    }
+    foreach ($line in $worktreeList.Lines) {
+        if ([string]::IsNullOrWhiteSpace($line)) { break }
+        if ($line -cmatch '^worktree (.+)$') {
+            $record.teardown_main_repo = [string]$Matches[1]
+            break
+        }
+    }
+    if ([string]::IsNullOrWhiteSpace($record.teardown_main_repo)) {
+        throw 'git worktree list returned no main-repository worktree record.'
+    }
+
+    $head = Invoke-CreatorGit -Arguments @('-C', $record.teardown_worktree, 'rev-parse', 'HEAD')
+    if ($head.ExitCode -ne 0 -or [string]::IsNullOrWhiteSpace($head.Text)) {
+        throw "git rev-parse HEAD failed: $($head.Text)"
+    }
+    $record.teardown_sha = $head.Text
+
+    $branch = Invoke-CreatorGit -Arguments @(
+        '-C', $record.teardown_worktree, 'symbolic-ref', '--quiet', '--short', 'HEAD')
+    if ($branch.ExitCode -eq 0 -and -not [string]::IsNullOrWhiteSpace($branch.Text)) {
+        $record.teardown_branch = $branch.Text
+    }
+    else {
+        $record.teardown_branch = '(detached)'
+    }
+
+    # This handle is intentionally independent of the script-level handle, which the outer finally
+    # disposes before calling creator teardown.
+    $teardownMutex = [System.Threading.Mutex]::new($false, 'ApexCodexRunLedger')
+    try {
+        Invoke-WithLedgerLock -Mutex $teardownMutex -Action {
+            $ledgerLines = if (Test-Path -LiteralPath $ledgerPath -PathType Leaf) {
+                [System.IO.File]::ReadAllLines($ledgerPath)
+            }
+            else {
+                [string[]]@()
+            }
+
+            # Check dirtiness and every sibling class during the same ledger hold. Shared-worktree
+            # permission never grants permission to delete a live or adoptable sibling's tree.
+            $statusResult = Invoke-CreatorGit -Arguments @(
+                '-C', $record.teardown_worktree, 'status', '--porcelain')
+            # Some managed hosts inject a global excludesFile that Git cannot read. Git reports that
+            # warning on stderr while still returning zero; it is not porcelain dirtiness. Only the
+            # documented two-column porcelain records count when exit is zero.
+            $statusPorcelainLines = @($statusResult.Lines | Where-Object {
+                    [string]$_ -cmatch '^[ MADRCU?!]{2} '
+                })
+            $statusPorcelainText =
+                ([string[]]$statusPorcelainLines -join [Environment]::NewLine).TrimEnd()
+            $siblingKey = Get-WorktreeKey $record.teardown_worktree
+            $script:malformedLiveLedgerLine = $null
+            $liveSiblings = @(Get-LiveDispatches -WorktreeKey $siblingKey -ExcludeRunId $RunId `
+                -LedgerLines $ledgerLines)
+            $unresolvedSiblings = @(Get-UnresolvedWorktreeRows -WorktreeKey $siblingKey `
+                -ExcludeRunId $RunId -LedgerLines $ledgerLines)
+
+            $refusalKind = $null
+            $refusalDetail = ''
+            if ($record.teardown_branch -ceq '(detached)') {
+                $refusalKind = 'detached HEAD'
+                $refusalDetail = if ($branch.Text) {
+                    $branch.Text
+                }
+                else {
+                    "git symbolic-ref exited $($branch.ExitCode)"
+                }
+            }
+            elseif ($statusResult.ExitCode -ne 0 -or
+                    -not [string]::IsNullOrWhiteSpace($statusPorcelainText)) {
+                $refusalKind = 'dirty'
+                $refusalDetail = if ($statusResult.ExitCode -ne 0 -and $statusResult.Text) {
+                    $statusResult.Text
+                }
+                elseif ($statusPorcelainText) {
+                    $statusPorcelainText
+                }
+                else {
+                    "git status exited $($statusResult.ExitCode)"
+                }
+            }
+            elseif ($script:malformedLiveLedgerLine) {
+                throw 'an unreadable unresolved sibling ledger row may still own this worktree'
+            }
+            elseif ($liveSiblings.Count -gt 0) {
+                $refusalKind = "live sibling $([string]$liveSiblings[0].run_id)"
+                $refusalDetail = $statusPorcelainText
+            }
+            elseif ($unresolvedSiblings.Count -gt 0) {
+                $refusalKind = "unresolved sibling $([string]$unresolvedSiblings[0].run_id)"
+                $refusalDetail = $statusPorcelainText
+            }
+
+            if ($refusalKind) {
+                if ($refusalDetail.Length -gt 200) {
+                    $refusalDetail = $refusalDetail.Substring(0, 200)
+                }
+                $record.cleanup_obligation = "worktree $($record.teardown_worktree) retained: $refusalKind`: $refusalDetail"
+                $record.branch_teardown_obligation = ''
+                Save-CreatorTeardownRecord -RunId $RunId -Record $record `
+                    -LedgerLines $ledgerLines -Mutex $teardownMutex
+                Write-Host $record.cleanup_obligation -ForegroundColor Yellow
+                Write-Host (Get-CreatorTeardownCommand -MainRepo $record.teardown_main_repo `
+                    -Worktree $record.teardown_worktree) -ForegroundColor Yellow
+                return
+            }
+
+            $removeResult = Invoke-CreatorGit -Arguments @(
+                '-C', $record.teardown_main_repo, 'worktree', 'remove', $record.teardown_worktree)
+            if ($removeResult.ExitCode -eq 0) {
+                $record.cleanup_obligation = ''
+                $record.branch_teardown_obligation = $record.teardown_branch
+            }
+            else {
+                $record.cleanup_obligation = if ($removeResult.Text) {
+                    $removeResult.Text
+                }
+                else {
+                    "git worktree remove exited $($removeResult.ExitCode)"
+                }
+                $record.branch_teardown_obligation = ''
+                Write-Host (Get-CreatorTeardownCommand -MainRepo $record.teardown_main_repo `
+                    -Worktree $record.teardown_worktree) -ForegroundColor Yellow
+            }
+            Save-CreatorTeardownRecord -RunId $RunId -Record $record `
+                -LedgerLines $ledgerLines -Mutex $teardownMutex
+        }
+    }
+    finally {
+        $teardownMutex.Dispose()
+    }
+}
+
+function Invoke-ListObligations {
+    $rows = @(Invoke-WithLedgerLock -Action {
+        if (-not (Test-Path -LiteralPath $ledgerPath -PathType Leaf)) { return }
+        $ledgerLines = [System.IO.File]::ReadAllLines($ledgerPath)
+        foreach ($line in $ledgerLines) {
+            if ([string]::IsNullOrWhiteSpace($line)) { continue }
+            try { $row = $line | ConvertFrom-Json } catch { continue }
+            $rowKind = if (@($row.PSObject.Properties.Name) -ccontains 'row_kind') {
+                [string]$row.row_kind
+            }
+            else {
+                'dispatch'
+            }
+            if (@('dispatch', 'lease', 'obligation') -cnotcontains $rowKind) { continue }
+            if ([string]::IsNullOrWhiteSpace([string]$row.cleanup_obligation) -and
+                    [string]::IsNullOrWhiteSpace([string]$row.branch_teardown_obligation)) {
+                continue
+            }
+            $row
+        }
+    })
+
+    foreach ($row in $rows) {
+        Write-Host ("run_id: {0}" -f $row.run_id)
+        Write-Host ("spec/task: {0}/{1}" -f $row.spec, $row.task)
+        if (-not [string]::IsNullOrWhiteSpace([string]$row.cleanup_obligation)) {
+            Write-Host ("cleanup_obligation: {0}" -f $row.cleanup_obligation)
+            Write-Host (Get-CreatorTeardownCommand -MainRepo ([string]$row.teardown_main_repo) `
+                -Worktree ([string]$row.teardown_worktree))
+            if ([string]$row.teardown_branch -ceq '(detached)') {
+                Write-Host ("teardown_sha: {0}" -f $row.teardown_sha)
+            }
+        }
+        if (-not [string]::IsNullOrWhiteSpace([string]$row.branch_teardown_obligation) -and
+                [string]$row.teardown_branch -cne '(detached)') {
+            Write-Host ("branch_teardown_obligation: {0}" -f $row.branch_teardown_obligation)
+            $branchDeleteFlag = ([string][char]45) + 'd'
+            Write-Host ('git -C "{0}" branch {2} "{1}"' -f
+                $row.teardown_main_repo, $row.teardown_branch, $branchDeleteFlag)
+        }
+        Write-Host ''
+    }
+}
+
+function Test-CreatorRunTerminal {
+    param([Parameter(Mandatory)][string]$RunId)
+
+    $terminalState = [pscustomobject]@{
+        Reached = (@('79', '80', '81') -ccontains [string]$script:pendingExitCode)
+    }
+    Invoke-WithLedgerLock -Action {
+        if (-not (Test-Path -LiteralPath $ledgerPath -PathType Leaf)) { return }
+        foreach ($line in [System.IO.File]::ReadAllLines($ledgerPath)) {
+            if ([string]::IsNullOrWhiteSpace($line)) { continue }
+            try { $row = $line | ConvertFrom-Json } catch { continue }
+            if ([string]$row.run_id -cne $RunId) { continue }
+            $rowKind = if (@($row.PSObject.Properties.Name) -ccontains 'row_kind') {
+                [string]$row.row_kind
+            }
+            else {
+                'dispatch'
+            }
+            if ($rowKind -ceq 'lease_close') {
+                $terminalState.Reached = $true
+                continue
+            }
+            if ($rowKind -ceq 'dispatch' -and
+                    @('leasing', 'running', 'stalled', 'adopting', 'orphaned') -cnotcontains
+                        [string]$row.status) {
+                $terminalState.Reached = $true
+            }
+        }
+    }
+    return $terminalState.Reached
 }
 
 function Invoke-PostHocGates {
@@ -598,34 +1340,50 @@ function Invoke-Adopt {
     }
 
     $script:adoptLiveMatch = $null
+    $script:adoptAbandonedMatch = $null
     $match = Invoke-WithLedgerLock {
         $adoptKey = if ($Worktree) { Get-WorktreeKey $Worktree } else { $null }
         $matches = foreach ($line in [System.IO.File]::ReadAllLines($ledgerPath)) {
             if ([string]::IsNullOrWhiteSpace($line)) { continue }
             $row = $line | ConvertFrom-Json
             if ($row.spec -ne $Spec -or $row.phase -ne $Phase) { continue }
+            if ($RunId -and [string]$row.run_id -cne $RunId) { continue }
+            if ([string]$row.row_kind -ceq 'lease') { continue }
             # Filter on EVERY identifier the caller supplied. Matching spec+phase alone could adopt a
             # different task, in a different worktree -- closing that row as `adopted` and exiting 0,
             # while the run actually asked about stayed live and unterminated.
             if ($Task -and $row.task -ne $Task) { continue }
-            # NEVER adopt a row that already reached a terminal state. Selecting "the newest row"
-            # regardless of status meant a completed rerun B was re-closed as `adopted-done` while the
-            # dead run A you were actually recovering stayed `running` forever.
-            if ($row.status -notin @('running', 'stalled', 'adopting')) { continue }
             # A LEGACY row (migrated from before worktree_key existed) has no key. Deriving it from
             # the row's recorded worktree is right; treating "no key" as "matches anything" is how a
             # row from worktree B got adopted when worktree A was explicitly requested.
             $rowKey = if ($row.worktree_key) { [string]$row.worktree_key } elseif ($row.worktree) { Get-WorktreeKey ([string]$row.worktree) } else { '' }
             if ($rowKey -ne $adoptKey) { continue }
+            # NEVER adopt a row that already reached a terminal state. Selecting "the newest row"
+            # regardless of status meant a completed rerun B was re-closed as `adopted-done` while the
+            # dead run A you were actually recovering stayed `running` forever. The exact
+            # abandoned-unadopted match is retained only so an adopter that lost the selection-lock
+            # race to -AbandonRunId returns adoption's refusal code instead of an unrelated exit 1.
+            if ($row.status -notin @('running', 'stalled', 'adopting', 'orphaned')) {
+                if ($RunId -and [string]$row.status -ceq 'abandoned-unadopted') {
+                    $script:adoptAbandonedMatch = $row
+                }
+                continue
+            }
             $row
         }
-        $selected = $matches | Sort-Object { [datetime]$_.started } -Descending | Select-Object -First 1
+        $selected = if ($RunId) {
+            @($matches) | Select-Object -First 1
+        }
+        else {
+            $matches | Sort-Object { [datetime]$_.started } -Descending | Select-Object -First 1
+        }
         if ($null -eq $selected) { return $null }
 
         # Test and claim under this SAME selection lock. Releasing it with the dead launcher/coder
         # PIDs still in place let a dispatcher launch into the tree and let a second adopter select
         # the same row. An adopting row is live too: another adopter is already running its gates.
-        if (($selected.status -eq 'running' -or $selected.status -eq 'stalled' -or $selected.status -eq 'adopting') -and
+        if (($selected.status -eq 'running' -or $selected.status -eq 'stalled' -or
+                $selected.status -eq 'adopting') -and
                 (Test-LedgerRowLive -Row $selected)) {
             $script:adoptLiveMatch = $selected
             return $selected
@@ -633,10 +1391,16 @@ function Invoke-Adopt {
 
         $adopterStamp = Get-ProcessStamp $PID
         $adopterIdentity = @{
+            status = 'adopting'
             launcher_pid = $PID; launcher_start = $adopterStamp
             pid = $PID; pid_start = $adopterStamp
         }
-        Update-LedgerRow -RunId ([string]$selected.run_id) -Changes $adopterIdentity
+        foreach ($telemetryField in @('log_path', 'effort', 'attended')) {
+            if (@($selected.PSObject.Properties.Name) -ccontains $telemetryField) {
+                $adopterIdentity[$telemetryField] = $selected.$telemetryField
+            }
+        }
+        Update-LedgerRow -RunId ([string]$selected.run_id) -RowKind 'dispatch' -Changes $adopterIdentity
         foreach ($identityPart in $adopterIdentity.GetEnumerator()) {
             $selected | Add-Member -NotePropertyName $identityPart.Key -NotePropertyValue $identityPart.Value -Force
         }
@@ -644,6 +1408,12 @@ function Invoke-Adopt {
     }
 
     if ($null -eq $match) {
+        if ($script:adoptAbandonedMatch) {
+            Write-Host (
+                "[adopt] REFUSED (exit 75): run_id '$RunId' has already been abandoned-unadopted."
+            ) -ForegroundColor Yellow
+            exit 75
+        }
         throw "No Codex ledger row matches spec '$Spec' and phase '$Phase'."
     }
 
@@ -675,8 +1445,17 @@ function Invoke-Adopt {
     # (I claimed this was fixed in a review pack before I had written it. The reviewer read the code
     # instead of my summary, which is the only reason it is being fixed now.)
     Write-Output $match.worktree
+    if ((@($match.PSObject.Properties.Name) -ccontains 'log_path') -and
+            -not [string]::IsNullOrWhiteSpace([string]$match.log_path)) {
+        Write-Host "[adopt] log: $($match.log_path)" -ForegroundColor DarkGray
+    }
+    else {
+        Write-Host '[adopt] This ledger row has no recorded log_path.' -ForegroundColor DarkGray
+    }
 
     $adoptStatus = 'unknown'
+    $adoptUnresolved = @()
+    $adoptBlocker = $null
     $adoptSchemaName = [string]$match.schema
     $adoptCompletionSchema = @('completion', 'codex-completion-schema.json') -ccontains $adoptSchemaName
     $adoptReviewSchema = @('review', 'codex-review-schema.json', 'endgate', 'afk-endgate-schema.json') -ccontains $adoptSchemaName
@@ -733,7 +1512,10 @@ function Invoke-Adopt {
                 }
 
                 if ($v -like '*BLOCK*' -or $hasBlockingFinding) { $adoptStatus = 'blocked' }
-                elseif ($v -like '*FLAG*' -or $v -like 'P1*' -or $v -like 'P2*' -or $adoptFindings -gt 0) { $adoptStatus = 'done_with_concerns' }
+                elseif ($v -like '*FLAG*' -or $v -like 'P1*' -or $v -like 'P2*' -or $adoptFindings -gt 0) {
+                    $adoptStatus = 'done_with_concerns'
+                    $adoptUnresolved += "Review verdict '$([string]$adoptReport.verdict)' -- $adoptFindings finding(s) to adjudicate."
+                }
                 elseif ($v -eq 'CLEAN' -or $v -eq 'PASS' -or $v -eq 'OK') { if ($adoptStatus -eq 'unknown') { $adoptStatus = 'done' } }
                 else { $adoptStatus = 'blocked' }   # unrecognised verdict: fail closed
             }
@@ -748,11 +1530,26 @@ function Invoke-Adopt {
                 Write-Host "[adopt] Unrecognised ledger schema '$adoptSchemaName'. Treating as blocked." -ForegroundColor Red
             }
 
-            # Same coupling as the main path: a blocker or unresolved work contradicts `done`.
-            if ($adoptReport.blocker -and $adoptStatus -eq 'done') { $adoptStatus = 'blocked' }
-            elseif ($adoptReport.unresolved -and @($adoptReport.unresolved).Count -gt 0 -and $adoptStatus -eq 'done') { $adoptStatus = 'done_with_concerns' }
-            foreach ($u in @($adoptReport.unresolved)) { if ($u) { Write-Host "[adopt] UNRESOLVED: $u" -ForegroundColor Yellow } }
-            if ($adoptReport.blocker) { Write-Host "[adopt] BLOCKER: $($adoptReport.blocker)" -ForegroundColor Red }
+            # Completion reports alone own `unresolved`. Filter before every Count test so blank
+            # strings cannot masquerade as named concerns; review evidence is synthesized above.
+            if ($adoptCompletionSchema) {
+                $adoptUnresolved = @($adoptReport.unresolved | Where-Object {
+                        -not [string]::IsNullOrWhiteSpace([string]$_)
+                    })
+                if ($adoptReport.blocker) { $adoptBlocker = [string]$adoptReport.blocker }
+
+                # Same coupling as the main path: a blocker or unresolved work contradicts `done`.
+                if ($adoptBlocker -and $adoptStatus -eq 'done') { $adoptStatus = 'blocked' }
+                elseif ($adoptUnresolved.Count -gt 0 -and $adoptStatus -eq 'done') {
+                    $adoptStatus = 'done_with_concerns'
+                }
+                if ($adoptStatus -eq 'done_with_concerns' -and $adoptUnresolved.Count -eq 0) {
+                    $adoptStatus = 'blocked'
+                    $adoptBlocker = $emptyConcernBlockerText
+                }
+            }
+            foreach ($u in $adoptUnresolved) { Write-Host "[adopt] UNRESOLVED: $u" -ForegroundColor Yellow }
+            if ($adoptBlocker) { Write-Host "[adopt] BLOCKER: $adoptBlocker" -ForegroundColor Red }
         } catch {
             $adoptStatus = 'blocked'
             Write-Host "[adopt] The report at $($match.final_path) is unparseable. Treating as blocked." -ForegroundColor Red
@@ -763,17 +1560,15 @@ function Invoke-Adopt {
     }
     if ($adoptStatus -eq 'unknown') { $adoptStatus = 'blocked' }   # never adopt an unknown as a pass
 
-    # Mark the row ADOPTING -- not adopted -- until the gates below have actually run. Writing the
-    # terminal status here recorded `adopted-done` for a run that adoption then discovered had written
-    # out of scope; and if adoption was killed between the two, the ledger was left holding a
-    # SUCCESSFUL terminal row for an ungated run, which freed the worktree for the next dispatch.
-    # A row is only terminal once the thing that makes it terminal has happened.
+    # Record the report verdict on the row already claimed as ADOPTING under the selection lock.
+    # A row is only terminal once the gates that make it terminal have run.
     try {
-        Update-LedgerRow -RunId ([string]$match.run_id) -Changes @{
-            status = 'adopting'; adopted = $true; report_status = $adoptStatus
+        Update-LedgerRow -RunId ([string]$match.run_id) -RowKind 'dispatch' -Changes @{
+            adopted = $true; report_status = $adoptStatus
+            unresolved = $adoptUnresolved; blocker = $adoptBlocker
         }
     } catch {
-        throw "[adopt] Could not durably mark the ledger row adopting: $($_.Exception.Message)"
+        throw "[adopt] Could not durably record the adoption report status: $($_.Exception.Message)"
     }
 
     # The working tree, not just commits: the coder leaves its work UNCOMMITTED by contract.
@@ -862,7 +1657,12 @@ function Invoke-Adopt {
                         $adoptVoidChanges['critical_violation'] = $adoptCriticalViolation
                     }
                 }
-                Update-LedgerRow -RunId ([string]$match.run_id) -Changes $adoptVoidChanges
+                foreach ($telemetryField in @('log_path', 'effort', 'attended')) {
+                    if (@($match.PSObject.Properties.Name) -ccontains $telemetryField) {
+                        $adoptVoidChanges[$telemetryField] = $match.$telemetryField
+                    }
+                }
+                Update-LedgerRow -RunId ([string]$match.run_id) -RowKind 'dispatch' -Changes $adoptVoidChanges
             } catch {
                 throw "[adopt] Could not durably close the moved-tree ledger row: $($_.Exception.Message)"
             }
@@ -911,7 +1711,12 @@ function Invoke-Adopt {
                 $adoptTerminalChanges['critical_violation'] = $adoptCriticalViolation
             }
         }
-        Update-LedgerRow -RunId ([string]$match.run_id) -Changes $adoptTerminalChanges
+        foreach ($telemetryField in @('log_path', 'effort', 'attended')) {
+            if (@($match.PSObject.Properties.Name) -ccontains $telemetryField) {
+                $adoptTerminalChanges[$telemetryField] = $match.$telemetryField
+            }
+        }
+        Update-LedgerRow -RunId ([string]$match.run_id) -RowKind 'dispatch' -Changes $adoptTerminalChanges
     } catch {
         throw "[adopt] Could not durably close the ledger row: $($_.Exception.Message)"
     }
@@ -933,6 +1738,15 @@ function Invoke-Adopt {
     }
     if ($adoptStatus -eq 'done_with_concerns') { exit 68 }
     exit 0
+}
+
+if ($ListObligations) {
+    Invoke-ListObligations
+    exit 0
+}
+
+if ($script:abandonRequested) {
+    Invoke-AbandonRun
 }
 
 if ($Adopt) {
@@ -975,171 +1789,11 @@ if (-not (Test-Path -LiteralPath $schemaPath -PathType Leaf)) {
 # tree the check was supposed to keep exclusive. Phase/schema/sandbox compatibility was already
 # validated (and review write access normalized) at the no-I/O caller-contract boundary above.
 
-# Exit 74 = refused before reservation; NO ledger row/log for this run (shared state dirs already exist, as with exit 72).
+# Exit 74 = refused before lease acquisition; NO ledger row/log for this run.
 if ($Phase -eq 'build' -and $Sandbox -eq 'workspace-write' -and $Authorized.Count -eq 0 -and -not $ScopeUnlocked) {
     Write-Host '[dispatch] REFUSED (exit 74): workspace-write build has no -Authorized scope list — pass the spec''s ''## Files to change'' list, or -ScopeUnlocked -ScopeUnlockedReason "<why>" to bypass' -ForegroundColor Red
     exit 74
 }
-
-$baselineSkipped = $false
-$preflightPinLabel = $null
-$preflightPinArmed = $false
-$preflightTreePinScript = $null
-
-# The pre-flight pin spans every pre-launch operation, including the shared-worktree reservation and
-# scope snapshot. The outer finally at the end of the script removes this invocation's pin on every
-# exit or throw in that span; the successful path disarms it immediately before starting the child.
-try {
-    if ($Phase -eq 'build' -and $Sandbox -eq 'workspace-write') {
-        # Exit 76 = critical-file gate refused before reservation -- NO ledger row, NO dispatch log.
-        # Known limit: a bare non-critical directory grant (for example, -Authorized src) may contain
-        # a critical descendant; directory-shaped grants are valid and exhaustive expansion is deferred.
-        $criticalScript = if ($CriticalFilesScript) { $CriticalFilesScript } else { Join-Path $PSScriptRoot 'apex-critical-files.ps1' }
-        if (-not (Test-Path -LiteralPath $criticalScript)) {
-            Write-Host '[dispatch] REFUSED (exit 76): apex-critical-files.ps1 missing -- cannot verify critical-file safety' -ForegroundColor Red
-            exit 76
-        }
-
-        if ($ScopeUnlocked) {
-            if (-not $CriticalFilesConfirmed) {
-                Write-Host '[dispatch] REFUSED (exit 76): -ScopeUnlocked build has no declared file set -- critical-file safety is unverifiable, pass -CriticalFilesConfirmed (attended) or park' -ForegroundColor Red
-                exit 76
-            }
-            Write-Host '[dispatch] -ScopeUnlocked build CONFIRMED (attended) -- critical-file safety unverifiable by design, proceeding on human confirmation' -ForegroundColor Yellow
-        }
-        else {
-            $critExit = $null
-            $critLines = @()
-            try {
-                & cmd /c exit 99
-                $critLines = @(& $criticalScript -Test -Paths $Authorized -Root $Worktree)
-                $critExit = $LASTEXITCODE
-            } catch {
-                $critExit = $null
-            }
-            $critLines | ForEach-Object { Write-Host $_ }
-
-            if ($critExit -eq 11) {
-                Write-Host '[dispatch] REFUSED (exit 76): -Authorized names a permanent hard block (docs/audit) -- not confirmable, cannot build' -ForegroundColor Red
-                exit 76
-            }
-            elseif ($critExit -eq 10 -and -not $CriticalFilesConfirmed) {
-                Write-Host '[dispatch] REFUSED (exit 76): -Authorized names critical file(s) and -CriticalFilesConfirmed is absent -- a spec cannot self-approve; confirm attended (apex-code Layer A) or park' -ForegroundColor Red
-                exit 76
-            }
-            elseif ($critExit -eq 10) {
-                Write-Host "[dispatch] critical-file edit CONFIRMED (attended) -- note: $CriticalFilesConfirmedNote" -ForegroundColor Yellow
-            }
-            elseif ($critExit -ne 0) {
-                Write-Host "[dispatch] REFUSED (exit 76): critical-file classifier failed to return a valid verdict (got '$critExit') -- failing closed" -ForegroundColor Red
-                exit 76
-            }
-        }
-
-        if ($SkipBaselineCheck) {
-            Write-Host '[dispatch] -SkipBaselineCheck: baseline/spec pre-flight BYPASSED (bootstrap/emergency)' -ForegroundColor Yellow
-            $baselineSkipped = $true
-        }
-        else {
-            $preflightBaselineScript = Join-Path $PSScriptRoot 'apex-baseline-check.ps1'
-            $preflightTreePinScript = Join-Path $PSScriptRoot 'tree-pin.ps1'
-            $preflightSpecValidateScript = Join-Path $PSScriptRoot 'apex-spec-validate.ps1'
-
-            foreach ($helper in @($preflightBaselineScript, $preflightTreePinScript, $preflightSpecValidateScript)) {
-                if (-not (Test-Path -LiteralPath $helper -PathType Leaf)) {
-                    Write-Host "[dispatch] REFUSED (exit 72): $helper missing -- cannot run the baseline/spec pre-flight" -ForegroundColor Red
-                    # Exit 72 = required pre-flight gate refused the dispatch before reservation.
-                    exit 72
-                }
-            }
-
-            # Spec/task components are glob-safe by construction; cleanup's only wildcard is its
-            # deliberately appended trailing '*', so it cannot remove a sibling dispatch's pin.
-            $specSafe = ($Spec -replace '[^A-Za-z0-9._-]', '_')
-            $taskSafe = ($Task -replace '[^A-Za-z0-9._-]', '_')
-            $preflightPinLabel = "preflight-$specSafe-$taskSafe-$PID-" + [guid]::NewGuid().ToString('N').Substring(0, 8)
-            & $preflightTreePinScript -Pin -Worktree $Worktree -Label $preflightPinLabel -PinDirectory $harnessStateDir | Write-Host
-            $preflightPinArmed = ($LASTEXITCODE -eq 0)
-            if (-not $preflightPinArmed) {
-                Write-Host "[dispatch] REFUSED (exit 72): tree-pin failed to arm -- cannot guarantee the pre-flight tree" -ForegroundColor Red
-                # Exit 72 = required pre-flight gate refused the dispatch before reservation.
-                exit 72
-            }
-
-            & $preflightBaselineScript -Preflight -Worktree $Worktree
-            $baselineExit = $LASTEXITCODE
-            if ($baselineExit -in @(1, 3, 4)) {
-                Write-Host "[dispatch] REFUSED (exit 72): red baseline -- apex-baseline-check exit $baselineExit" -ForegroundColor Red
-                # Exit 72 = required pre-flight gate refused the dispatch before reservation.
-                exit 72
-            }
-            if ($baselineExit -ne 0) {
-                throw "apex-baseline-check returned unexpected exit code $baselineExit"
-            }
-
-            # Nested Join-Path calls preserve Windows PowerShell 5.1 compatibility.
-            $specDirectory = Join-Path $Worktree 'docs\changes'
-            $specFile = Join-Path $specDirectory "$Spec.md"
-            if (Test-Path -LiteralPath $specFile -PathType Leaf) {
-                $specFindings = @(& $preflightSpecValidateScript -SpecPath $specFile)
-                $specValidateExit = $LASTEXITCODE
-                foreach ($finding in $specFindings) { Write-Host $finding }
-                if ($specValidateExit -eq 1) {
-                    $findingText = if ($specFindings.Count -gt 0) { $specFindings -join '; ' } else { 'validator returned exit 1' }
-                    Write-Host "[dispatch] REFUSED (exit 72): spec validation failed -- $findingText" -ForegroundColor Red
-                    # Exit 72 = required pre-flight gate refused the dispatch before reservation.
-                    exit 72
-                }
-                if ($specValidateExit -ne 0) {
-                    throw "apex-spec-validate returned unexpected exit code $specValidateExit"
-                }
-            }
-            else {
-                if ($PSBoundParameters.ContainsKey('SpecSourcePath')) {
-                    $isDriveAbsolute = $SpecSourcePath -match '^[A-Za-z]:[\\/]'
-                    $isUncPath = $SpecSourcePath -match '^\\\\'
-                    if (-not ($isDriveAbsolute -or $isUncPath)) {
-                        Write-Host "[dispatch] REFUSED (exit 72): -SpecSourcePath '$SpecSourcePath' violates the documented contract: expected a drive-absolute or UNC path" -ForegroundColor Red
-                        # A cross-tree spec must have an unambiguous fully-qualified identity before validation.
-                        exit 72
-                    }
-                    if (-not (Test-Path -LiteralPath $SpecSourcePath -PathType Leaf)) {
-                        Write-Host "[dispatch] REFUSED (exit 72): cross-tree spec source file does not exist: '$SpecSourcePath'" -ForegroundColor Red
-                        # A cross-tree build must validate an existing leaf spec before dispatch.
-                        exit 72
-                    }
-
-                    $specSourceBasename = [System.IO.Path]::GetFileNameWithoutExtension($SpecSourcePath)
-                    if (-not [string]::Equals($specSourceBasename, $Spec, [System.StringComparison]::OrdinalIgnoreCase)) {
-                        Write-Host "[dispatch] REFUSED (exit 72): -Spec '$Spec' does not match cross-tree source basename '$specSourceBasename'" -ForegroundColor Red
-                        # Bind a cross-tree source to the requested spec so another spec cannot be substituted.
-                        exit 72
-                    }
-
-                    $specFindings = @(& $preflightSpecValidateScript -SpecPath $SpecSourcePath)
-                    $specValidateExit = $LASTEXITCODE
-                    foreach ($finding in $specFindings) { Write-Host $finding }
-                    if ($specValidateExit -eq 1) {
-                        $findingText = if ($specFindings.Count -gt 0) { $specFindings -join '; ' } else { 'validator returned exit 1' }
-                        Write-Host "[dispatch] REFUSED (exit 72): spec validation failed -- $findingText" -ForegroundColor Red
-                        # A cross-tree spec that fails validation must refuse before reservation.
-                        exit 72
-                    }
-                    if ($specValidateExit -ne 0) {
-                        throw "apex-spec-validate returned unexpected exit code $specValidateExit"
-                    }
-                }
-                else {
-                    Write-Host "[dispatch] REFUSED (exit 72): no in-worktree spec at docs/changes/$Spec.md; pass -SpecSourcePath <absolute path> for a cross-tree build, or -SkipBaselineCheck for a deliberate bootstrap" -ForegroundColor Red
-                    # A cross-tree build cannot proceed without an explicitly supplied spec to validate.
-                    exit 72
-                }
-            }
-        }
-    }
-    else {
-        Write-Host '[dispatch] pre-flight skipped (phase/sandbox)' -ForegroundColor DarkGray
-    }
 
 $worktreeKey = Get-WorktreeKey $Worktree
 
@@ -1180,8 +1834,6 @@ $safeTask = ConvertTo-SafeFileName $Task
 $runId = [guid]::NewGuid().ToString('N')
 $logPath = Join-Path $logDirectory "codex-$safeSpec-$safeTask-$($worktreeTag)-$($runId.Substring(0,8)).log"
 
-[System.IO.File]::WriteAllText($logPath, [string]::Empty, [System.Text.UTF8Encoding]::new($false))
-
 # The key under which this run's GATE EVIDENCE is filed. It carries the run id, so no two runs can
 # ever read or overwrite each other's snapshot or pin -- however their spec/task names collapse.
 $gateKey = "$safeSpec-$safeTask-$($runId.Substring(0,8))"
@@ -1199,6 +1851,477 @@ $gateKey = "$safeSpec-$safeTask-$($runId.Substring(0,8))"
 # A unique path kills all three: no collision, nothing to delete, and a missing report can only ever
 # mean THIS run produced no verdict.
 $finalPath = Join-Path $ScratchDirectory "codex-$safeSpec-$safeTask-$($runId.Substring(0,8)).final"
+
+try {
+$baselineSkipped = $false
+$preflightPinLabel = $null
+$preflightPinArmed = $false
+$preflightTreePinScript = $null
+$script:leaseRegistered = $false
+$script:capacityRefusal = $null
+$script:capacityConfigurationRefusal = $null
+$script:capacityMachineWeight = 0
+$script:capacitySpecWeight = 0
+$script:capacityOccupants = @()
+$script:newlyOrphanedRows = @()
+$script:orphanRowsDeferred = 0
+
+$thisRunWeight = if ($Phase -ceq 'build' -and $Sandbox -ceq 'workspace-write') {
+    if ($Effort -ceq 'ultra') { 2 } else { 1 }
+}
+else {
+    # Review/read-only dispatches still use a lease to guard their pre-launch refusal lifecycle, but
+    # they do not consume build capacity.
+    0
+}
+
+$specCeiling = 2
+if ($thisRunWeight -gt 0) {
+    $specCeilingValue = Get-SpecFrontmatterValue -Key 'max_parallel_codex'
+    if ($specCeilingValue -is [string] -and
+            $specCeilingValue -ceq '__APEX_FRONTMATTER_UNPARSEABLE__') {
+        $script:capacityConfigurationRefusal =
+            "max_parallel_codex is present but unparseable in the spec frontmatter"
+    }
+    elseif ($null -ne $specCeilingValue) {
+        if ($specCeilingValue -isnot [string]) {
+            $script:capacityConfigurationRefusal =
+                'max_parallel_codex must be a scalar integer, not a YAML sequence'
+        }
+        else {
+            try {
+                $specCeiling = [int]$specCeilingValue
+                if ($specCeiling -lt 1) { throw 'max_parallel_codex must be at least 1' }
+            }
+            catch {
+                $script:capacityConfigurationRefusal =
+                    "max_parallel_codex '$specCeilingValue' is not a positive integer"
+            }
+        }
+    }
+}
+
+if ($script:capacityConfigurationRefusal) {
+    Write-Host "[dispatch] REFUSED (exit 79): $($script:capacityConfigurationRefusal)." -ForegroundColor Red
+    Exit-Dispatch 79
+}
+
+$leaseStarted = Get-UtcTimestamp
+$launcherStart = Get-ProcessStamp $PID
+$leaseRow = [ordered]@{
+    run_id = $runId
+    launcher_pid = $PID
+    launcher_start = $launcherStart
+    worktree = $Worktree
+    worktree_key = $worktreeKey
+    spec = $Spec
+    task = $Task
+    phase = $Phase
+    sandbox = $Sandbox
+    started = $leaseStarted
+    log_path = $logPath
+    effort = $Effort
+    attended = $(if ($PSBoundParameters.ContainsKey('Attended')) { [bool]$Attended } else { $null })
+    row_kind = 'lease'
+    status = 'leasing'
+}
+
+# Orphan transition, capacity check, and lease append are one indivisible operation over THIS state
+# root's ledger. The named mutex serializes all wrappers, but different APEX_STATE_DIR roots
+# intentionally count different files and therefore enforce independent ceilings.
+#
+# Every writer, including ~/.claude/hooks/apex-ledger-append.ps1, blocks on ApexCodexRunLedger and
+# gives up after 30 seconds. This mutex hold is therefore a hard latency budget, not a soft one.
+Invoke-WithLedgerLock {
+    [System.IO.Directory]::CreateDirectory($ledgerDirectory) | Out-Null
+    $ledgerLines = if (Test-Path -LiteralPath $ledgerPath -PathType Leaf) {
+        [System.IO.File]::ReadAllLines($ledgerPath)
+    }
+    else {
+        [string[]]@()
+    }
+    $openLeaseRunIds = @(Get-OpenLeaseRunIds -LedgerLines $ledgerLines)
+    $orphanCandidates = [System.Collections.Generic.List[object]]::new()
+    for ($lineIndex = 0; $lineIndex -lt $ledgerLines.Count; $lineIndex++) {
+        $line = $ledgerLines[$lineIndex]
+        if ([string]::IsNullOrWhiteSpace($line)) { continue }
+        try { $row = $line | ConvertFrom-Json } catch { continue }
+
+        $rowKind = if (@($row.PSObject.Properties.Name) -ccontains 'row_kind') {
+            [string]$row.row_kind
+        }
+        else {
+            'dispatch'
+        }
+        $rowStatus = [string]$row.status
+        $unresolved = (
+            ($rowKind -ceq 'dispatch' -and
+                @('running', 'stalled', 'adopting') -ccontains $rowStatus) -or
+            ($rowKind -ceq 'lease' -and $rowStatus -ceq 'leasing' -and
+                $openLeaseRunIds -ccontains [string]$row.run_id)
+        )
+        if (-not $unresolved -or (Test-LedgerRowLive -Row $row)) { continue }
+
+        $startedAt = [datetime]::MinValue
+        if ($row.started) {
+            try { $startedAt = ([datetime]$row.started).ToUniversalTime() } catch { }
+        }
+        $orphanCandidates.Add([pscustomobject]@{
+            Index = $lineIndex
+            Row = $row
+            RowKind = $rowKind
+            StartedAt = $startedAt
+        })
+    }
+
+    $orphanBatch = @($orphanCandidates |
+        Sort-Object -Property @{ Expression = 'StartedAt'; Ascending = $true },
+            @{ Expression = 'Index'; Ascending = $true } |
+        Select-Object -First 200)
+    $script:orphanRowsDeferred = [Math]::Max(0, $orphanCandidates.Count - $orphanBatch.Count)
+    if ($orphanBatch.Count -gt 0) {
+        foreach ($candidate in $orphanBatch) {
+            $candidate.Row.status = 'orphaned'
+            $candidate.Row | Add-Member -NotePropertyName 'orphaned_at' `
+                -NotePropertyValue (Get-UtcTimestamp) -Force
+            if (@($candidate.Row.PSObject.Properties.Name) -ccontains 'ended') {
+                $candidate.Row.PSObject.Properties.Remove('ended')
+            }
+            $ledgerLines[$candidate.Index] = $candidate.Row | ConvertTo-Json -Compress -Depth 8
+            $script:newlyOrphanedRows += $candidate.Row
+        }
+        Set-LedgerLines -Lines ([string[]]$ledgerLines) -Caller 'OrphanScan' `
+            -RowsChanged $orphanBatch.Count
+    }
+
+    $occupyingRows = @()
+    $machineWeight = 0
+    $specWeight = 0
+
+    foreach ($line in $ledgerLines) {
+        if ([string]::IsNullOrWhiteSpace($line)) { continue }
+        try { $row = $line | ConvertFrom-Json } catch { continue }
+        $rowStatus = [string]$row.status
+        if ([string]$row.phase -cne 'build' -or
+                [string]$row.sandbox -cne 'workspace-write' -or
+                @('leasing', 'running', 'stalled', 'adopting') -cnotcontains $rowStatus -or
+                -not (Test-LedgerRowLive -Row $row)) {
+            continue
+        }
+        if ($rowStatus -ceq 'leasing' -and
+                $openLeaseRunIds -cnotcontains [string]$row.run_id) {
+            continue
+        }
+
+        $rowWeight = if ([string]$row.effort -ceq 'ultra') { 2 } else { 1 }
+        $machineWeight += $rowWeight
+        if ([string]$row.spec -ceq $Spec) {
+            $specWeight += $rowWeight
+        }
+        $occupyingRows += $row
+    }
+
+    $hitBounds = @()
+    if (($machineWeight + $thisRunWeight) -gt $MachineCeiling) { $hitBounds += 'state-root' }
+    if (($specWeight + $thisRunWeight) -gt $specCeiling) { $hitBounds += 'spec' }
+
+    $script:capacityMachineWeight = $machineWeight
+    $script:capacitySpecWeight = $specWeight
+    $script:capacityOccupants = @($occupyingRows)
+    if ($hitBounds.Count -gt 0) {
+        $script:capacityRefusal = $hitBounds -join '+'
+        return
+    }
+
+    foreach ($ledgerLine in $ledgerLines) {
+        if ([string]::IsNullOrWhiteSpace($ledgerLine)) { continue }
+        try { $existingRow = $ledgerLine | ConvertFrom-Json } catch { continue }
+        if ([string]$existingRow.run_id -ceq [string]$leaseRow.run_id -and
+                [string]$existingRow.row_kind -ceq [string]$leaseRow.row_kind) {
+            throw "Refusing to append a second $([string]$leaseRow.row_kind) ledger row for run_id $([string]$leaseRow.run_id)."
+        }
+    }
+
+    # LEASE-SCOPED refusals: 71, 72, 76, 78, 80, and 81 occur while this open lease exists and
+    # close through the one outer finally. PRE-LEASE refusals: caller-contract 74 and at-capacity 79
+    # occur before a lease row exists, so the same backstop appends nothing.
+    $ledgerSeparator = ''
+    if ((Test-Path -LiteralPath $ledgerPath) -and (Get-Item -LiteralPath $ledgerPath).Length -gt 0) {
+        $ledgerText = [System.IO.File]::ReadAllText($ledgerPath)
+        if (-not $ledgerText.EndsWith("`n") -and -not $ledgerText.EndsWith("`r")) {
+            $ledgerSeparator = [Environment]::NewLine
+        }
+    }
+    Add-Utf8NoBomText -Path $ledgerPath -Text (
+        $ledgerSeparator + ($leaseRow | ConvertTo-Json -Compress -Depth 8) +
+            [Environment]::NewLine)
+    $script:leaseRegistered = $true
+}
+
+foreach ($orphanedRow in $script:newlyOrphanedRows) {
+    $orphanedRowKind = if (@($orphanedRow.PSObject.Properties.Name) -ccontains 'row_kind') {
+        [string]$orphanedRow.row_kind
+    }
+    else {
+        'dispatch'
+    }
+    if ($orphanedRowKind -ceq 'lease') {
+        Write-Host ((
+            '[dispatch] ORPHANED LEASE {0} {2} nothing was dispatched; clear it with: ' +
+            'powershell -NoProfile -ExecutionPolicy Bypass -File "{1}" -Attended ' +
+            '-AbandonRunId {0} -AbandonReason "<why>"') -f
+                $orphanedRow.run_id, $PSCommandPath, [char]0x2014) -ForegroundColor Yellow
+    }
+    else {
+        Write-Host ((
+            '[dispatch] ORPHANED RUN {0} {6} recover with: powershell -NoProfile ' +
+            '-ExecutionPolicy Bypass -File "{1}" -Adopt -RunId {0} -Spec {2} ' +
+            '-Phase {3} -Task {4} -Worktree "{5}"') -f
+                $orphanedRow.run_id, $PSCommandPath, $orphanedRow.spec,
+                $orphanedRow.phase, $orphanedRow.task, $orphanedRow.worktree,
+                [char]0x2014) `
+            -ForegroundColor Yellow
+    }
+}
+if ($script:orphanRowsDeferred -gt 0) {
+    Write-Host (
+        '[dispatch] orphan scan deferred {0} additional dead unresolved row(s); ' +
+        'the next dispatch scan will continue the bounded cleanup.' -f
+            $script:orphanRowsDeferred) -ForegroundColor Yellow
+}
+
+if ($script:capacityRefusal) {
+    Write-Host (
+        ("[dispatch] AT CAPACITY (exit 79): bound={0}; machineWeight={1}+thisRun={2}/{3}; " +
+        "specWeight={4}+thisRun={2}/{5}") -f $script:capacityRefusal,
+            $script:capacityMachineWeight, $thisRunWeight, $MachineCeiling,
+            $script:capacitySpecWeight, $specCeiling) -ForegroundColor Red
+    foreach ($occupant in $script:capacityOccupants) {
+        Write-Host (
+            "[dispatch]   occupying: spec={0} task={1} pid={2} effort={3}" -f
+            $occupant.spec, $occupant.task, $occupant.pid, $occupant.effort) -ForegroundColor Red
+    }
+    Exit-Dispatch 79
+}
+
+# The pre-flight pin spans every pre-launch operation, including the shared-worktree reservation and
+# scope snapshot. The outer finally at the end of the script removes this invocation's pin on every
+# exit or throw in that span; the successful path disarms it immediately before starting the child.
+    if ($Phase -eq 'build' -and $Sandbox -eq 'workspace-write') {
+        # Exit 76 = lease-scoped critical-file refusal -- lease + close event, NO dispatch row/log.
+        # Known limit: a bare non-critical directory grant (for example, -Authorized src) may contain
+        # a critical descendant; directory-shaped grants are valid and exhaustive expansion is deferred.
+        $criticalScript = if ($CriticalFilesScript) { $CriticalFilesScript } else { Join-Path $PSScriptRoot 'apex-critical-files.ps1' }
+        if (-not (Test-Path -LiteralPath $criticalScript)) {
+            Write-Host '[dispatch] REFUSED (exit 76): apex-critical-files.ps1 missing -- cannot verify critical-file safety' -ForegroundColor Red
+            Exit-Dispatch 76
+        }
+
+        if ($ScopeUnlocked) {
+            if (-not $CriticalFilesConfirmed) {
+                Write-Host '[dispatch] REFUSED (exit 76): -ScopeUnlocked build has no declared file set -- critical-file safety is unverifiable, pass -CriticalFilesConfirmed (attended) or park' -ForegroundColor Red
+                Exit-Dispatch 76
+            }
+            Write-Host '[dispatch] -ScopeUnlocked build CONFIRMED (attended) -- critical-file safety unverifiable by design, proceeding on human confirmation' -ForegroundColor Yellow
+        }
+        else {
+            $critExit = $null
+            $critLines = @()
+            try {
+                & cmd /c exit 99
+                $critLines = @(& $criticalScript -Test -Paths $Authorized -Root $Worktree)
+                $critExit = $LASTEXITCODE
+            } catch {
+                $critExit = $null
+            }
+            $critLines | ForEach-Object { Write-Host $_ }
+
+            if ($critExit -eq 11) {
+                Write-Host '[dispatch] REFUSED (exit 76): -Authorized names a permanent hard block (docs/audit) -- not confirmable, cannot build' -ForegroundColor Red
+                Exit-Dispatch 76
+            }
+            elseif ($critExit -eq 10 -and -not $CriticalFilesConfirmed) {
+                Write-Host '[dispatch] REFUSED (exit 76): -Authorized names critical file(s) and -CriticalFilesConfirmed is absent -- a spec cannot self-approve; confirm attended (apex-code Layer A) or park' -ForegroundColor Red
+                Exit-Dispatch 76
+            }
+            elseif ($critExit -eq 10) {
+                Write-Host "[dispatch] critical-file edit CONFIRMED (attended) -- note: $CriticalFilesConfirmedNote" -ForegroundColor Yellow
+            }
+            elseif ($critExit -ne 0) {
+                Write-Host "[dispatch] REFUSED (exit 76): critical-file classifier failed to return a valid verdict (got '$critExit') -- failing closed" -ForegroundColor Red
+                Exit-Dispatch 76
+            }
+        }
+
+        if ($SkipBaselineCheck) {
+            Write-Host '[dispatch] -SkipBaselineCheck: baseline/spec pre-flight BYPASSED (bootstrap/emergency)' -ForegroundColor Yellow
+            $baselineSkipped = $true
+        }
+        else {
+            $preflightBaselineScript = Join-Path $PSScriptRoot 'apex-baseline-check.ps1'
+            $preflightTreePinScript = Join-Path $PSScriptRoot 'tree-pin.ps1'
+            $preflightSpecValidateScript = Join-Path $PSScriptRoot 'apex-spec-validate.ps1'
+
+            foreach ($helper in @($preflightBaselineScript, $preflightTreePinScript, $preflightSpecValidateScript)) {
+                if (-not (Test-Path -LiteralPath $helper -PathType Leaf)) {
+                    Write-Host "[dispatch] REFUSED (exit 72): $helper missing -- cannot run the baseline/spec pre-flight" -ForegroundColor Red
+                    # Exit 72 = required pre-flight gate refused while the capacity lease is open.
+                    Exit-Dispatch 72
+                }
+            }
+
+            # Spec/task components are glob-safe by construction; cleanup's only wildcard is its
+            # deliberately appended trailing '*', so it cannot remove a sibling dispatch's pin.
+            $specSafe = ($Spec -replace '[^A-Za-z0-9._-]', '_')
+            $taskSafe = ($Task -replace '[^A-Za-z0-9._-]', '_')
+            $preflightPinLabel = "preflight-$specSafe-$taskSafe-$PID-" + [guid]::NewGuid().ToString('N').Substring(0, 8)
+            & $preflightTreePinScript -Pin -Worktree $Worktree -Label $preflightPinLabel -PinDirectory $harnessStateDir | Write-Host
+            $preflightPinArmed = ($LASTEXITCODE -eq 0)
+            if (-not $preflightPinArmed) {
+                Write-Host "[dispatch] REFUSED (exit 72): tree-pin failed to arm -- cannot guarantee the pre-flight tree" -ForegroundColor Red
+                # Exit 72 = required pre-flight gate refused while the capacity lease is open.
+                Exit-Dispatch 72
+            }
+
+            # Nested Join-Path calls preserve Windows PowerShell 5.1 compatibility.
+            $specDirectory = Join-Path $Worktree 'docs\changes'
+            $specFile = Join-Path $specDirectory "$Spec.md"
+            if (Test-Path -LiteralPath $specFile -PathType Leaf) {
+                $specFindings = @(& $preflightSpecValidateScript -SpecPath $specFile)
+                $specValidateExit = $LASTEXITCODE
+                foreach ($finding in $specFindings) { Write-Host $finding }
+                if ($specValidateExit -eq 1) {
+                    $findingText = if ($specFindings.Count -gt 0) { $specFindings -join '; ' } else { 'validator returned exit 1' }
+                    Write-Host "[dispatch] REFUSED (exit 72): spec validation failed -- $findingText" -ForegroundColor Red
+                    # Exit 72 = required pre-flight gate refused while the capacity lease is open.
+                    Exit-Dispatch 72
+                }
+                if ($specValidateExit -ne 0) {
+                    throw "apex-spec-validate returned unexpected exit code $specValidateExit"
+                }
+            }
+            else {
+                if ($PSBoundParameters.ContainsKey('SpecSourcePath')) {
+                    $isDriveAbsolute = $SpecSourcePath -match '^[A-Za-z]:[\\/]'
+                    $isUncPath = $SpecSourcePath -match '^\\\\'
+                    if (-not ($isDriveAbsolute -or $isUncPath)) {
+                        Write-Host "[dispatch] REFUSED (exit 72): -SpecSourcePath '$SpecSourcePath' violates the documented contract: expected a drive-absolute or UNC path" -ForegroundColor Red
+                        # A cross-tree spec must have an unambiguous fully-qualified identity before validation.
+                        Exit-Dispatch 72
+                    }
+                    if (-not (Test-Path -LiteralPath $SpecSourcePath -PathType Leaf)) {
+                        Write-Host "[dispatch] REFUSED (exit 72): cross-tree spec source file does not exist: '$SpecSourcePath'" -ForegroundColor Red
+                        # A cross-tree build must validate an existing leaf spec before dispatch.
+                        Exit-Dispatch 72
+                    }
+
+                    $specSourceBasename = [System.IO.Path]::GetFileNameWithoutExtension($SpecSourcePath)
+                    if (-not [string]::Equals($specSourceBasename, $Spec, [System.StringComparison]::OrdinalIgnoreCase)) {
+                        Write-Host "[dispatch] REFUSED (exit 72): -Spec '$Spec' does not match cross-tree source basename '$specSourceBasename'" -ForegroundColor Red
+                        # Bind a cross-tree source to the requested spec so another spec cannot be substituted.
+                        Exit-Dispatch 72
+                    }
+
+                    $specFindings = @(& $preflightSpecValidateScript -SpecPath $SpecSourcePath)
+                    $specValidateExit = $LASTEXITCODE
+                    foreach ($finding in $specFindings) { Write-Host $finding }
+                    if ($specValidateExit -eq 1) {
+                        $findingText = if ($specFindings.Count -gt 0) { $specFindings -join '; ' } else { 'validator returned exit 1' }
+                        Write-Host "[dispatch] REFUSED (exit 72): spec validation failed -- $findingText" -ForegroundColor Red
+                        # A cross-tree spec that fails validation must refuse before dispatch transition.
+                        Exit-Dispatch 72
+                    }
+                    if ($specValidateExit -ne 0) {
+                        throw "apex-spec-validate returned unexpected exit code $specValidateExit"
+                    }
+                }
+                else {
+                    Write-Host "[dispatch] REFUSED (exit 72): no in-worktree spec at docs/changes/$Spec.md; pass -SpecSourcePath <absolute path> for a cross-tree build, or -SkipBaselineCheck for a deliberate bootstrap" -ForegroundColor Red
+                    # A cross-tree build cannot proceed without an explicitly supplied spec to validate.
+                    Exit-Dispatch 72
+                }
+            }
+
+            # Validate the dispatch contract before executing any repository-provided recipe.
+            & $preflightBaselineScript -Preflight -Worktree $Worktree
+            $baselineExit = $LASTEXITCODE
+            if ($baselineExit -in @(1, 3, 4)) {
+                Write-Host "[dispatch] REFUSED (exit 72): red baseline -- apex-baseline-check exit $baselineExit" -ForegroundColor Red
+                # Exit 72 = required pre-flight gate refused while the capacity lease is open.
+                Exit-Dispatch 72
+            }
+            if ($baselineExit -ne 0) {
+                throw "apex-baseline-check returned unexpected exit code $baselineExit"
+            }
+
+            $declaredRuntimePaths = Get-SpecFrontmatterValue -Key 'declared_runtime_paths'
+            if ($declaredRuntimePaths -is [string] -and
+                    $declaredRuntimePaths -ceq '__APEX_FRONTMATTER_UNPARSEABLE__') {
+                Write-Host '[dispatch] REFUSED (exit 81): declared_runtime_paths present but unparseable' -ForegroundColor Red
+                Exit-Dispatch 81
+            }
+
+            if ($null -ne $declaredRuntimePaths) {
+                # This proves visibility in this worktree at this commit only. It says nothing about
+                # other worktrees or the integration branch; later divergence there is out of scope.
+                $invisibleRuntimePaths = @()
+                foreach ($declaredRuntimePath in @($declaredRuntimePaths)) {
+                    $lsFilesExit = $null
+                    $checkIgnoreExit = $null
+                    $previousErrorActionPreference = $ErrorActionPreference
+                    $ErrorActionPreference = 'Continue'
+                    try {
+                        & cmd /c exit 99
+                        try {
+                            $null = @(& git -C $Worktree ls-files --error-unmatch -- $declaredRuntimePath 2>&1)
+                        }
+                        catch { }
+                        $lsFilesExit = $LASTEXITCODE
+
+                        & cmd /c exit 99
+                        try {
+                            $null = @(& git -C $Worktree check-ignore -q -- $declaredRuntimePath 2>&1)
+                        }
+                        catch { }
+                        $checkIgnoreExit = $LASTEXITCODE
+                    }
+                    finally {
+                        $ErrorActionPreference = $previousErrorActionPreference
+                    }
+
+                    if ($lsFilesExit -ne 0) {
+                        $reason = if ($checkIgnoreExit -eq 0) {
+                            'gitignored-invisible to worktrees'
+                        }
+                        else {
+                            'declared path is not tracked at this commit'
+                        }
+                        $invisibleRuntimePaths += [pscustomobject]@{
+                            Path = [string]$declaredRuntimePath
+                            LsFilesExit = $lsFilesExit
+                            CheckIgnoreExit = $checkIgnoreExit
+                            Reason = $reason
+                        }
+                    }
+                }
+
+                if ($invisibleRuntimePaths.Count -gt 0) {
+                    foreach ($offendingPath in $invisibleRuntimePaths) {
+                        # A plain pipeline string preserves this per-path diagnostic byte-for-byte
+                        # when a parent PowerShell process captures it. Write-Host produces a host
+                        # information record whose rendering can wrap the path/reason/exit evidence.
+                        Write-Output ("[dispatch] REFUSED (exit 81): declared_runtime_paths '{0}': {1} (ls-files exit {2}; check-ignore exit {3})" -f
+                                $offendingPath.Path, $offendingPath.Reason, $offendingPath.LsFilesExit,
+                                $offendingPath.CheckIgnoreExit)
+                    }
+                    Exit-Dispatch 81
+                }
+            }
+        }
+    }
+    else {
+        Write-Host '[dispatch] pre-flight skipped (phase/sandbox)' -ForegroundColor DarkGray
+    }
 
 $started = Get-UtcTimestamp
 $headSha = ''
@@ -1232,6 +2355,8 @@ $ledgerRow = [ordered]@{
     phase = $Phase
     started = $started
     log_path = $logPath
+    effort = $Effort
+    attended = $(if ($PSBoundParameters.ContainsKey('Attended')) { [bool]$Attended } else { $null })
     final_path = $finalPath
     schema = $schemaFile
     sandbox = $Sandbox
@@ -1254,6 +2379,7 @@ $ledgerRow = [ordered]@{
     reviewed_run_id = $(if ($Phase -eq 'review' -or $Schema -eq 'review' -or $Schema -eq 'endgate') { $ReviewedRunId } else { '' })
     reviewed_tree_digest = ''
     tree_pin_label = $null
+    row_kind = 'dispatch'
     status = 'running'
 }
 
@@ -1285,7 +2411,7 @@ if (-not [string]::IsNullOrEmpty($ReviewedRunId)) {
 
     if (-not $script:reviewedBuildFound) {
         Write-Host "[dispatch] REFUSED (exit 78): reviewed build '$ReviewedRunId' was not found in an exact terminal-success build row." -ForegroundColor Red
-        exit 78
+        Exit-Dispatch 78
     }
 }
 
@@ -1310,11 +2436,19 @@ if (-not [string]::IsNullOrWhiteSpace($BaseSha) -and
 #
 # Wave-parallel dispatch (ADR-028) is still correct. It just requires ONE WORKTREE PER CONCURRENT
 # TASK (`git worktree add`), which is what -Worktree is for.
-$refused = $null
+$script:refused = $null
 $script:malformedRefusal = $null
+$script:unresolvedRefusal = $null
 Invoke-WithLedgerLock {
     $script:malformedLiveLedgerLine = $null
-    $liveHere = @(Get-LiveDispatches -WorktreeKey $worktreeKey)
+    $reservationLedgerLines = if (Test-Path -LiteralPath $ledgerPath -PathType Leaf) {
+        [System.IO.File]::ReadAllLines($ledgerPath)
+    }
+    else {
+        [string[]]@()
+    }
+    $liveHere = @(Get-LiveDispatches -WorktreeKey $worktreeKey -ExcludeRunId $runId `
+        -LedgerLines $reservationLedgerLines)
     if ($script:malformedLiveLedgerLine) {
         $script:malformedRefusal = $script:malformedLiveLedgerLine
         return
@@ -1323,22 +2457,26 @@ Invoke-WithLedgerLock {
         $script:refused = $liveHere
         return
     }
-    [System.IO.Directory]::CreateDirectory($ledgerDirectory) | Out-Null
-    # A killed append may leave the expired malformed corpse without its trailing newline. If this
-    # reservation is concatenated directly onto it, our brand-new row becomes part of the same bad
-    # line and can never be updated. Keep the corpse, but terminate its line before appending ours.
-    $ledgerSeparator = ''
-    if ((Test-Path -LiteralPath $ledgerPath) -and (Get-Item -LiteralPath $ledgerPath).Length -gt 0) {
-        $ledgerText = [System.IO.File]::ReadAllText($ledgerPath)
-        if (-not $ledgerText.EndsWith("`n") -and -not $ledgerText.EndsWith("`r")) {
-            $ledgerSeparator = [Environment]::NewLine
-        }
+    $unresolvedHere = @(Get-UnresolvedWorktreeRows -WorktreeKey $worktreeKey `
+        -ExcludeRunId $runId -LedgerLines $reservationLedgerLines)
+    if ($AllowSharedWorktree -and $liveHere.Count -gt 0) {
+        $liveSiblingIds = @($liveHere | ForEach-Object { [string]$_.run_id })
+        $unresolvedHere = @($unresolvedHere | Where-Object {
+                $liveSiblingIds -cnotcontains [string]$_.run_id
+            })
     }
-    [System.IO.File]::AppendAllText(
-        $ledgerPath,
-        $ledgerSeparator + ($ledgerRow | ConvertTo-Json -Compress -Depth 8) + [Environment]::NewLine,
-        [System.Text.UTF8Encoding]::new($false)
-    )
+    if ($unresolvedHere.Count -gt 0) {
+        $script:unresolvedRefusal = $unresolvedHere[0]
+        return
+    }
+    $ledgerChanges = @{}
+    foreach ($ledgerField in $ledgerRow.GetEnumerator()) {
+        $ledgerChanges[$ledgerField.Key] = $ledgerField.Value
+    }
+    Update-LedgerRow -RunId $runId -RowKind 'lease' -Changes $ledgerChanges
+    # The lease row is now the launched run's dispatch row. It is no longer eligible for refusal
+    # closure, even if a later launch/setup operation throws.
+    $script:leaseRegistered = $false
 }
 
 if ($script:malformedRefusal) {
@@ -1346,13 +2484,13 @@ if ($script:malformedRefusal) {
     if ($badLedgerLine.Length -gt 240) { $badLedgerLine = $badLedgerLine.Substring(0, 240) + '...' }
     Write-Host "[dispatch] REFUSED (exit 71): a ledger line could not be parsed: $badLedgerLine" -ForegroundColor Red
     Write-Host '[dispatch] Its reservation may still be live. Repair or expire the row before dispatching into this worktree.' -ForegroundColor Red
-    exit 71
+    Exit-Dispatch 71
 }
 
-if ($refused) {
+if ($script:refused) {
     Write-Host ''
     Write-Host "[dispatch] REFUSING TO LAUNCH - a Codex worker is already running in this working tree:" -ForegroundColor Red
-    foreach ($l in $refused) { Write-Host ("      {0}/{1}  pid {2}  status {3}" -f $l.spec, $l.task, $l.pid, $l.status) -ForegroundColor Red }
+    foreach ($l in $script:refused) { Write-Host ("      {0}/{1}  pid {2}  status {3}" -f $l.spec, $l.task, $l.pid, $l.status) -ForegroundColor Red }
     Write-Host "[dispatch] Two coders in one tree is a data race with a DELETE in it: whichever finishes first" -ForegroundColor Red
     Write-Host "[dispatch] runs a scope check that cannot tell the other's in-progress files from its own" -ForegroundColor Red
     Write-Host "[dispatch] out-of-scope writes, and reverts them. That destroyed real work on 2026-07-14." -ForegroundColor Red
@@ -1361,8 +2499,27 @@ if ($refused) {
     Write-Host "[dispatch]     git worktree add ../wt-$safeTask $BaseSha" -ForegroundColor Yellow
     Write-Host "[dispatch] then pass it as -Worktree. Or dispatch serially. -AllowSharedWorktree with a recorded reason overrides." -ForegroundColor Yellow
     Write-Host ''
-    exit 71
+    Exit-Dispatch 71
 }
+
+if ($script:unresolvedRefusal) {
+    $blockedRow = $script:unresolvedRefusal
+    Write-Host (
+        "[dispatch] REFUSED (exit 80): worktree has unresolved run_id={0}, status={1}." -f
+            $blockedRow.run_id, $blockedRow.status) -ForegroundColor Red
+    Write-Host (
+        ('[dispatch] adopt: powershell -NoProfile -ExecutionPolicy Bypass -File "{0}" ' +
+        '-Adopt -RunId {1} -Spec {2} -Phase {3} -Task {4} -Worktree "{5}"') -f
+            $PSCommandPath, $blockedRow.run_id, $blockedRow.spec, $blockedRow.phase,
+            $blockedRow.task, $blockedRow.worktree) -ForegroundColor Yellow
+    Write-Host (
+        ('[dispatch] abandon: powershell -NoProfile -ExecutionPolicy Bypass -File "{0}" ' +
+        '-Attended -AbandonRunId {1} -AbandonReason "<why>"') -f
+            $PSCommandPath, $blockedRow.run_id) -ForegroundColor Yellow
+    Exit-Dispatch 80
+}
+
+Write-Utf8NoBomText -Path $logPath -Text ([string]::Empty)
 
 if ($AllowSharedWorktree) {
     Write-Host "[dispatch] -AllowSharedWorktree: LIVE-WORKER REFUSAL DELIBERATELY OVERRIDDEN -- reason: $AllowSharedWorktreeReason" -ForegroundColor Yellow
@@ -1385,7 +2542,7 @@ if ($Authorized.Count -gt 0) {
         # A gate that quietly disappears when its file is missing is not a gate. The caller ASKED for
         # scope enforcement; running the build without it and reporting success is the worst possible
         # answer. Refuse.
-        Update-LedgerRow -RunId $runId -Changes @{ status = 'failed'; ended = (Get-UtcTimestamp); error = 'codex-scope-check.ps1 missing' }
+        Update-LedgerRow -RunId $runId -RowKind 'dispatch' -Changes @{ status = 'failed'; ended = (Get-UtcTimestamp); error = 'codex-scope-check.ps1 missing' }
         throw "-Authorized was given but codex-scope-check.ps1 is missing ($scopeCheckScript). Refusing to dispatch without the enforcement that was asked for."
     }
     else {
@@ -1417,7 +2574,7 @@ $treePinArmed = $false
 $reviewTreePinPath = $null
 $isReadOnlyGate = ($Sandbox -eq 'read-only' -or $Phase -eq 'review')
 if ((-not $NoTreePin) -and $isReadOnlyGate -and -not (Test-Path $treePinScript)) {
-    Update-LedgerRow -RunId $runId -Changes @{ status = 'failed'; ended = (Get-UtcTimestamp); error = 'tree-pin.ps1 missing' }
+    Update-LedgerRow -RunId $runId -RowKind 'dispatch' -Changes @{ status = 'failed'; ended = (Get-UtcTimestamp); error = 'tree-pin.ps1 missing' }
     throw "A read-only gate must be pinned, but tree-pin.ps1 is missing ($treePinScript). Refusing: an unpinned gate can bless a tree that moved under it. Pass -NoTreePin -NoTreePinReason '<why>' to opt out deliberately."
 }
 if ((-not $NoTreePin) -and $isReadOnlyGate -and (Test-Path $treePinScript)) {
@@ -1436,7 +2593,7 @@ if ((-not $NoTreePin) -and $isReadOnlyGate -and (Test-Path $treePinScript)) {
         }
         finally { $sha.Dispose() }
         $reviewTreePinPath = Join-Path $harnessStateDir "apex-treepin-$safeTreePinLabel-$worktreeTag.txt"
-        try { Update-LedgerRow -RunId $runId -Changes @{ tree_pin_label = $treePinLabel } } catch { }
+        try { Update-LedgerRow -RunId $runId -RowKind 'dispatch' -Changes @{ tree_pin_label = $treePinLabel } } catch { }
     }
 }
 
@@ -1448,7 +2605,7 @@ if ($isReadOnlyGate -and -not [string]::IsNullOrEmpty($ReviewedRunId)) {
     }
     elseif ([string]::IsNullOrWhiteSpace($script:reviewedEndTreeDigest) -or
             $script:reviewedEndTreeDigest -ceq 'unverifiable') {
-        Update-LedgerRow -RunId $runId -Changes @{
+        Update-LedgerRow -RunId $runId -RowKind 'dispatch' -Changes @{
             status = 'failed'; ended = (Get-UtcTimestamp); digest_mismatch = $true
         }
         Write-Host "[dispatch] REFUSED (exit 78): reviewed build '$ReviewedRunId' has no verifiable end_tree_digest." -ForegroundColor Red
@@ -1477,21 +2634,21 @@ if ($isReadOnlyGate -and -not [string]::IsNullOrEmpty($ReviewedRunId)) {
         }
 
         if ($live -cnotmatch '^[0-9A-Fa-f]{64}$') {
-            Update-LedgerRow -RunId $runId -Changes @{
+            Update-LedgerRow -RunId $runId -RowKind 'dispatch' -Changes @{
                 status = 'failed'; ended = (Get-UtcTimestamp); digest_mismatch = $true
             }
             Write-Host '[dispatch] REFUSED (exit 78): the live review tree digest is unreadable or unverifiable.' -ForegroundColor Red
             exit 78
         }
         if ($live -cne $script:reviewedEndTreeDigest) {
-            Update-LedgerRow -RunId $runId -Changes @{
+            Update-LedgerRow -RunId $runId -RowKind 'dispatch' -Changes @{
                 status = 'failed'; ended = (Get-UtcTimestamp); digest_mismatch = $true
             }
             Write-Host "[dispatch] REFUSED (exit 78): the live review tree does not match reviewed build '$ReviewedRunId'." -ForegroundColor Red
             exit 78
         }
 
-        Update-LedgerRow -RunId $runId -Changes @{ reviewed_tree_digest = $live }
+        Update-LedgerRow -RunId $runId -RowKind 'dispatch' -Changes @{ reviewed_tree_digest = $live }
     }
 }
 
@@ -1551,7 +2708,7 @@ try {
         }
     }
 } catch {
-    Update-LedgerRow -RunId $runId -Changes @{ status = 'failed'; ended = (Get-UtcTimestamp); error = $_.Exception.Message }
+    Update-LedgerRow -RunId $runId -RowKind 'dispatch' -Changes @{ status = 'failed'; ended = (Get-UtcTimestamp); error = $_.Exception.Message }
     throw
 }
 
@@ -1569,7 +2726,7 @@ $process.StartInfo = $startInfo
 $appendLogText = {
     param([string]$Text)
     if ($Text.Length -gt 0) {
-        [System.IO.File]::AppendAllText($logPath, $Text, [System.Text.UTF8Encoding]::new($false))
+        Add-Utf8NoBomText -Path $logPath -Text $Text
     }
 }
 
@@ -1577,7 +2734,7 @@ if ($preflightPinArmed) {
     & $preflightTreePinScript -Verify -Worktree $Worktree -Label $preflightPinLabel -PinDirectory $harnessStateDir | Write-Host
     $preflightVerifyExit = $LASTEXITCODE
     if ($preflightVerifyExit -ne 0) {
-        Update-LedgerRow -RunId $runId -Changes @{ status = 'failed'; ended = (Get-UtcTimestamp); error = 'tree moved under the pre-flight pin' }
+        Update-LedgerRow -RunId $runId -RowKind 'dispatch' -Changes @{ status = 'failed'; ended = (Get-UtcTimestamp); error = 'tree moved under the pre-flight pin' }
         Write-Host '[dispatch] REFUSED (exit 69): tree moved between pre-flight and launch -- the verified tree is not the tree the coder would get' -ForegroundColor Red
         # Exit 69 = the pinned tree moved, so the launch-boundary verdict is void.
         exit 69
@@ -1596,7 +2753,7 @@ try {
     # asynchronous precisely because it can block, and a blocked write must never hide that the child
     # was launched: a null pid in the ledger reads as "reserved but never launched" and wedges the
     # shared-worktree guard for every future dispatch into this tree.
-    Update-LedgerRow -RunId $runId -Changes @{ pid = $process.Id; pid_start = (Get-ProcessStamp $process.Id) }
+    Update-LedgerRow -RunId $runId -RowKind 'dispatch' -Changes @{ pid = $process.Id; pid_start = (Get-ProcessStamp $process.Id) }
 
     # Service ALL THREE pipes concurrently. A synchronous StandardInput.Write($Prompt) here deadlocks
     # the wrapper: `codex exec --json` streams events to stdout from launch, so for a prompt larger
@@ -1670,7 +2827,7 @@ try {
         if ((Get-Date) -ge $nextWatchCheck) {
             $lastWrite = (Get-Item -LiteralPath $logPath).LastWriteTime
             if (((Get-Date) - $lastWrite).TotalMinutes -ge $NoOutputTimeoutMin) {
-                Update-LedgerRow -RunId $runId -Changes @{ status = 'stalled'; stalled = (Get-UtcTimestamp) }
+                Update-LedgerRow -RunId $runId -RowKind 'dispatch' -Changes @{ status = 'stalled'; stalled = (Get-UtcTimestamp) }
                 $stalled = $true
                 break
             }
@@ -1810,7 +2967,11 @@ try {
                 $blocker = 'The review report carried no verdict. A gate that said nothing did not pass.'
             }
 
-            if ($report.unresolved) { $unresolved += @($report.unresolved) }
+            if ($Schema -ceq 'completion') {
+                $unresolved = @($report.unresolved | Where-Object {
+                        -not [string]::IsNullOrWhiteSpace([string]$_)
+                    })
+            }
             if ($report.deviations) { $deviations = @($report.deviations) }
             if ($report.blocker) { $blocker = [string]$report.blocker }
 
@@ -1836,10 +2997,11 @@ try {
         $blocker = 'Codex exited 0 without writing a completion report.'
     }
 
-    # `done_with_concerns` with an empty `unresolved` is self-contradictory: the status word says
-    # there are concerns, the payload says there are none. Believe the status word.
-    if ($reportStatus -eq 'done_with_concerns' -and $unresolved.Count -eq 0) {
-        $unresolved = @('Coder reported done_with_concerns but named no unresolved items. Treat this build as unverified.')
+    # Only completion reports own `unresolved`; review concerns are synthesized from verdict evidence.
+    if ($Schema -ceq 'completion' -and
+            $reportStatus -eq 'done_with_concerns' -and $unresolved.Count -eq 0) {
+        $reportStatus = 'blocked'
+        $blocker = $emptyConcernBlockerText
     }
 
     if ($reportStatus -eq 'blocked') { $status = 'blocked' }
@@ -1973,7 +3135,7 @@ try {
     if ($null -ne $criticalViolation) {
         $terminalChanges['critical_violation'] = $criticalViolation
     }
-    Update-LedgerRow -RunId $runId -Changes $terminalChanges
+    Update-LedgerRow -RunId $runId -RowKind 'dispatch' -Changes $terminalChanges
 
     # The coder's own account of what it could not finish is the single highest-value input to the
     # review that follows -- and it is exactly what got dropped on cap-deps-1b, leaving the reviewer
@@ -1985,7 +3147,7 @@ try {
         if ($blocker) { $concernsLines += @('## Blocker', '', $blocker, '') }
         if ($unresolved.Count -gt 0) { $concernsLines += @('## Unresolved', '') + ($unresolved | ForEach-Object { "- $_" }) + @('') }
         if ($deviations.Count -gt 0) { $concernsLines += @('## Deviations', '') + ($deviations | ForEach-Object { "- $_" }) + @('') }
-        [System.IO.File]::WriteAllLines($concernsPath, [string[]]$concernsLines, [System.Text.UTF8Encoding]::new($false))
+        Write-Utf8NoBomLines -Path $concernsPath -Lines ([string[]]$concernsLines)
 
         Write-Host ''
         Write-Host "[dispatch] The coder reported '$reportStatus'. Its own words -- carry these into the review:" -ForegroundColor Yellow
@@ -2055,7 +3217,8 @@ try {
     # A CHILD's exit code must never be passed through into the wrapper's RESERVED space. Codex
     # exiting 67 (for its own reasons) is not "the coder reported blocked"; a caller reading the
     # contract would act on a verdict that was never given. Remap anything that collides.
-    # The wrapper's exit space is a CONTRACT: 0/1/65/66/67/68/69/71/75/77/78/124. Passing an arbitrary child
+    # The wrapper's exit space is a CONTRACT:
+    # 0/1/65/66/67/68/69/71/75/77/78/79/80/81/82/83/124. Passing an arbitrary child
     # code straight through breaks it -- a child exiting 2 told the caller nothing the contract can
     # express, and a child exiting 67 claimed a `blocked` verdict it never gave.
     if ($exitCode -ne 0) {
@@ -2065,16 +3228,32 @@ try {
     exit 0
 } catch {
     # A launch/setup failure has no child exit code, but it is still durable.
-    Update-LedgerRow -RunId $runId -Changes @{ status = 'failed'; ended = (Get-UtcTimestamp); error = $_.Exception.Message }
+    Update-LedgerRow -RunId $runId -RowKind 'dispatch' -Changes @{ status = 'failed'; ended = (Get-UtcTimestamp); error = $_.Exception.Message }
     throw
 } finally {
     # Guarded: we close the child's stdin via BaseStream (see the prompt-write note), so Dispose here
     # re-disposes the StandardInput StreamWriter over an already-closed stream, which would otherwise
     # throw out of this finally and mask the exit code.
     try { $process.Dispose() } catch {}
-    $ledgerMutex.Dispose()
 }
 } finally {
+    # Single refusal backstop: append a close event if and only if this run still has an OPEN lease
+    # (a row_kind:lease row with no row_kind:lease_close partner). Pre-lease refusals therefore append
+    # nothing, and a transitioned dispatch cannot be closed as a refusal.
+    if ($script:leaseRegistered) {
+        try {
+            $openLeaseRunIds = @(Get-OpenLeaseRunIds)
+            if ($openLeaseRunIds -ccontains $runId) {
+                Add-LeaseCloseRow -RunId $runId -Status 'refused-preflight' -RefusalExit $script:pendingExitCode
+            }
+        }
+        catch {
+            Write-Host "[dispatch] refusal lease-close backstop failed: $($_.Exception.Message)" -ForegroundColor Red
+        }
+        finally {
+            $script:leaseRegistered = $false
+        }
+    }
     if ($treePinArmed -and -not [string]::IsNullOrWhiteSpace($reviewTreePinPath)) {
         Remove-Item -LiteralPath $reviewTreePinPath -Force -ErrorAction SilentlyContinue
         $treePinArmed = $false
@@ -2084,5 +3263,70 @@ try {
         $preflightPinGlob = Join-Path $harnessStateDir "apex-treepin-$safe-*.txt"
         Remove-Item -Path $preflightPinGlob -Force -ErrorAction SilentlyContinue
         $preflightPinArmed = $false
+    }
+    $creatorTeardownTerminal = $false
+    try {
+        if ($OwnedWorktree) {
+            $creatorTeardownTerminal = Test-CreatorRunTerminal -RunId $runId
+        }
+    }
+    catch {
+        Write-Host "[dispatch] creator teardown terminal-state check failed: $($_.Exception.Message)" -ForegroundColor Red
+    }
+    finally {
+        $ledgerMutex.Dispose()
+    }
+
+    if ($OwnedWorktree -and $creatorTeardownTerminal) {
+        try {
+            Invoke-CreatorTeardown -Worktree $Worktree -RunId $runId
+        }
+        catch {
+            $teardownException = $_.Exception.Message
+            Write-Host "[dispatch] creator teardown failed: $teardownException" -ForegroundColor Red
+
+            $catchRecord = $script:creatorTeardownRecord
+            if ($null -eq $catchRecord) {
+                $catchRecord = @{
+                    teardown_main_repo = ''
+                    teardown_sha = ''
+                    teardown_branch = ''
+                    teardown_worktree = $Worktree
+                    cleanup_obligation = ''
+                    branch_teardown_obligation = ''
+                }
+            }
+            $catchRecord.cleanup_obligation =
+                "worktree $($catchRecord.teardown_worktree) retained: teardown failure: $teardownException"
+            $catchRecord.branch_teardown_obligation = ''
+
+            if (-not [string]::IsNullOrWhiteSpace([string]$catchRecord.teardown_main_repo)) {
+                Write-Host (Get-CreatorTeardownCommand `
+                    -MainRepo ([string]$catchRecord.teardown_main_repo) `
+                    -Worktree ([string]$catchRecord.teardown_worktree)) -ForegroundColor Yellow
+            }
+
+            # Recording the catch path also needs a post-disposal handle. Failures here are reported
+            # but cannot replace the wrapper's already-selected exit code.
+            $catchMutex = [System.Threading.Mutex]::new($false, 'ApexCodexRunLedger')
+            try {
+                Invoke-WithLedgerLock -Mutex $catchMutex -Action {
+                    $catchLedgerLines = if (Test-Path -LiteralPath $ledgerPath -PathType Leaf) {
+                        [System.IO.File]::ReadAllLines($ledgerPath)
+                    }
+                    else {
+                        [string[]]@()
+                    }
+                    Save-CreatorTeardownRecord -RunId $runId -Record $catchRecord `
+                        -LedgerLines $catchLedgerLines -Mutex $catchMutex
+                }
+            }
+            catch {
+                Write-Host "[dispatch] creator teardown obligation recording failed: $($_.Exception.Message)" -ForegroundColor Red
+            }
+            finally {
+                $catchMutex.Dispose()
+            }
+        }
     }
 }
