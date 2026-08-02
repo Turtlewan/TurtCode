@@ -1,0 +1,386 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "apex://orchestrator-protocol-schema",
+  "title": "APEX build-orchestrator protocol (v1 - build phase, attended only)",
+  "description": "Normative shape contract for the orchestrator protocol. V1 SCOPE (owner-approved descope, 2026-08-01): the agent owns BUILD-PHASE orchestration for ATTENDED builds only - task selection, wave sequencing, dispatch parameters, exit-code routing, verify adjudication, retry/escalation/fork, integration order. FALLBACK IS NOT OWNED HERE: v1 has no fallback action and no carrier for one, so a Codex quota-out or unavailability is emitted as 'park' with the cause in reason and the attended operator owns the decision. CLOSE-OUT IS NOT IN THIS PROTOCOL: when every task is integrated and verified the agent emits ONE terminal adjudication with next_action 'complete' and the host executes the close-out chain per apex-code/SKILL.md section Post-build. There are therefore FIVE $defs and no more: the two input event kinds 'dispatch_result' and 'refusal'; the two output kinds 'wave_plan' and 'adjudication'; and the 'build_state' block. The reviewer, family-gate, subagent-result, integration-verify and D1-exception-row shapes of earlier drafts are DELETED - they modelled close-out and unattended machinery that v1 does not own. INTEGRATION VERIFY IS NOT AN EVENT KIND IN V1: the host returns the integrated tree's verify outcome as a bounded PROSE CARRIER on the resume message, whose exact field list AND every one of its bounds is fixed in the agent file's section 'The integrated tree's verify result' - {repo (<=512 chars), task_ids[] (<=16 entries), integration_branch (<=200 chars), head_sha (40 chars), tree_digest (<=64 chars), recipe_exit_codes[] (<=16 entries), tail (<=50 lines AND <=8192 chars), truncated (refers to tail ONLY)} - non-normative in the sense that the host does not validate it against this document, complete in the sense that no other field may appear on it. THE CARRIER PINS THE TREE, NOT THE COMMIT: the live procedure verifies the STAGED integration tree, not HEAD (references/parallel-codex.md:51-55 - the recipe runs on the integrated main tree, whose staged content is what was verified), so tree_digest is the tree-pin digest of that verified integration tree and is the field a later tree_moved is checked against. Its OUTCOME is persisted here, on build_state.tasks[].integration, so a fresh instance resumes close-in without re-running integration. THE PERSISTED RESIDUE IS NOT THE WHOLE CARRIER: exit_code, ok, tree_digest, branch and recipe_exit_codes[] are kept; THE TAIL IS NOT PERSISTED, and a fresh instance adjudicating a still-pending integration result without its tail emits request_verify to regenerate it rather than deciding on an absent body. UNATTENDED/AFK BUILDS ARE OUT OF V1: they stay on the current host path, so no field, enum member or conditional here models one. Field names are the LEDGER'S OWN, verbatim, and are never renamed. Every object sets additionalProperties false, so every map is expressed as an array of keyed objects. CAPS ARE STATED ONCE, HERE, and are deliberately NOT uniform. THE CAPS BELOW ARE MEASURED, NOT GUESSED - the measurements that set the non-obvious ones are recorded in ~/apex/docs/research/orchestrator-producer-surfaces-2026-08-01.md Addendum (r12): a real AGENTS.md '## Verify commands' fenced block is 467 characters, so a verify_contract holding BLOCK CONTENT would sit one edit away from overflowing a path cap - which is why that field is a PATH; and the longest worktree_key on the live ledger is 77 characters with the longest worktree path 110, which is why the path cap is 512 (~4.6x) and why no worktree-shaped string ever carries the 64-character identifier cap. maxLength: identifier 64 (task ids, run ids, ledger statuses, shas, spec names); spec_digest 128; short prose 200 (an adjudication reason, a notes line); path 512 - which also carries a violation banner and a refusal's printed line; ordinary free prose 2000; verify tail and scope_check 10000 (the <=50-line cap); concerns_md 10240; porcelain 40000 (the <=200-line cap). maxItems: deviations and unresolved 50; truncated 12; pending_events 20 - one wave's maximum width is 16, and 20 leaves four slots of RECOVERY HEADROOM on top of a full wave: a structural-malformed-output refusal against the turn that should have drained the wave, plus stragglers, can arrive while all 16 results are still unadjudicated, and a 16-cap would drop them; repos 4; file lists 100-200; commands_run 100; tasks within ONE wave 16. SPEC-WIDE TASK CEILING: 64. A spec carries at most 64 tasks, so every per-task array (run_ids, worktrees, tasks, refusal_history, adjudications) and every wave count (waves, completed_waves, pending_waves, and the wave number itself) is capped at 64 - the degenerate plan being one task per wave. Waves are capped at 64 and each wave at 16 tasks, so the SCHEMA alone admits a 1024-task product; JSON Schema cannot multiply, so the real ceiling - total tasks summed across all waves must be <= 64 - is enforced by the host's deterministic structural validation, not here.",
+  "$defs": {
+    "dispatch_result": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "task_id", "repo", "exit_code", "run_id", "log_path", "status", "report_status", "scopeViolation", "scope_exit", "encoding_violation", "critical_violation", "violation_detail", "tree_moved", "final", "concerns_md", "scope_check", "truncated", "porcelain"],
+      "properties": {
+        "kind": { "const": "dispatch_result" },
+        "task_id": { "type": "string", "maxLength": 64 },
+        "repo": { "type": "string", "maxLength": 512 },
+        "exit_code": { "type": "integer", "enum": [0, 1, 65, 66, 67, 68, 69, 73, 77] },
+        "run_id": { "type": "string", "maxLength": 64 },
+        "log_path": { "type": ["string", "null"], "maxLength": 512 },
+        "status": { "type": "string", "maxLength": 64, "pattern": "^(done|done_with_concerns|success|blocked|failed|abandoned-unadopted|adopted-(done|done_with_concerns|blocked|void)(\\+scope[0-9]+)?)$", "description": "the ledger row's status verbatim, and TERMINAL STATUSES ONLY. A dispatch_result is a COMPLETED result, so the non-terminal row states (leasing, running, stalled, adopting, orphaned) are excluded by construction - they never arrive on this tag, and a row still in one of them has produced no outcome to adjudicate. Adopted rows may carry a +scope<N> suffix (adopted-done+scope65), so read the prefix, never the bare equality. success is a legacy terminal-success spelling that apex-family-gate.ps1:38-43 and codex-dispatch.ps1:2400 both still accept, so it is admitted here. error and digest_mismatch are NOT statuses: they are sibling ledger FIELDS written alongside status 'failed' (codex-dispatch.ps1:2545, 2609). ONE STATUS DOES NOT OUTRANK ITS EXIT, AND IT IS THE ONLY ONE: on status 'adopted-void' the exit code WINS. The adoption path writes status 'adopted-void' at codex-dispatch.ps1:1653 and closes the row, and only THEN chooses its exit - exiting 67 at :1672-1674 when the recovered report said 'blocked', WITHOUT rewriting the status. So an adopted-void row carrying exit 67 is a blocked hard stop (verdict blocked), and an adopted-void row carrying exit 69 is a moved tree (verdict void -> request_verify). Read the exit on this status, and this status only; on every other status in this pattern the status beats the exit" },
+        "report_status": { "type": ["string", "null"], "enum": ["done", "done_with_concerns", "blocked", null], "description": "the ledger row's report_status verbatim: the wrapper's DERIVED value for the report, which is NOT necessarily the .final's literal status - the wrapper promotes it from blocker/unresolved evidence when it refutes a 'done' claim, and SYNTHESIZES 'blocked' outright when the report is UNPARSEABLE (codex-dispatch.ps1:2990) or when it is MISSING AND THE CHILD EXITED 0 (:2993-2997 - the synthesis branch is guarded by 'elseif ($exitCode -eq 0)'). The guard matters: an exit-1 run that wrote no report gets NO synthesis, so its report_status is null. So a populated report_status never witnesses that a report existed, and a null one does not witness exit 0; only final witnesses a report" },
+        "scopeViolation": { "type": "boolean" },
+        "scope_exit": { "type": ["integer", "null"], "enum": [65, 66, null], "description": "the ledger row's own typed scope_exit field: the scope code the row recorded - 65 (a scope violation, a SPEC defect) or 66 (an authorized-list defect) - independently of which code won the exit. IT IS WHAT UN-MASKS A 67: the exit precedence puts 67 ahead of both, so a blocked row that was ALSO out of scope surfaces only scopeViolation true, and 65 and 66 want different remedies. ROUTING: when scopeViolation is true, read scope_exit for the remedy class - 65 re-routes the task through planning (the spec's Files to Change is wrong), 66 re-dispatches with a corrected authorized set. THE ENUM IS CLOSED AT 65, 66 AND NULL, AND THE HOST MAPS EVERYTHING ELSE TO NULL: only those two codes carry routing semantics, so a raw ledger value that is neither - a scope-check error, or any other code the row happened to record - is written here as null and NAMED IN truncated, which is the same synthesis mechanism every other non-verbatim field uses. Null therefore means 'no remedy class is readable', whether the row recorded none or recorded something unroutable, and a true scopeViolation beside it carries the obligation without a class: the host says so in notes rather than picking one" },
+        "encoding_violation": { "type": "boolean" },
+        "critical_violation": { "type": ["boolean", "null"], "description": "null on a read-only or review row: not applicable, never clean" },
+        "violation_detail": { "type": ["string", "null"], "maxLength": 512, "description": "the wrapper's printed violation banner line(s), copied verbatim by the host. The banner is GENERIC: codex-dispatch.ps1:3197-3201 always prints '[dispatch] CRITICAL FILE VIOLATION in the post-hoc written set. Do NOT commit.' and appends '[dispatch] HARD-BLOCK critical path(s): <joined paths>' ONLY on a hard block - so the several causes (a named confirmable critical path, a docs/audit hard block, a missing written-set evidence line, a classifier anomaly) are NOT distinguishable from this string. It is evidence for the reason line and for the operator, and it is INSUFFICIENT for cause classification - which is exactly WHY v1 routes exit 77 and any true critical_violation to park rather than to a confirmation. NULL IS THE ORDINARY CASE ON A MASKED CRITICAL, NOT AN ANOMALY: the banner prints on the 77 path ONLY (codex-dispatch.ps1:3197-3201), so a true critical_violation that arrives under a winning exit 67, 69, 66 or 65 has NO banner and this field is null. The park reason therefore cites THE FLAG - 'critical_violation true under exit <code>' - and quotes violation_detail only when it is present. There is no verbatim-quoting requirement: reason stays within its 200-character cap either way" },
+        "tree_moved": { "type": "boolean" },
+        "final": {
+          "type": ["object", "null"],
+          "additionalProperties": false,
+          "description": "the completion-schema object, or null. THE RULE IS ONE RULE, NOT AN ENUMERATION OF CASES: final is null exactly when the wrapper found no parseable completion report, and present exactly when it found one. NO exit code implies either way - any code can co-occur with a present OR an absent final (exit 1 most notoriously, because the wrapper parses the .final at :2885 some 340 lines BEFORE it remaps the child's non-zero exit to 1 at :3224). No ledger STATUS implies it either - adopted-blocked in particular MAY carry a real final. report_status does not settle it: it is derived and, when the report is missing or unparseable, synthesized. Adjudicate on final when present, else on status",
+          "required": ["status", "changed_files", "commands_run", "deviations", "unresolved", "blocker"],
+          "properties": {
+            "status": { "type": "string", "enum": ["done", "done_with_concerns", "blocked"] },
+            "changed_files": { "type": "array", "maxItems": 200, "items": { "type": "string", "maxLength": 512 } },
+            "commands_run": {
+              "type": "array",
+              "maxItems": 100,
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["command", "result", "detail"],
+                "properties": {
+                  "command": { "type": "string", "maxLength": 2000 },
+                  "result": { "type": "string", "enum": ["pass", "fail", "not_run"] },
+                  "detail": { "type": ["string", "null"], "maxLength": 2000 }
+                }
+              }
+            },
+            "deviations": { "type": "array", "maxItems": 50, "items": { "type": "string", "maxLength": 2000 } },
+            "unresolved": { "type": "array", "maxItems": 50, "items": { "type": "string", "maxLength": 2000 } },
+            "blocker": { "type": ["string", "null"], "maxLength": 2000 }
+          }
+        },
+        "concerns_md": { "type": ["string", "null"], "maxLength": 10240 },
+        "scope_check": { "type": ["string", "null"], "maxLength": 10000 },
+        "truncated": { "type": "array", "maxItems": 12, "items": { "type": "string", "maxLength": 64 }, "description": "names every field whose value is NOT the producer's own: one the host cut to fit a cap, or one the host SYNTHESIZED because the producer never emitted it - notably a violation boolean filled as false on a pre-launch failure row or an adoption path that never computed it. Empty when every field is verbatim" },
+        "porcelain": { "type": ["string", "null"], "maxLength": 40000 },
+        "error": { "type": ["string", "null"], "maxLength": 512, "description": "OPTIONAL - the only field on this tag that is not in required, because the ledger row carries it only on the failure paths that write one. It is the ledger row's own `error` field verbatim: the sibling written alongside status 'failed' when a gate script is missing (codex-dispatch.ps1:2545, :2577) or when a launch/setup failure is caught and durably closed (:3231, the catch block whose message is the exception's). Absent and null both mean the row carried none. ITS COVERAGE IS NARROW, AND A QUOTA-OUT IS NOT IN IT: this field is written only on the missing-helper and caught-setup-exception paths. A MID-RUN QUOTA FAILURE IS A PLAIN CHILD NON-ZERO (codex-dispatch.ps1:2869) that the wrapper remaps to exit 1 (:3224-3226), printing its diagnostic to the DISPATCH LOG, which the agent never reads - so no field on this tag distinguishes a quota-out from any other child failure, and nothing here may be read as identifying one. THE EXIT-1 RULE THAT FOLLOWS: final present -> adjudicate the final; error present -> route on the cause it names; BOTH null -> redispatch once, then park with reason 'cause unknown - operator checks the dispatch log (possible quota-out)'. Truncation is flagged the ordinary way: if the host cuts this to 512 it names 'error' in truncated" }
+      }
+    },
+
+    "refusal": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "task_id", "repo", "exit_code", "rule", "detail", "synthesized", "tail", "run_id", "final", "truncated"],
+      "properties": {
+        "kind": { "const": "refusal" },
+        "task_id": { "type": ["string", "null"], "maxLength": 64 },
+        "repo": { "type": ["string", "null"], "maxLength": 512 },
+        "exit_code": { "type": ["integer", "null"], "enum": [71, 72, 74, 75, 76, 78, 79, 80, 81, 82, 83, 124, null] },
+        "rule": { "type": ["string", "null"], "maxLength": 64, "description": "the named-enum rule is a HOST-GENERATED refusal's field only. The wrapper does not emit rule names: on a wrapper refusal (exit_code is an integer) rule is NULL and detail carries the wrapper's printed line verbatim. Read rule on a null-exit_code refusal, read detail on every other one - notably on 76, whose five gates are told apart by detail and never by rule" },
+        "detail": { "type": "string", "maxLength": 512, "description": "THE WRAPPER'S PRINTED REFUSAL LINE WHEN ONE EXISTS, VERBATIM - and it is the only thing that distinguishes the several causes that share one exit code (78's three, 82's four, 76's five); on a host-generated refusal it names which check failed. NOT EVERY WRAPPER REFUSAL PRINTS A STANDARDIZED LINE, so this field ALSO admits a host-composed one: exit 124 prints NOTHING at all before exiting (codex-dispatch.ps1:2828-2840), the live-coder exit 75 prints four [adopt] lines and no REFUSED line (:1428-1434), and the live-sibling exit 71 prints 'REFUSING TO LAUNCH' rather than a REFUSED line (:2490-2502). On those paths detail is a HOST-COMPOSED one-line factual description of the observed condition - what was observed, not what it means - and synthesized is true. Read synthesized before treating this string as the producer's own words. The 512 cap CAN bite: an exit-72 pre-flight surfaces validator output of no fixed length, so when the host cuts this string it sets truncated true - a cut is marked, never silent" },
+        "synthesized": { "type": "boolean", "description": "true when detail is the HOST'S one-line factual description of the observed condition rather than a line the wrapper printed - the 124, live-75 and live-sibling-71 paths, which print no standardized refusal line. False when detail is the wrapper's own printed line, verbatim. It is the boolean that keeps a composed sentence from being read as producer text, and it is required on every refusal: a host-generated refusal (null exit_code) names its own rule and composes its own detail, so it is true there too" },
+        "tail": { "type": ["string", "null"], "maxLength": 10000 },
+        "run_id": { "type": ["string", "null"], "maxLength": 64, "description": "the id this refusal's output NAMES; the referent varies by exit code and is never this attempt's own id, except on 124. ALWAYS present on 75, 80 and 124; present on 78 and 82 WHENEVER THE INBOUND IDENTIFIER WAS WELL-FORMED and null when it was not (see those codes' conditionals - the wrapper echoes arbitrary caller input on an 82 not-found and a 78 unknown-id, and that raw echo rides in detail, not here); null on 71, 72, 74, 76, 79, 81 and 83, where the wrapper surfaces no id at all. SOURCING, IN ORDER: from the wrapper's printed line when one carries the id; ELSE from the host's OWN launch or ledger context for that dispatch - which the host has on exactly the paths that print nothing, 124 (the run it launched itself) and the live 75 (the adopt target it named in its own call) - and NEVER invented, reconstructed from a log path, or guessed" },
+        "final": { "type": "null" },
+        "truncated": { "type": "boolean", "description": "true when the host cut detail or tail to fit its cap - AND IT MEANS CUTTING, NOTHING ELSE. A boolean rather than the array dispatch_result carries, because a refusal has exactly two cappable fields, so naming which one was cut adds nothing an exit code and a read do not already give. IT IS NOT THE SYNTHESIS FLAG: a refusal DOES carry synthesized fields - detail is host-composed on the 124, live-75, live-sibling-71 and host-generated paths - and that fact is carried by its own required boolean, synthesized, never here. Read both: truncated says the string is a fragment, synthesized says the string is not the producer's words, and they are independent" }
+      },
+      "allOf": [
+        {
+          "if": { "required": ["exit_code"], "properties": { "exit_code": { "type": "null" } } },
+          "then": { "properties": { "rule": { "enum": ["hard-block-commit-unapproved", "hard-block-push-main", "hard-block-merge", "hard-block-teardown-outside-d8", "hard-block-critical-unconfirmed", "hard-block-audit-write", "structural-cap", "structural-disjointness", "structural-authorized-outside-spec", "structural-offlist-write", "structural-malformed-output", "structural-malformed-inbound"] } } }
+        },
+        {
+          "if": { "required": ["exit_code"], "properties": { "exit_code": { "type": "integer" } } },
+          "then": { "properties": { "rule": { "type": "null", "description": "a wrapper refusal carries no rule name - there is no such string on its stdout to read one from, which is why every wrapper-refusal route reads detail" } } }
+        },
+        {
+          "if": { "required": ["exit_code"], "properties": { "exit_code": { "enum": [75, 80, 124] } } },
+          "then": { "properties": { "run_id": { "type": "string", "pattern": "^[0-9a-f]{32}$", "description": "REQUIRED, AND SHAPE-PINNED, on these three: 75 the adopt-target row, 80 the BLOCKING unresolved row, 124 this run's own launched id. Every one of them is a WRAPPER LEDGER ROW the host or wrapper ALREADY HOLDS - a leased target, a live blocking row, a launched run - so there is no malformed-input case here and null is refused: whose run_id is exactly 32 lowercase hex characters on all 1326 rows measured on the live ledger, so the shape is a pattern, not a floor, and a 31-hex or 33-hex id is a reconstruction rather than a read and is refused too" } } }
+        },
+        {
+          "if": { "required": ["exit_code"], "properties": { "exit_code": { "const": 82 } } },
+          "then": { "properties": { "run_id": { "type": ["string", "null"], "pattern": "^[0-9a-f]{32}$", "description": "NULLABLE, WITH SEMANTICS - and the nullability is forced by the live wrapper, not a relaxation for convenience. When present this is the abandon-target WRAPPER LEDGER ROW, exactly 32 lowercase hex characters on all 1326 rows measured on the live ledger, so a 31-hex or 33-hex string is a reconstruction rather than a read and is refused. IT IS NULL EXACTLY WHEN THE INBOUND IDENTIFIER WAS MALFORMED: the 82 not-found path ECHOES ARBITRARY CALLER INPUT, so there may be no ledger row and no 32-hex id to name at all. Forcing the pattern would make honest emission impossible on exactly those refusals - the host would have to drop the event, invent an id, or reshape it. WHERE THE RAW INPUT GOES: into detail, under its ordinary 512-character bound and with truncated set if the host cut it; and synthesized STAYS FALSE, because that detail IS the wrapper's own printed line - marking it host-generated would falsify the event's provenance for the sake of a shape" } } }
+        },
+        {
+          "if": { "required": ["exit_code"], "properties": { "exit_code": { "const": 78 } } },
+          "then": { "properties": { "run_id": { "type": ["string", "null"], "minLength": 22, "description": "NULLABLE, WITH SEMANTICS, and NOT 32-hex when present: 78 names the REVIEWED build's run, which MAY be a host-appended in-session id rather than a wrapper ledger row (measured 22-46 characters), so a present id carries a length FLOOR of 22 where the wrapper-row codes carry the exact hex pattern. IT IS NULL EXACTLY WHEN THE INBOUND IDENTIFIER WAS MALFORMED: the 78 unknown-id path ECHOES ARBITRARY CALLER INPUT, so a sub-floor or junk identifier has no well-formed id to carry here. Forcing the floor would make honest emission impossible on exactly those refusals. WHERE THE RAW INPUT GOES: into detail, under its ordinary 512-character bound and with truncated set if the host cut it; and synthesized STAYS FALSE, because that detail IS the wrapper's own printed line - marking it host-generated would falsify the event's provenance for the sake of a shape. A PRESENT-BUT-SHORT id is still refused: 21 characters is neither a well-formed id nor an honest null, it is a mangled read" } } }
+        },
+        {
+          "if": { "required": ["exit_code"], "properties": { "exit_code": { "enum": [71, 72, 74, 76, 79, 81, 83] } } },
+          "then": { "properties": { "run_id": { "type": "null", "description": "the wrapper surfaces no id on these paths, and the host never scrapes the ledger to reconstruct one" } } }
+        }
+      ]
+    },
+
+    "wave_plan": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "REFERENTIAL INTEGRITY IS THE HOST'S CHECK (g), NOT THIS DOCUMENT'S. JSON Schema cannot cross-reference one part of an instance from another, and it cannot touch the filesystem, so two facts this shape depends on are unexpressible here and are enforced by the host's deterministic structural validation instead: every waves[].tasks[].repo must EQUAL one of the repos[].repo values declared on this same plan - a task pointing at an undeclared repo has no verify contract and cannot be dispatched - and every repos[].verify_contract must be an ABSOLUTE path that EXISTS on disk, because it is the file whose '## Verify commands' block the host will read and run. A plan violating either is refused as a null-exit_code structural refusal (rule structural-malformed-output) before any wave launches. The host check is the mechanism; the shape below only guarantees the fields are present and well-formed",
+      "required": ["kind", "spec", "repos", "waves", "notes"],
+      "properties": {
+        "kind": { "const": "wave_plan" },
+        "spec": { "type": "string", "maxLength": 64 },
+        "repos": { "type": "array", "minItems": 1, "maxItems": 4, "description": "EXECUTABILITY MINIMUM: a plan naming no repo cannot be executed, so the empty array is refused here rather than downstream", "items": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["repo", "head", "verify_contract"],
+          "properties": {
+            "repo": { "type": "string", "minLength": 1, "maxLength": 512 },
+            "head": { "type": "string", "maxLength": 64, "pattern": "^[0-9a-f]{7,40}$", "description": "the repo's HEAD commit sha - lowercase hex, 7 to 40 characters (an abbreviated sha through a full one). A branch name, a tag, 'HEAD', or the empty string is not a sha and is refused" },
+            "verify_contract": { "type": "string", "minLength": 1, "maxLength": 512, "description": "A PATH - the absolute path to THAT repo's AGENTS.md, whose '## Verify commands' fenced block is the recipe. It is NEVER the block's content: a real block measures 467 characters and would sit one edit away from overflowing this cap, and the host reads the recipe from the file itself" }
+          }
+        } },
+        "waves": { "type": "array", "minItems": 1, "maxItems": 64, "description": "EXECUTABILITY MINIMUM: a wave_plan with no waves plans nothing; emit an adjudication instead", "items": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["wave", "tasks"],
+          "properties": {
+            "wave": { "type": "integer", "minimum": 1, "maximum": 64 },
+            "tasks": { "type": "array", "minItems": 1, "maxItems": 16, "description": "EXECUTABILITY MINIMUM: an empty wave dispatches nothing and would stall the loop waiting on results that can never arrive", "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["task_id", "repo", "base_sha", "worktree", "branch", "authorized", "effort", "channel"],
+              "properties": {
+                "task_id": { "type": "string", "minLength": 1, "maxLength": 64 },
+                "repo": { "type": "string", "minLength": 1, "maxLength": 512 },
+                "base_sha": { "type": "string", "maxLength": 64, "pattern": "^[0-9a-f]{7,40}$", "description": "the commit this task's worktree is cut from - lowercase hex, 7 to 40 characters. Not a branch name and not 'HEAD'" },
+                "worktree": { "type": "string", "minLength": 1, "maxLength": 512 },
+                "branch": { "type": "string", "minLength": 1, "maxLength": 512, "pattern": "^codex/[a-z0-9][a-z0-9-]*$", "description": "the transient per-task branch, which ADR-046 D1 names codex/<spec>-<task_id> with the task id lowercased. THE PREFIX IS THE CONTRACT: teardown per D8 tears down codex/* branches and nothing else, so a branch outside that namespace would either survive teardown or, worse, name a real branch - which is why 'main' is refused here rather than at integration time. THE SEGMENT AFTER codex/ IS PLAIN LOWERCASE KEBAB - lowercase letters, digits and hyphen, opening on a letter or a digit - AND THAT SHAPE IS git-check-ref-format-VALID BY CONSTRUCTION. The dot and the underscore of the earlier pattern are GONE, and the dot is why: it admitted the four ref-name classes git itself refuses - a leading-dot segment (codex/.foo), a trailing dot (codex/foo.), a .lock suffix (codex/foo.lock) and a double dot (codex/a..b) - each of which would have passed this shape check and then failed at the git command, one layer too late. Uppercase is refused with them, so a case-insensitive filesystem cannot collide two branches that differ only in case. No spaces, no further slash, and no leading or trailing slash" },
+                "authorized": { "type": "array", "minItems": 1, "maxItems": 100, "items": { "type": "string", "minLength": 1, "maxLength": 512 }, "description": "EXECUTABILITY MINIMUM: a dispatch with an empty authorized set can write nothing, so it is refused here - which is the same refusal the wrapper makes downstream as exit 74 (refused scope-lock contract). The host's deterministic structural check re-states it, so an empty set never reaches a lease" },
+                "effort": { "type": "string", "enum": ["low", "medium", "high", "xhigh", "max", "ultra"] },
+                "channel": { "type": "string", "enum": ["detached", "background", "foreground"], "description": "v1 is attended-only, so the choice is the attended one: detached (a runner script run as a background task) for a long run, foreground - or background when the host wants its turn free - for a short one" }
+              }
+            } }
+          }
+        } },
+        "notes": { "type": ["string", "null"], "maxLength": 200 }
+      }
+    },
+
+    "adjudication": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "spec", "adjudications", "notes"],
+      "properties": {
+        "kind": { "const": "adjudication" },
+        "spec": { "type": "string", "maxLength": 64 },
+        "adjudications": { "type": "array", "maxItems": 64, "description": "EXACTLY ONE ITEM PER TASK PER TURN; the empty array is legal and means 'no decision this turn', with notes naming the event awaited. One task owing several responses at once does NOT get several items: the additive flag-obligations ride on that single item's obligations array. FOUR RULES HERE ARE THE HOST'S ARITHMETIC, NOT THE SCHEMA'S, because JSON Schema cannot count across items nor cross-reference other documents: (1) at most ONE 'complete' may appear in this array; (2) no 'complete' may appear while any task in the spec still lacks a terminal verdict; no 'complete' may appear while ANY task is PARKED - a parked task is unfinished work, not an excused one, so the attended operator either unparks it (re-plan and redispatch) or removes it from the build by an explicit re-plan, and there is NO carve-out that lets a parked task be completed around; and no 'complete' may appear unless EVERY task's build_state.tasks[].integration.ok is true AND that task's integration.tree_digest MATCHES THE HEX PATTERN - an unverified or failed integration is not a completable build, null on ok means the gate never ran, and a null or 'unverifiable' tree_digest means the verified tree was never pinned, so the task needs request_verify - the host re-runs tree-pin -Digest on the integrated tree and re-runs the verify recipe, which is always available because the digest is computable whenever the tree exists - and if that re-verification fails again the task parks for the attended operator. CONFIRMATION IS NOT ON THIS PATH: a human 'yes' cannot mint a digest, so request_confirmation is not offered against an unpinned tree and never closes this gate; (3) two items naming the SAME task_id in one turn are schema-legal - JSON Schema cannot compare across items - and are REFUSED by this check, because the composition mechanism is obligations, not duplication; (4) referential integrity on a wave_plan (see the wave_plan $def). All are checked by the host's deterministic structural validation and refused as rule structural-malformed-output", "items": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["task_id", "verdict", "next_action", "obligations", "params"],
+          "properties": {
+            "task_id": { "type": ["string", "null"], "maxLength": 64 },
+            "verdict": { "type": "string", "enum": ["pass", "fail", "blocked", "void", "out_of_scope", "released"] },
+            "obligations": { "type": "array", "maxItems": 4, "items": { "type": "string", "maxLength": 200 }, "description": "THE COMPOSITION MECHANISM, and the reason one task never needs two items in a turn. next_action is the ONE directive the host executes; the verdict-independent flag obligations that ride ON TOP of it - the out-of-scope handling a true scopeViolation adds, the mojibake handling a true encoding_violation adds, the park a true critical_violation adds, the re-pin a true tree_moved adds - are named here, one short string each. Empty when the event owed nothing beyond its exit verdict. The cap is 4 because there are exactly four flags, so a fifth entry is a defect and is refused. These are stated obligations, not a second directive: the host executes next_action and the agent carries the rest into its next turn" },
+            "next_action": { "type": "string", "enum": ["integrate", "redispatch", "escalate_effort", "fork", "park", "request_verify", "queue", "adopt", "request_abandon", "request_confirmation", "teardown", "complete"], "description": "v1's build-phase action set, and it is exhaustive. There is no request_review, run_docs_agents or run_family_gate: close-out is not in this protocol, so 'complete' is the single terminal directive that hands the whole close-out chain to the host per apex-code/SKILL.md section Post-build. THERE IS ALSO NO FALLBACK ACTION: v1 has no carrier for the Sonnet fallback, so a Codex quota-out or unavailability is emitted as 'park' with the cause in reason, and the attended operator - who is present by contract - owns the fallback decision on the host/owner path of apex-code/SKILL.md's Fallback section. 'request_abandon' IS IN THIS ENUM BUT IS OPERATOR-DIRECTED ONLY IN V1: the agent emits it when, and only when, the attended operator instructs it to. It appears in no default chain and is never reached by routing, because abandonment waives five gates without running them (scope, critical, digest, pin, encoding - codex-dispatch.ps1:601-603) and that waiver is a human's call, not an inference from an exit code" },
+            "params": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["repo", "worktree", "branch", "authorized", "effort", "channel", "run_id", "reason"],
+              "properties": {
+                "repo": { "type": ["string", "null"], "maxLength": 512 },
+                "worktree": { "type": ["string", "null"], "maxLength": 512 },
+                "branch": { "type": ["string", "null"], "maxLength": 512, "pattern": "^codex/[a-z0-9][a-z0-9-]*$", "description": "the transient per-task branch this directive acts on - a redispatch's target, an integrate's source - and it carries the SAME lowercase-kebab codex/<spec>-<task_id> shape wave_plan pins, for the same two reasons: D8 teardown owns the codex/* namespace and nothing outside it, and the kebab segment is git-check-ref-format-valid by construction (no dot, so the .foo, foo., foo.lock and a..b classes git refuses cannot be minted here). 'main' is refused here structurally, so an integrate can never be pointed at a real branch by a typo. Null on the directives that name no branch; the pattern only constrains the string form" },
+                "authorized": { "type": ["array", "null"], "maxItems": 100, "items": { "type": "string", "maxLength": 512 } },
+                "effort": { "type": ["string", "null"], "enum": ["low", "medium", "high", "xhigh", "max", "ultra", null] },
+                "channel": { "type": ["string", "null"], "enum": ["detached", "background", "foreground", null] },
+                "run_id": { "type": ["string", "null"], "maxLength": 64 },
+                "reason": { "type": ["string", "null"], "maxLength": 200 }
+              }
+            }
+          },
+          "allOf": [
+            {
+              "$comment": "VERDICT -> NEXT_ACTION COHERENCE. The agent file forces these sets; encoded here so an incoherent pairing is refused mechanically rather than noticed by a reader.",
+              "if": { "required": ["verdict"], "properties": { "verdict": { "const": "void" } } },
+              "then": { "properties": { "next_action": { "enum": ["request_verify", "park"], "description": "a void verdict describes a tree that no longer exists, so re-pinning and re-running the gate - request_verify - is the DEFAULT and very nearly the only action. PARK IS ADMITTED HERE FOR EXACTLY ONE COMPOSITION, AND IS REQUIRED ON IT: a void event whose critical_violation is TRUE. A masked critical beats a moved tree, because request_verify would re-open a gate against a tree that has already taken a critical write, whereas parking hands it to the attended operator - strictly the safer of the two, and the critical rule ('any true critical_violation parks, whatever the code') admits no exception for void. THE SCHEMA CANNOT CHECK THE GUARD: an adjudication item carries no dispatch flags, so nothing here can see critical_violation, and park is therefore admitted unconditionally at this layer. THE HOST ENFORCES THE GUARD - a void item whose next_action is park without a true critical_violation on the triggering event is refused as rule structural-malformed-output, exactly like the other arithmetic this document cannot express" } } }
+            },
+            {
+              "if": { "required": ["verdict"], "properties": { "verdict": { "const": "released" } } },
+              "then": { "properties": { "next_action": { "enum": ["redispatch", "park"], "description": "a stuck row was closed and its worktree freed; the task has NOT passed" } } }
+            },
+            {
+              "if": { "required": ["verdict"], "properties": { "verdict": { "const": "pass" } } },
+              "then": { "properties": { "next_action": { "enum": ["integrate", "complete", "queue", "teardown", "park", "redispatch"], "description": "redispatch is here for exactly one case: an adopted-done_with_concerns row, which passes but is NOT in apex-family-gate.ps1's terminal-success set, so close-out cannot certify it without a fresh green build" } } }
+            },
+            {
+              "if": { "required": ["verdict"], "properties": { "verdict": { "const": "blocked" } } },
+              "then": { "properties": { "next_action": { "enum": ["fork", "park", "request_confirmation", "request_verify"], "description": "never redispatch a blocked task unadjusted - nothing was learned" } } }
+            },
+            {
+              "if": { "required": ["verdict"], "properties": { "verdict": { "const": "out_of_scope" } } },
+              "then": { "properties": { "next_action": { "enum": ["redispatch", "park", "fork"] } } }
+            },
+            {
+              "if": { "required": ["verdict"], "properties": { "verdict": { "const": "fail" } } },
+              "then": { "properties": { "next_action": { "enum": ["redispatch", "escalate_effort", "fork", "queue", "adopt", "request_abandon", "request_confirmation", "request_verify", "park"], "description": "a fail may never integrate, complete, or teardown" } } }
+            },
+            {
+              "$comment": "SCOPE COHERENCE, COMPLETED: the action set is partitioned - every action is either task-scoped or spec-scoped, and no action is left unconstrained.",
+              "if": { "required": ["next_action"], "properties": { "next_action": { "enum": ["teardown", "complete"] } } },
+              "then": { "properties": {
+                "task_id": { "type": "null", "description": "SPEC-SCOPED. These are the only two: teardown releases the build's worktrees per ADR-046 D8 as one operation, and complete is the single terminal directive for the whole build. Neither names a task" },
+                "params": { "properties": {
+                  "repo": { "type": "null" },
+                  "worktree": { "type": "null" },
+                  "branch": { "type": "null" },
+                  "authorized": { "type": "null" },
+                  "effort": { "type": "null" },
+                  "channel": { "type": "null" }
+                }, "description": "a spec-scoped directive names no worktree and no dispatch, so all six per-dispatch params are forced null. The keys stay present - the object is required-complete - and only run_id and reason may carry values" }
+              } }
+            },
+            {
+              "if": { "required": ["next_action"], "properties": { "next_action": { "enum": ["integrate", "redispatch", "escalate_effort", "queue", "adopt", "request_abandon", "request_confirmation", "request_verify", "park", "fork"] } } },
+              "then": { "properties": { "task_id": { "type": "string", "minLength": 1, "description": "TASK-SCOPED. Every one of these acts on ONE task's worktree, dispatch or ledger row - including park, which parks a named task and never the build, and request_verify, which re-pins one task's tree" } } }
+            },
+            {
+              "$comment": "PER-ACTION PARAMS. The wrapper refuses empty inputs, so the schema refuses them first.",
+              "if": { "required": ["next_action"], "properties": { "next_action": { "const": "redispatch" } } },
+              "then": { "properties": { "params": {
+                "required": ["repo", "worktree", "branch", "authorized", "effort", "channel"],
+                "properties": {
+                  "repo": { "type": "string", "minLength": 1 },
+                  "worktree": { "type": "string", "minLength": 1 },
+                  "branch": { "type": "string", "minLength": 1 },
+                  "authorized": { "type": "array", "minItems": 1, "description": "a retry with an empty authorized set can write nothing and is a wasted dispatch" },
+                  "effort": { "type": "string", "minLength": 1 },
+                  "channel": { "type": "string", "minLength": 1 }
+                }
+              } } }
+            },
+            {
+              "if": { "required": ["next_action"], "properties": { "next_action": { "const": "integrate" } } },
+              "then": { "properties": { "params": { "required": ["repo", "branch"], "properties": { "repo": { "type": "string", "minLength": 1 }, "branch": { "type": "string", "minLength": 1 } } } } }
+            },
+            {
+              "if": { "required": ["next_action"], "properties": { "next_action": { "enum": ["adopt", "request_abandon"] } } },
+              "then": { "properties": { "params": { "properties": { "run_id": { "type": "string", "pattern": "^[0-9a-f]{32}$", "description": "both act on a WRAPPER ledger row, whose run_id is exactly 32 lowercase hex characters on every one of the 1326 rows measured on the live ledger - so this is the same pattern the wrapper-row refusal codes carry, not a length floor. Taken verbatim from the triggering refusal's run_id, never reconstructed. On an exit 80 that id is the BLOCKING unresolved row and the route for it is ADOPT: adoption recovers the row's work. request_abandon is NOT the other half of that chain in v1 - it is operator-directed only (see next_action), because abandonment waives five gates (scope, critical, digest, pin, encoding) by the wrapper's own warning at codex-dispatch.ps1:601-603" } } } } }
+            },
+            {
+              "if": { "required": ["next_action"], "properties": { "next_action": { "const": "request_abandon" } } },
+              "then": { "properties": { "params": { "properties": { "reason": { "type": "string", "minLength": 1 } } } } }
+            }
+          ]
+        } },
+        "notes": { "type": ["string", "null"], "maxLength": 200 }
+      }
+    },
+
+    "build_state": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["spec_path", "spec_digest", "completed_waves", "pending_waves", "worktrees", "run_ids", "tasks", "phase", "rung_notes", "refusal_history", "nudge_count", "pending_events"],
+      "properties": {
+        "spec_path": { "type": "string", "maxLength": 512 },
+        "spec_digest": { "type": "string", "maxLength": 128 },
+        "completed_waves": { "type": "array", "maxItems": 64, "items": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["wave", "tasks"],
+          "properties": {
+            "wave": { "type": "integer", "minimum": 1, "maximum": 64 },
+            "tasks": { "type": "array", "maxItems": 16, "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["task_id", "verdict", "integration_state"],
+              "properties": {
+                "task_id": { "type": "string", "maxLength": 64 },
+                "verdict": { "type": "string", "enum": ["pass", "fail", "blocked", "void", "out_of_scope", "released"] },
+                "integration_state": { "type": "string", "enum": ["not_integrated", "integrated", "reverted"] }
+              }
+            } }
+          }
+        } },
+        "pending_waves": { "type": "array", "maxItems": 64, "description": "the waves not yet run, each as an OBJECT carrying its own membership - not a bare wave number. A list of integers stored the ORDER but threw away the GROUPING, which meant a fresh instance had to re-derive which tasks belong to which pending wave by re-planning from the spec, and a re-derived grouping is a different grouping. Both facts are stored here instead: the wave number, and the task ids it will dispatch, in array order", "items": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["wave", "task_ids"],
+          "properties": {
+            "wave": { "type": "integer", "minimum": 1, "maximum": 64 },
+            "task_ids": { "type": "array", "minItems": 1, "maxItems": 16, "items": { "type": "string", "maxLength": 64 } }
+          }
+        } },
+        "worktrees": { "type": "array", "maxItems": 64, "items": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["task_id", "repo", "worktree", "base_sha"],
+          "properties": {
+            "task_id": { "type": "string", "maxLength": 64 },
+            "repo": { "type": "string", "maxLength": 512 },
+            "worktree": { "type": "string", "maxLength": 512 },
+            "base_sha": { "type": "string", "maxLength": 64 }
+          }
+        } },
+        "run_ids": { "type": "array", "maxItems": 64, "items": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["task_id", "run_id"],
+          "properties": {
+            "task_id": { "type": "string", "maxLength": 64 },
+            "run_id": { "type": "string", "maxLength": 64 }
+          }
+        } },
+        "tasks": {
+          "type": "array",
+          "maxItems": 64,
+          "description": "the per-task dispatch record a FRESH instance needs to act without re-deriving anything: enough to enforce retry-once-then-escalate (retry_count), to recognise a repeated refusal against an unchanged config, and to integrate deterministically (branch, worktree). THE UNCHANGED-CONFIG COMPARISON IS THREE FIELDS - effort, channel and authorized - and all three are carried here, so a second identical refusal against an identical dispatch is visible rather than inferred. Deliberately BOUNDED: configuration and the last refusal only, never a findings body; an unadjudicated finding lives in pending_events until it is judged",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["task_id", "wave", "repo", "base_sha", "branch", "worktree", "authorized", "effort", "channel", "retry_count", "last_refusal", "integration"],
+            "properties": {
+              "task_id": { "type": "string", "maxLength": 64 },
+              "repo": { "type": "string", "minLength": 1, "maxLength": 512, "description": "the repo root this task belongs to. REQUIRED FOR EXECUTABILITY, not for tidiness: a fresh instance holding a PENDING task must be able to dispatch it without re-planning the spec, and a dispatch needs the repo as much as it needs the worktree - on a two-tree spec the repo is unguessable from the task id alone" },
+              "base_sha": { "type": "string", "maxLength": 64, "pattern": "^[0-9a-f]{7,40}$", "description": "the commit this task's worktree is cut from - lowercase hex, 7 to 40 characters, the same shape wave_plan pins. REQUIRED FOR THE SAME REASON AS repo: with it a fresh instance can re-cut or re-dispatch this task exactly as planned, and without it the base would be re-derived from a HEAD that has since moved, which is a different build. Not a branch name and not 'HEAD'" },
+              "wave": { "type": "integer", "minimum": 1, "maximum": 64, "description": "the wave this task belongs to. Stored, not re-derived: with it and pending_waves' task_ids a fresh instance reconstructs the whole wave partition - which tasks already ran, which are pending, and in what order - without re-planning the spec and risking a different grouping than the one the build actually dispatched" },
+              "branch": { "type": ["string", "null"], "maxLength": 512 },
+              "worktree": { "type": ["string", "null"], "maxLength": 512 },
+              "authorized": { "type": "array", "maxItems": 100, "items": { "type": "string", "maxLength": 512 } },
+              "effort": { "type": "string", "enum": ["low", "medium", "high", "xhigh", "max", "ultra"] },
+              "channel": { "type": "string", "enum": ["detached", "background", "foreground"], "description": "the channel this task was last dispatched on - the third leg of the unchanged-config comparison, and without it a re-queue against an identical config could not be told from a re-queue that had actually changed something" },
+              "retry_count": { "type": "integer", "minimum": 0, "maximum": 64, "description": "dispatches of THIS task after the first; the retry-once-then-escalate rung is read off this, not off the transcript" },
+              "last_refusal": {
+                "type": ["object", "null"],
+                "additionalProperties": false,
+                "required": ["exit_code", "rule", "detail"],
+                "description": "the most recent refusal this task drew, or null if it has drawn none. A second identical exit against an unchanged config is the re-queue trap, and this is what makes it visible",
+                "properties": {
+                  "exit_code": { "type": ["integer", "null"] },
+                  "rule": { "type": ["string", "null"], "maxLength": 64 },
+                  "detail": { "type": ["string", "null"], "maxLength": 512 }
+                }
+              },
+              "integration": {
+                "type": ["object", "null"],
+                "additionalProperties": false,
+                "required": ["exit_code", "ok", "tree_digest", "branch", "recipe_exit_codes"],
+                "description": "the PERSISTED outcome of the integrated-tree verify for this task, or null if that gate has not run for it yet. The gate itself arrives as the prose carrier described in the agent file and is never schema-validated; this is the residue kept in state, and it is what lets a FRESH INSTANCE resume close-in without re-running integration. Null is 'not yet integrated-and-verified', never 'verified and failed' - a failure is ok false. WHAT IS NOT KEPT, STATED HONESTLY: the carrier's TAIL is not persisted. A fresh instance holding a PENDING integration result whose tail is gone has no output body to adjudicate, and the correct move is request_verify to regenerate it - never a decision on the codes alone, and never a re-integration",
+                "properties": {
+                  "exit_code": { "type": "integer", "description": "the recipe's WORST exit code: the first non-zero code in recipe_exit_codes, or 0 when every command in the recipe returned 0" },
+                  "ok": { "type": "boolean", "description": "true only when every code in recipe_exit_codes was 0. Any non-zero code is a failing integration" },
+                  "tree_digest": { "type": ["string", "null"], "maxLength": 64, "pattern": "^([0-9a-f]{12,64}|unverifiable)$", "description": "the tree-pin digest of the INTEGRATION TREE that was actually verified - the staged integrated tree the recipe ran against (references/parallel-codex.md:51-55), not the branch HEAD, which is why a head sha alone could never pin it. It is what a later tree_moved is checked against. THREE VALUES ONLY: lowercase hex of 12 to 64 characters (a real pin), the literal string 'unverifiable', or null. The two non-hex values mean the SAME thing - the digest could not be computed for that run, so a subsequent move is undetectable - and 'unverifiable' is the explicit spelling where null is the merely-absent one; neither is a pin. THIS IS A COMPLETE-GATE FIELD, NOT A NOTE: the host's terminal arithmetic requires a HEX digest on every task before 'complete', so a null or 'unverifiable' one does not merely get mentioned in notes - it withholds completion until the task is re-pinned via request_verify. THE RECOVERY IS RE-VERIFICATION, NOT CONFIRMATION: the digest is computable whenever the tree exists, so the host re-runs tree-pin -Digest on the integrated tree together with the verify recipe; if that fails again the task parks for the attended operator. request_confirmation is NOT on this path, because a human 'yes' cannot mint a digest" },
+                  "branch": { "type": ["string", "null"], "maxLength": 200, "description": "the integration branch the task was integrated onto, carried over from the carrier so a fresh instance can name the tree this outcome describes without re-deriving it" },
+                  "recipe_exit_codes": { "type": "array", "maxItems": 16, "items": { "type": "integer" }, "description": "one code per command in RECIPE ORDER, copied from the carrier. exit_code and ok are derived from it, but the derivation is lossy - it cannot say WHICH command failed - so the array itself is kept and a repair is targeted at the failing step rather than at the whole recipe" }
+                }
+              }
+            }
+          }
+        },
+        "phase": { "type": "string", "enum": ["build", "integrate", "complete"], "description": "where in the BUILD phase this build stands - build (tasks still dispatching or being adjudicated), integrate (integrating and verifying the integrated tree), complete (the terminal adjudication has been emitted and the host is running the close-out chain). There is no review, docs, family_gate or archive rung here: close-out is not in this protocol, so the agent has no state to hold about it" },
+        "rung_notes": { "type": ["string", "null"], "maxLength": 200 },
+        "refusal_history": { "type": "array", "maxItems": 64, "items": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["task_id", "exit_code", "rule"],
+          "properties": {
+            "task_id": { "type": ["string", "null"], "maxLength": 64 },
+            "exit_code": { "type": ["integer", "null"] },
+            "rule": { "type": ["string", "null"], "maxLength": 64, "description": "NULLABLE, because a WRAPPER refusal has no rule name to record. History persists every refusal verbatim - wrapper and host alike - and a wrapper refusal (integer exit_code) carries rule null exactly as it does on the refusal tag itself. A non-null rule here is a host-generated refusal and its exit_code is null; requiring a string would have forced a fabricated rule name onto every wrapper row, or silently dropped those rows from history" }
+          }
+        } },
+        "nudge_count": { "type": "integer", "minimum": 0, "maximum": 1 },
+        "pending_events": {
+          "type": "array",
+          "maxItems": 20,
+          "description": "every unadjudicated event, verbatim, in arrival order. THE CAP IS 20, NOT 16, AND THE FOUR EXTRA SLOTS ARE DELIBERATE: 16 is one wave's maximum width, so a full wave that reports before an adjudication turn comes round exactly fills a 16-cap, leaving no room for what arrives NEXT - a structural-malformed-output refusal against the turn that should have drained it, or a straggler from a re-queued or adopted task. 20 is 16 plus that recovery headroom, so nothing is ever dropped in the one situation where dropping would be worst",
+          "items": { "oneOf": [
+            { "$ref": "#/$defs/dispatch_result" },
+            { "$ref": "#/$defs/refusal" }
+          ] }
+        }
+      }
+    }
+  }
+}

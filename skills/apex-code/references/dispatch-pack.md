@@ -109,4 +109,4 @@ first match, never "the first `done`".
 | non-zero exit, any other signature | process failure | one re-dispatch; if it repeats, treat as verify-fail (effort ladder → fallback) |
 | verify recipe fails on a `done` diff | verify-fail | effort-bump ladder (ADR-030) → `ultra` rung (ADR-034) → Claude fallback (Sonnet 5) per SKILL.md § Fallback |
 
-The host reads the signal and hands it up; **which rung fires — re-dispatch, effort bump, fork, park — is the orchestrator's call**, not the host's (ADR-046 D1). **Interim:** until the build-orchestrator agent contract ships, the host performs that routing itself as **interim executor** — a recorded transition state, not doctrine.
+The host reads the signal and hands it up; **which rung fires — re-dispatch, effort bump, fork, park — is the orchestrator's call**, not the host's (ADR-046 D1). **V1:** on an ATTENDED build the orchestrator is the dispatched `apex-build-orchestrator` agent and the host relays the signal and executes the rung it names; on an UNATTENDED build the host performs that routing itself until v2 (ADR-046 D1).

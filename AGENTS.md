@@ -15,6 +15,7 @@ python hooks/destructive-guard-test.py
 powershell.exe -NoProfile -File skills/apex-code/scripts/baseline-check-test.ps1
 powershell.exe -NoProfile -File skills/apex-code/scripts/spec-validate-test.ps1
 powershell.exe -NoProfile -File skills/apex-code/scripts/dispatch-preflight-test.ps1
+powershell.exe -NoProfile -File skills/apex-code/scripts/dispatch-events-test.ps1
 ```
 
 ## Preflight commands

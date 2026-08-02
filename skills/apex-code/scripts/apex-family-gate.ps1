@@ -92,10 +92,9 @@ try {
         else {
             'dispatch'
         }
-        # Obligation and lease event schemas intentionally omit dispatch identity/state fields.
-        # They are operational artifacts, never build attempts, so exclude them before validating
-        # the stricter dispatch schema.
-        if ($rowKind -cne 'dispatch') {
+        # These bookkeeping schemas intentionally omit dispatch identity/state fields. Enumerate
+        # them so an unknown future row kind still falls through to dispatch-schema validation.
+        if (@('lease', 'lease_close', 'obligation', 'teardown_lease') -ccontains $rowKind) {
             continue
         }
         if (($propertyNames -cnotcontains 'spec') -or ($row.spec -cne $Spec)) {
@@ -153,7 +152,7 @@ $buildRows = @(
         }
 
         ($_.Row.phase -ceq 'build') -and
-            ($rowKind -ceq 'dispatch') -and
+            (@('lease', 'lease_close', 'obligation', 'teardown_lease') -cnotcontains $rowKind) -and
             (@('leasing', 'orphaned', 'abandoned-unadopted') -cnotcontains [string]$_.Row.status)
     }
 )

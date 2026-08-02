@@ -29,7 +29,7 @@ host's job. Everything else dispatches.
 |------|-----|
 | Host -- reason, plan, challenge only | this session (Fable 5). Dispatches everything below; makes no mechanical edits and writes no code. |
 | Spec author | Opus -- a `model: opus` worker drafts specs/ADRs from the host's plan |
-| Build orchestrator | Opus 5 -- a `model: opus` worker runs waves, dispatches coders, routes exit codes (owner amendment 2026-07-29; was Sonnet) |
+| Build orchestrator | Opus 5 -- the dispatched `apex-build-orchestrator` agent owns the BUILD PHASE of an ATTENDED build: task selection, wave sequencing, dispatch parameters, exit-code routing, verify adjudication, integration order (owner amendment 2026-07-29; v1 shipped 2026-08-02). Close-out and unattended/AFK builds stay HOST-executed per `~/.claude/skills/apex-code/SKILL.md`. |
 | Coder | Codex `gpt-5.6-sol` -- dispatched per task as a `codex exec` subprocess (own auth, own quota; spends none of the Anthropic pool). Fallback on quota-out: Sonnet 5. |
 | Checker | cross-family, both directions (ADR-032/034) -- Codex checks the host's plans/specs; Claude reviews Codex's code. An agent never reviews its own output. |
 
@@ -40,8 +40,7 @@ mechanical work (forks always inherit the session model).
 Tightened 2026-07-29 (ADR-046 D1): the host's build-time role is mechanics only -- launching and
 monitoring subprocesses strictly from the orchestrator's wave plan, executing the git operations it
 directs (worktree commit, path-scoped integration, the user-approved per-spec commit), and
-returning status/exit codes. Task selection, sequencing, routing, verification adjudication,
-retries, and close-out are orchestrator-owned.
+returning status/exit codes. Task selection, sequencing, routing, verification adjudication, and retries are orchestrator-owned. V1 (shipped 2026-08-02): on an ATTENDED build those duties run inside the dispatched `apex-build-orchestrator` agent, which emits one directive per turn and executes nothing; CLOSE-OUT -- the review chain, the docs agents, the family gate, spec archival -- is HOST-executed per `~/.claude/skills/apex-code/SKILL.md` and is not in that agent's protocol; and an UNATTENDED/AFK build keeps the current host path until v2.
 
 ## The three files (ADR-037)
 

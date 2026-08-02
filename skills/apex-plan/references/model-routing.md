@@ -60,7 +60,7 @@ host-direct argument that reduces to "it's smoother" is that bias, and is reject
 
 ## Per-task selection — collapses to a default + manual fallback
 
-The Claude fallback (Sonnet 5) fires on exactly three triggers: (1) Codex quota-out or unavailability; (2) a whole-spec `coder_model: sonnet` pin; (3) terminal verify-failure routing by the executor (the orchestrator, or the host as interim executor). Nothing else reaches it.
+The Claude fallback (Sonnet 5) fires on exactly three triggers: (1) Codex quota-out or unavailability; (2) a whole-spec `coder_model: sonnet` pin; (3) terminal verify-failure routing. **No orchestrator executes this path.** The v1 `apex-build-orchestrator` has no fallback action at all: on a quota-out or a terminal verify-failure it emits `park` with what it observed, and the ATTENDED OPERATOR then takes the in-session Sonnet path as a host/owner procedure; on an unattended build the host parks it the same way (ADR-046 D1). Nothing else reaches it.
 
 - **Default: `codex`** for every task — text and image alike (gpt-5.6-sol is sighted, so the old image gate
   is moot). No cost-tier decision; do not route proactively to the Claude fallback.

@@ -7,7 +7,8 @@ $dispatch = Join-Path $PSScriptRoot 'codex-dispatch.ps1'
 $fakeCodex = Join-Path $PSScriptRoot 'dispatch-test-fakecodex.ps1'
 $criticalFiles = Join-Path $PSScriptRoot 'apex-critical-files.ps1'
 $treePin = Join-Path $PSScriptRoot 'tree-pin.ps1'
-foreach ($required in @($dispatch, $fakeCodex, $criticalFiles, $treePin)) {
+$scopeCheck = Join-Path $PSScriptRoot 'codex-scope-check.ps1'
+foreach ($required in @($dispatch, $fakeCodex, $criticalFiles, $treePin, $scopeCheck)) {
     if (-not (Test-Path -LiteralPath $required -PathType Leaf)) {
         throw "Required test dependency not found: $required"
     }
@@ -18,11 +19,14 @@ $repoRoot = Join-Path $testRoot 'repos'
 $stateRoot = Join-Path $testRoot 'state'
 $scratchRoot = Join-Path $stateRoot 'scratch'
 $ledgerPath = Join-Path (Join-Path $stateRoot 'progress') 'codex-run-ledger.jsonl'
+$eventsRoot = Join-Path $stateRoot 'events'
 
 $oldEnvironment = @{}
 foreach ($name in @('APEX_STATE_DIR', 'FAKE_CODEX_REPO', 'FAKE_CODEX_INSCOPE_ONLY',
         'FAKE_CODEX_EXTRA_WRITE', 'FAKE_CODEX_STATUS', 'FAKE_CODEX_NO_REPORT', 'FAKE_CODEX_VERDICT',
-        'FAKE_CODEX_READY_PATH', 'FAKE_CODEX_RELEASE_PATH', 'GIT_CONFIG_GLOBAL')) {
+        'FAKE_CODEX_READY_PATH', 'FAKE_CODEX_RELEASE_PATH', 'GIT_CONFIG_GLOBAL',
+        'APEX_TEST_CREATOR_GIT_MUTEX_PROBE', 'APEX_TEST_CREATOR_GIT_MUTEX_LOG',
+        'APEX_TEST_TEARDOWN_READY_EVENT', 'APEX_TEST_TEARDOWN_RELEASE_EVENT')) {
     $oldEnvironment[$name] = [Environment]::GetEnvironmentVariable($name, 'Process')
 }
 
@@ -207,14 +211,20 @@ function Get-LedgerRowByRunId {
     )
 
     if (-not (Test-Path -LiteralPath $ledgerPath -PathType Leaf)) { return $null }
+    $match = $null
     foreach ($line in [System.IO.File]::ReadAllLines($ledgerPath)) {
         if ([string]::IsNullOrWhiteSpace($line)) { continue }
         $row = $line | ConvertFrom-Json
-        if ([string]$row.run_id -ceq $RunId -and [string]$row.row_kind -ceq $RowKind) {
-            return $row
+        $candidateKind = if ((Test-HasProperty -Object $row -Name 'row_kind') -and
+                -not [string]::IsNullOrWhiteSpace([string]$row.row_kind)) {
+            [string]$row.row_kind
         }
+        else {
+            'dispatch'
+        }
+        if ([string]$row.run_id -ceq $RunId -and $candidateKind -ceq $RowKind) { $match = $row }
     }
-    return $null
+    return $match
 }
 
 function Test-HasProperty {
@@ -353,6 +363,11 @@ function Invoke-DispatchCase {
         Set-OptionalEnvironmentValue -Name $entry.Key -Value ([string]$entry.Value)
     }
 
+    $eventFilesBefore = if (Test-Path -LiteralPath $eventsRoot -PathType Container) {
+        @([System.IO.Directory]::EnumerateFiles($eventsRoot, '*.event.json'))
+    }
+    else { @() }
+
     Write-Host "`n===== CASE: $CaseName =====" -ForegroundColor Cyan
     $captured = @(& $DispatcherPath @parameters *>&1)
     $exitCode = $LASTEXITCODE
@@ -360,26 +375,40 @@ function Invoke-DispatchCase {
     if (-not [string]::IsNullOrWhiteSpace($outputText)) { Write-Host $outputText.TrimEnd() }
     Write-Host ("----- {0}: exit {1} -----" -f $CaseName, $exitCode) -ForegroundColor DarkCyan
 
+    $eventFilesAfter = if (Test-Path -LiteralPath $eventsRoot -PathType Container) {
+        @([System.IO.Directory]::EnumerateFiles($eventsRoot, '*.event.json'))
+    }
+    else { @() }
+
     return [pscustomobject]@{
         ExitCode = $exitCode
         Rows = @(Get-LedgerRowsForSpec -Spec $Spec)
         Output = $outputText
+        EventFiles = @($eventFilesAfter | Where-Object { $eventFilesBefore -cnotcontains $_ })
     }
 }
 
 function Invoke-AdoptCase {
     param(
         [Parameter(Mandatory)][string]$CaseName,
-        [Parameter(Mandatory)][string]$Spec,
-        [Parameter(Mandatory)][string]$Task,
-        [Parameter(Mandatory)][string]$Phase,
-        [Parameter(Mandatory)]$Fixture,
+        [string]$Spec,
+        [string]$Task,
+        [string]$Phase,
+        $Fixture,
         [Parameter(Mandatory)][string]$RunId
     )
 
     Write-Host "`n===== CASE: $CaseName =====" -ForegroundColor Cyan
-    $captured = @(& $dispatch -Adopt -Spec $Spec -Task $Task -Phase $Phase `
-        -Worktree $Fixture.Path -RunId $RunId -ScratchDirectory $scratchRoot *>&1)
+    $parameters = @{
+        Adopt = $true
+        RunId = $RunId
+        ScratchDirectory = $scratchRoot
+    }
+    foreach ($field in @('Spec', 'Task', 'Phase')) {
+        if ($PSBoundParameters.ContainsKey($field)) { $parameters[$field] = Get-Variable $field -ValueOnly }
+    }
+    if ($PSBoundParameters.ContainsKey('Fixture')) { $parameters['Worktree'] = $Fixture.Path }
+    $captured = @(& $dispatch @parameters *>&1)
     $exitCode = $LASTEXITCODE
     $outputText = @($captured | ForEach-Object { $_.ToString() }) -join [Environment]::NewLine
     if (-not [string]::IsNullOrWhiteSpace($outputText)) { Write-Host $outputText.TrimEnd() }
@@ -389,6 +418,36 @@ function Invoke-AdoptCase {
         ExitCode = $exitCode
         Row = Get-LedgerRowByRunId -RunId $RunId
         Output = $outputText
+    }
+}
+
+function Invoke-LegacyAdoptCase {
+    param(
+        [Parameter(Mandatory)][string]$CaseName,
+        [Parameter(Mandatory)][string]$Spec,
+        [Parameter(Mandatory)][string]$Task,
+        [Parameter(Mandatory)]$Fixture
+    )
+
+    $eventFilesBefore = if (Test-Path -LiteralPath $eventsRoot -PathType Container) {
+        @([System.IO.Directory]::EnumerateFiles($eventsRoot, '*.event.json'))
+    }
+    else { @() }
+    Write-Host "`n===== CASE: $CaseName =====" -ForegroundColor Cyan
+    $captured = @(& $dispatch -Adopt -Spec $Spec -Phase 'build' -Task $Task `
+        -Worktree $Fixture.Path -ScratchDirectory $scratchRoot *>&1)
+    $exitCode = $LASTEXITCODE
+    $outputText = @($captured | ForEach-Object { $_.ToString() }) -join [Environment]::NewLine
+    if (-not [string]::IsNullOrWhiteSpace($outputText)) { Write-Host $outputText.TrimEnd() }
+    Write-Host ("----- {0}: exit {1} -----" -f $CaseName, $exitCode) -ForegroundColor DarkCyan
+    $eventFilesAfter = if (Test-Path -LiteralPath $eventsRoot -PathType Container) {
+        @([System.IO.Directory]::EnumerateFiles($eventsRoot, '*.event.json'))
+    }
+    else { @() }
+    return [pscustomobject]@{
+        ExitCode = $exitCode
+        Output = $outputText
+        EventFiles = @($eventFilesAfter | Where-Object { $eventFilesBefore -cnotcontains $_ })
     }
 }
 
@@ -601,6 +660,176 @@ $report = [ordered]@{
 exit 0
 '@
 
+    # RunId-only adoption selects the newest dispatch row in ledger order, even for historical
+    # phases that are not valid inputs to a fresh dispatch. The row supplies every downstream field.
+    $olderRunIdFixture = New-FixtureRepo -Name 'adopt-runid-older'
+    $runIdFixture = New-FixtureRepo -Name 'adopt-runid-current'
+    $anyPhaseRunId = '55555555555555555555555555555551'
+    $olderAnyPhaseRow = New-TestSiblingRow -RunId $anyPhaseRunId `
+        -Worktree $olderRunIdFixture -Status 'orphaned' -Spec 'adopt-runid-older'
+    $olderAnyPhaseRow.started = (Get-Date).ToUniversalTime().AddMinutes(-5).ToString('o')
+    Add-TestLedgerRow -Row $olderAnyPhaseRow
+    $anyPhaseRow = New-TestSiblingRow -RunId $anyPhaseRunId `
+        -Worktree $runIdFixture -Status 'orphaned' -Spec 'adopt-runid-current'
+    $anyPhaseRow.phase = 'verify-fast'
+    $anyPhaseRow.task = 'runid-derived-task'
+    $anyPhaseRow.authorized = @('src/a.py')
+    $anyPhaseRow.scope_armed = $true
+    $anyPhaseRow.base_sha = $runIdFixture.BaseSha
+    $anyPhaseRow.schema = 'completion'
+    $anyPhaseRow.final_path = Join-Path $scratchRoot 'adopt-runid-current.final'
+    $anyPhaseRow.started = (Get-Date).ToUniversalTime().AddMinutes(-1).ToString('o')
+    Write-Utf8NoBom -Path $anyPhaseRow.final_path -Content (@{
+            status = 'done'; changed_files = @(); commands_run = @(); deviations = @()
+            unresolved = @(); blocker = $null
+        } | ConvertTo-Json -Compress -Depth 8)
+    & $scopeCheck -Snapshot -Worktree $runIdFixture.Path -Task $anyPhaseRow.task `
+        -Authorized $anyPhaseRow.authorized -StateDirectory (Join-Path $stateRoot 'gates') | Out-Null
+    if ($LASTEXITCODE -ne 0) { throw "RunId-only adopt fixture scope snapshot failed: $LASTEXITCODE" }
+    Add-TestLedgerRow -Row $anyPhaseRow
+    $anyPhaseAdopt = Invoke-AdoptCase -CaseName 'RunId-only historical phase adoption' `
+        -RunId $anyPhaseRunId
+    $olderAnyPhaseAfter = @(Get-LedgerRowsForSpec -Spec 'adopt-runid-older') |
+        Select-Object -Last 1
+    Assert-Case -Label 'adopt-by-runid-any-phase' `
+        -Condition ($anyPhaseAdopt.ExitCode -eq 0 -and
+            [string]$anyPhaseAdopt.Row.status -ceq 'adopted-done' -and
+            [string]$anyPhaseAdopt.Row.phase -ceq 'verify-fast' -and
+            [int]$anyPhaseAdopt.Row.scope_exit -eq 0 -and
+            -not [string]::IsNullOrWhiteSpace([string]$anyPhaseAdopt.Row.ended) -and
+            [string]$olderAnyPhaseAfter.status -ceq 'orphaned' -and
+            $anyPhaseAdopt.Output.Contains($runIdFixture.Path) -and
+            -not $anyPhaseAdopt.Output.Contains($olderRunIdFixture.Path)) `
+        -Detail ("exit={0}, status='{1}', phase='{2}', scope_exit={3}, ended={4}, older_status='{5}', current_path={6}, older_path={7}" -f
+            $anyPhaseAdopt.ExitCode, $anyPhaseAdopt.Row.status, $anyPhaseAdopt.Row.phase,
+            $anyPhaseAdopt.Row.scope_exit, (-not [string]::IsNullOrWhiteSpace([string]$anyPhaseAdopt.Row.ended)),
+            $olderAnyPhaseAfter.status, $anyPhaseAdopt.Output.Contains($runIdFixture.Path),
+            $anyPhaseAdopt.Output.Contains($olderRunIdFixture.Path))
+
+    $wrongSpecFixture = New-FixtureRepo -Name 'adopt-runid-wrong-spec'
+    $wrongSpecRunId = '55555555555555555555555555555552'
+    Add-TestLedgerRow -Row (New-TestSiblingRow -RunId $wrongSpecRunId `
+        -Worktree $wrongSpecFixture -Status 'orphaned' -Spec 'recorded-adopt-spec')
+    $wrongSpecAdopt = Invoke-AdoptCase -CaseName 'RunId adoption wrong Spec cross-check' `
+        -RunId $wrongSpecRunId -Spec 'caller-wrong-spec'
+    Assert-Case -Label 'adopt-wrong-spec-refused-75' `
+        -Condition ($wrongSpecAdopt.ExitCode -eq 75 -and
+            [string]$wrongSpecAdopt.Row.status -ceq 'orphaned' -and
+            $wrongSpecAdopt.Output.Contains('-Spec') -and
+            $wrongSpecAdopt.Output.Contains('caller-wrong-spec')) `
+        -Detail ("exit={0}, status='{1}', names_spec={2}" -f
+            $wrongSpecAdopt.ExitCode, $wrongSpecAdopt.Row.status,
+            $wrongSpecAdopt.Output.Contains('-Spec'))
+
+    $legacySelectorFixture = New-FixtureRepo -Name 'adopt-legacy-selector-live'
+    $legacySelectorRunId = '55555555555555555555555555555556'
+    Add-TestLedgerRow -Row (New-TestSiblingRow -RunId $legacySelectorRunId `
+        -Worktree $legacySelectorFixture -Status 'running' -Spec 'legacy-selector-live')
+    $legacySelectorAdopt = Invoke-LegacyAdoptCase `
+        -CaseName 'legacy selector live refusal uses matched row id' `
+        -Spec 'legacy-selector-live' -Task 'seeded-sibling' -Fixture $legacySelectorFixture
+    $legacySelectorEvent = if ($legacySelectorAdopt.EventFiles.Count -eq 1) {
+        Get-Content -Raw -LiteralPath $legacySelectorAdopt.EventFiles[0] | ConvertFrom-Json
+    }
+    else { $null }
+    Assert-Case -Label 'legacy-adopt-refusal-runid-comes-from-matched-row' `
+        -Condition ($legacySelectorAdopt.ExitCode -eq 75 -and
+            $null -ne $legacySelectorEvent -and
+            [string]$legacySelectorEvent.run_id -ceq $legacySelectorRunId -and
+            [string]$legacySelectorEvent.detail -match [regex]::Escape("run_id '$legacySelectorRunId'")) `
+        -Detail ("exit={0}, files={1}, event_run_id='{2}', detail='{3}'" -f
+            $legacySelectorAdopt.ExitCode, $legacySelectorAdopt.EventFiles.Count,
+            $(if ($null -ne $legacySelectorEvent) { $legacySelectorEvent.run_id } else { '<none>' }),
+            $(if ($null -ne $legacySelectorEvent) { $legacySelectorEvent.detail } else { '<none>' }))
+    Set-TestLedgerRowStatus -RunId $legacySelectorRunId -Status 'done'
+
+    $invalidLegacyFixture = New-FixtureRepo -Name 'adopt-legacy-selector-invalid-id'
+    $invalidLegacyRunId = 'legacy-nonhex-ledger-id'
+    Add-TestLedgerRow -Row (New-TestSiblingRow -RunId $invalidLegacyRunId `
+        -Worktree $invalidLegacyFixture -Status 'running' -Spec 'legacy-selector-invalid-id')
+    $invalidLegacyAdopt = Invoke-LegacyAdoptCase `
+        -CaseName 'legacy selector invalid ledger id takes event failure path' `
+        -Spec 'legacy-selector-invalid-id' -Task 'seeded-sibling' -Fixture $invalidLegacyFixture
+    Assert-Case -Label 'legacy-adopt-invalid-runid-event-best-effort-failure' `
+        -Condition ($invalidLegacyAdopt.ExitCode -eq 75 -and
+            $invalidLegacyAdopt.EventFiles.Count -eq 0 -and
+            $invalidLegacyAdopt.Output.Contains(
+                '[event] FAILED: Required refusal run_id for exit 75 is not a 32-hex ledger id.') -and
+            -not $invalidLegacyAdopt.Output.Contains("run_id '' remains live")) `
+        -Detail ("exit={0}, files={1}, failed={2}, empty_id_detail={3}" -f
+            $invalidLegacyAdopt.ExitCode, $invalidLegacyAdopt.EventFiles.Count,
+            $invalidLegacyAdopt.Output.Contains('[event] FAILED: Required refusal run_id'),
+            $invalidLegacyAdopt.Output.Contains("run_id '' remains live"))
+    Set-TestLedgerRowStatus -RunId $invalidLegacyRunId -Status 'done'
+
+    $leaseShadowFixture = New-FixtureRepo -Name 'adopt-runid-lease-shadow'
+    $leaseShadowRunId = '55555555555555555555555555555553'
+    $leaseShadowDispatch = New-TestSiblingRow -RunId $leaseShadowRunId `
+        -Worktree $leaseShadowFixture -Status 'orphaned' -Spec 'lease-shadow-dispatch'
+    $leaseShadowDispatch.scope_task = $leaseShadowDispatch.task
+    $leaseShadowDispatch.authorized = @('src/a.py')
+    $leaseShadowDispatch.base_sha = $leaseShadowFixture.BaseSha
+    $leaseShadowDispatch.schema = 'completion'
+    Add-TestLedgerRow -Row $leaseShadowDispatch
+    $leaseShadowLease = $leaseShadowDispatch.Clone()
+    $leaseShadowLease.row_kind = 'lease'
+    $leaseShadowLease.status = 'orphaned'
+    $leaseShadowLease.started = (Get-Date).ToUniversalTime().ToString('o')
+    Add-TestLedgerRow -Row $leaseShadowLease
+    $leaseShadowAdopt = Invoke-AdoptCase -CaseName 'dispatch wins over newer orphaned lease' `
+        -RunId $leaseShadowRunId
+    Assert-Case -Label 'adopt-selects-dispatch-over-orphaned-lease' `
+        -Condition ($leaseShadowAdopt.ExitCode -eq 67 -and
+            [string]$leaseShadowAdopt.Row.row_kind -ceq 'dispatch' -and
+            [string]$leaseShadowAdopt.Row.status -ceq 'adopted-blocked' -and
+            $leaseShadowAdopt.Output.Contains($leaseShadowFixture.Path)) `
+        -Detail ("exit={0}, kind='{1}', status='{2}', path={3}" -f
+            $leaseShadowAdopt.ExitCode, $leaseShadowAdopt.Row.row_kind,
+            $leaseShadowAdopt.Row.status, $leaseShadowAdopt.Output.Contains($leaseShadowFixture.Path))
+
+    $leaseOnlyFixture = New-FixtureRepo -Name 'adopt-runid-lease-only'
+    $leaseOnlyRunId = '55555555555555555555555555555554'
+    $leaseOnlyRow = New-TestSiblingRow -RunId $leaseOnlyRunId `
+        -Worktree $leaseOnlyFixture -Status 'orphaned' -Spec 'lease-only-adopt'
+    $leaseOnlyRow.row_kind = 'lease'
+    $leaseOnlyRow.status = 'leasing'
+    Add-TestLedgerRow -Row $leaseOnlyRow
+    Add-TestLedgerRow -Row @{
+        run_id = $leaseOnlyRunId; row_kind = 'lease_close'; status = 'refused'
+        refusal_exit = 76; ended = (Get-Date).ToUniversalTime().ToString('o')
+        log_path = $null; effort = 'medium'; attended = $null
+    }
+    $leaseOnlyAdopt = Invoke-AdoptCase -CaseName 'lease-only RunId refusal' -RunId $leaseOnlyRunId
+    $nothingToAdoptWording = "run_id '$leaseOnlyRunId' has nothing to adopt: a lease was reserved but no dispatch row was ever written."
+    Assert-Case -Label 'adopt-refused-lease-only-id' `
+        -Condition ($leaseOnlyAdopt.ExitCode -eq 75 -and
+            $leaseOnlyAdopt.Output.Contains($nothingToAdoptWording)) `
+        -Detail ("exit={0}, distinct_wording={1}" -f $leaseOnlyAdopt.ExitCode,
+            $leaseOnlyAdopt.Output.Contains($nothingToAdoptWording))
+
+    $legacyNoKindFixture = New-FixtureRepo -Name 'adopt-runid-legacy-no-kind'
+    $legacyNoKindRunId = '55555555555555555555555555555555'
+    $legacyNoKindRow = New-TestSiblingRow -RunId $legacyNoKindRunId `
+        -Worktree $legacyNoKindFixture -Status 'orphaned' -Spec 'legacy-no-kind-adopt'
+    $legacyNoKindRow.scope_task = $legacyNoKindRow.task
+    $legacyNoKindRow.authorized = @('src/a.py')
+    $legacyNoKindRow.base_sha = $legacyNoKindFixture.BaseSha
+    $legacyNoKindRow.schema = 'completion'
+    [void]$legacyNoKindRow.Remove('row_kind')
+    Add-TestLedgerRow -Row $legacyNoKindRow
+    $legacyNoKindAdopt = Invoke-AdoptCase -CaseName 'legacy row without row_kind' `
+        -RunId $legacyNoKindRunId
+    Assert-Case -Label 'adopt-legacy-row-no-rowkind' `
+        -Condition ($legacyNoKindAdopt.ExitCode -eq 67 -and
+            -not (Test-HasProperty -Object $legacyNoKindAdopt.Row -Name 'row_kind') -and
+            [string]$legacyNoKindAdopt.Row.status -ceq 'adopted-blocked' -and
+            $legacyNoKindAdopt.Output.Contains($legacyNoKindFixture.Path)) `
+        -Detail ("exit={0}, row_kind_absent={1}, status='{2}', path={3}" -f
+            $legacyNoKindAdopt.ExitCode,
+            (-not (Test-HasProperty -Object $legacyNoKindAdopt.Row -Name 'row_kind')),
+            $legacyNoKindAdopt.Row.status,
+            $legacyNoKindAdopt.Output.Contains($legacyNoKindFixture.Path))
+
     # Hold a real dispatch after its lease has become a running row so the persisted in-flight shape
     # is inspected independently of the terminal rewrite.
     $telemetryWaitFake = Join-Path $testRoot 'fake-telemetry-wait.ps1'
@@ -719,6 +948,9 @@ exit 0
             $adoptResult.Output.Contains($wrapperLogPath))
 
     $legacyFixture = New-FixtureRepo -Name 'telemetry-adopt-legacy'
+    $boundedAdoptLines = @(1..60 | ForEach-Object { 'adopt bounded line {0:D3}' -f $_ })
+    Write-Utf8NoBom -Path (Join-Path $legacyFixture.Path 'src\a.py') `
+        -Content ("orig`n{0}`n" -f ($boundedAdoptLines -join "`n"))
     $legacyRunId = 'task6-legacy-no-telemetry'
     Add-TestLedgerRow -Row @{
         run_id = $legacyRunId; row_kind = 'dispatch'; status = 'orphaned'
@@ -739,6 +971,283 @@ exit 0
         -Detail ("exit={0}, fields_absent={1}, missing_log_reported={2}" -f
             $legacyAdopt.ExitCode, $legacyStillAbsent,
             $legacyAdopt.Output.Contains('no recorded log_path'))
+
+    $legacyAdoptOutputLines = @($legacyAdopt.Output -split '\r?\n')
+    $boundedDiffStart = -1
+    $boundedTruncation = -1
+    for ($i = 0; $i -lt $legacyAdoptOutputLines.Count; $i++) {
+        if ($boundedDiffStart -lt 0 -and $legacyAdoptOutputLines[$i].StartsWith('diff --git ')) {
+            $boundedDiffStart = $i
+        }
+        if ($legacyAdoptOutputLines[$i] -ceq '[adopt] output truncated') {
+            $boundedTruncation = $i
+            break
+        }
+    }
+    Assert-Case -Label 'adopt-stdout-bounded' `
+        -Condition ($boundedDiffStart -ge 0 -and $boundedTruncation -ge 0 -and
+            ($boundedTruncation - $boundedDiffStart) -eq 50 -and
+            -not $legacyAdopt.Output.Contains('adopt bounded line 060')) `
+        -Detail ("diff_start={0}, truncation={1}, emitted_tail_lines={2}, final_input_line_present={3}" -f
+            $boundedDiffStart, $boundedTruncation, ($boundedTruncation - $boundedDiffStart),
+            $legacyAdopt.Output.Contains('adopt bounded line 060'))
+
+    # Instrument a disposable wrapper copy so each creator Git call asks another process whether the
+    # named ledger mutex is available. A held mutex makes the probe fail before Git can run.
+    $mutexProbe = Join-Path $testRoot 'teardown-mutex-probe.ps1'
+    Write-Utf8NoBom -Path $mutexProbe -Content @'
+param([Parameter(Mandatory)][string]$LogPath, [Parameter(Mandatory)][string]$GitArguments)
+$mutex = [System.Threading.Mutex]::new($false, 'ApexCodexRunLedger')
+$acquired = $false
+try {
+    try { $acquired = $mutex.WaitOne(0) }
+    catch [System.Threading.AbandonedMutexException] { $acquired = $true }
+    $state = if ($acquired) { 'free' } else { 'held' }
+    [System.IO.File]::AppendAllText($LogPath, "$state|$GitArguments`n",
+        [System.Text.UTF8Encoding]::new($false))
+}
+finally {
+    if ($acquired) { $mutex.ReleaseMutex() }
+    $mutex.Dispose()
+}
+if (-not $acquired) { exit 97 }
+exit 0
+'@
+    $mutexProbeDispatcher = New-ScopeStubDispatcher `
+        -Name 'stub-teardown-mutex-probe' -Mode 'missing-written-paths'
+    $mutexProbeSource = [System.IO.File]::ReadAllText($mutexProbeDispatcher)
+    $creatorGitParameterLine = '    param([Parameter(Mandatory)][string[]]$Arguments)'
+    $creatorGitProbeBlock = @'
+
+    if (-not [string]::IsNullOrWhiteSpace($env:APEX_TEST_CREATOR_GIT_MUTEX_PROBE)) {
+        & powershell.exe -NoProfile -ExecutionPolicy Bypass `
+            -File $env:APEX_TEST_CREATOR_GIT_MUTEX_PROBE `
+            -LogPath $env:APEX_TEST_CREATOR_GIT_MUTEX_LOG `
+            -GitArguments ($Arguments -join ' ')
+        if ($LASTEXITCODE -ne 0) {
+            throw "creator Git was invoked while the ledger mutex was held: $($Arguments -join ' ')"
+        }
+    }
+'@
+    $mutexProbeFixtureSource = $mutexProbeSource.Replace(
+        $creatorGitParameterLine,
+        $creatorGitParameterLine + $creatorGitProbeBlock)
+    if ($mutexProbeFixtureSource -ceq $mutexProbeSource) {
+        throw 'Could not construct the teardown mutex-probe fixture.'
+    }
+    Write-Utf8NoBom -Path $mutexProbeDispatcher -Content $mutexProbeFixtureSource
+    $mutexProbeLog = Join-Path $testRoot 'teardown-mutex-probe.log'
+    $env:APEX_TEST_CREATOR_GIT_MUTEX_PROBE = $mutexProbe
+    $env:APEX_TEST_CREATOR_GIT_MUTEX_LOG = $mutexProbeLog
+    $main = New-FixtureRepo -Name 'teardown-mutex-main'
+    $mutexWorktree = New-FixtureWorktree -Fixture $main -Name 'teardown-mutex'
+    $mutexResult = Invoke-DispatchCase -CaseName 'creator Git mutex probe' `
+        -Spec 'task4-teardown-mutex' -Fixture $mutexWorktree -FakePath $noWriteFake `
+        -DispatcherPath $mutexProbeDispatcher -ExtraParameters @{ OwnedWorktree = $true }
+    Set-OptionalEnvironmentValue -Name 'APEX_TEST_CREATOR_GIT_MUTEX_PROBE' -Value $null
+    Set-OptionalEnvironmentValue -Name 'APEX_TEST_CREATOR_GIT_MUTEX_LOG' -Value $null
+    $mutexProbeLines = if (Test-Path -LiteralPath $mutexProbeLog -PathType Leaf) {
+        [System.IO.File]::ReadAllLines($mutexProbeLog)
+    }
+    else {
+        [string[]]@()
+    }
+    $heldCreatorGitCalls = @($mutexProbeLines | Where-Object { $_ -clike 'held|*' })
+    $statusProbeCalls = @($mutexProbeLines | Where-Object { $_ -clike '* status --porcelain*' })
+    $removeProbeCalls = @($mutexProbeLines | Where-Object { $_ -clike '* worktree remove *' })
+    Assert-Case -Label 'teardown-mutex-released-around-git' `
+        -Condition ($mutexResult.ExitCode -eq 77 -and
+            -not (Test-Path -LiteralPath $mutexWorktree.Path) -and
+            $mutexProbeLines.Count -ge 5 -and $heldCreatorGitCalls.Count -eq 0 -and
+            $statusProbeCalls.Count -eq 1 -and $removeProbeCalls.Count -eq 1) `
+        -Detail ("exit={0}, calls={1}, held={2}, status={3}, remove={4}, exists={5}" -f
+            $mutexResult.ExitCode, $mutexProbeLines.Count, $heldCreatorGitCalls.Count,
+            $statusProbeCalls.Count, $removeProbeCalls.Count,
+            (Test-Path -LiteralPath $mutexWorktree.Path))
+
+    # Pause a disposable wrapper after it has reserved teardown but before worktree removal. This
+    # exposes the unlocked window without polling or adding a production synchronization primitive.
+    $reservationDispatcher = New-ScopeStubDispatcher `
+        -Name 'stub-teardown-reservation-pause' -Mode 'missing-written-paths'
+    $reservationSource = [System.IO.File]::ReadAllText($reservationDispatcher)
+    $removeInvocationLine = '        $removeResult = Invoke-CreatorGit -Arguments @('
+    $reservationPauseBlock = @'
+        if (-not [string]::IsNullOrWhiteSpace($env:APEX_TEST_TEARDOWN_READY_EVENT)) {
+            $readyEvent = [System.Threading.EventWaitHandle]::OpenExisting(
+                $env:APEX_TEST_TEARDOWN_READY_EVENT)
+            $releaseEvent = [System.Threading.EventWaitHandle]::OpenExisting(
+                $env:APEX_TEST_TEARDOWN_RELEASE_EVENT)
+            try {
+                [void]$readyEvent.Set()
+                if (-not $releaseEvent.WaitOne([TimeSpan]::FromSeconds(30))) {
+                    throw 'Timed out waiting to release the teardown reservation fixture.'
+                }
+            }
+            finally {
+                $readyEvent.Dispose()
+                $releaseEvent.Dispose()
+            }
+        }
+
+'@
+    $reservationFixtureSource = $reservationSource.Replace(
+        $removeInvocationLine,
+        $reservationPauseBlock + $removeInvocationLine)
+    if ($reservationFixtureSource -ceq $reservationSource) {
+        throw 'Could not construct the teardown reservation fixture.'
+    }
+    Write-Utf8NoBom -Path $reservationDispatcher -Content $reservationFixtureSource
+
+    $eventSuffix = [guid]::NewGuid().ToString('N')
+    $readyEventName = "ApexTeardownReady-$eventSuffix"
+    $releaseEventName = "ApexTeardownRelease-$eventSuffix"
+    $readyEvent = [System.Threading.EventWaitHandle]::new(
+        $false, [System.Threading.EventResetMode]::ManualReset, $readyEventName)
+    $releaseEvent = [System.Threading.EventWaitHandle]::new(
+        $false, [System.Threading.EventResetMode]::ManualReset, $releaseEventName)
+    $main = New-FixtureRepo -Name 'teardown-reservation-main'
+    $reservedWorktree = New-FixtureWorktree -Fixture $main -Name 'teardown-reservation'
+    $capacityFixture = New-FixtureRepo -Name 'teardown-reservation-capacity'
+    $reservationOwnerSpec = 'task4-teardown-reservation-owner'
+    $reservationJob = $null
+    try {
+        $reservationJob = Start-Job -ScriptBlock {
+            param($dispatcher, $fake, $critical, $pin, $state, $scratch, $repo, $base,
+                $specName, $readyName, $releaseName)
+            $env:APEX_STATE_DIR = $state
+            $env:FAKE_CODEX_REPO = $repo
+            $env:APEX_TEST_TEARDOWN_READY_EVENT = $readyName
+            $env:APEX_TEST_TEARDOWN_RELEASE_EVENT = $releaseName
+            $captured = @(& $dispatcher -Spec $specName -Task 'dispatch-test' -Phase 'build' `
+                -Worktree $repo -BaseSha $base -Prompt 'teardown reservation owner' `
+                -Authorized @('src/a.py') -ScratchDirectory $scratch `
+                -CodexExecutable 'powershell.exe' `
+                -CodexExecutableArgumentPrefix @('-NoProfile', '-ExecutionPolicy', 'Bypass',
+                    '-File', $fake) `
+                -CriticalFilesScript $critical -TreePinScript $pin -SkipBaselineCheck `
+                -MachineCeiling 4 -OwnedWorktree *>&1)
+            [pscustomobject]@{
+                ExitCode = $LASTEXITCODE
+                Output = (@($captured | ForEach-Object { $_.ToString() }) -join
+                    [Environment]::NewLine)
+            }
+        } -ArgumentList $reservationDispatcher, $noWriteFake, $criticalFiles, $treePin,
+            $stateRoot, $scratchRoot, $reservedWorktree.Path, $reservedWorktree.BaseSha,
+            $reservationOwnerSpec, $readyEventName, $releaseEventName
+
+        $reservationReady = $readyEvent.WaitOne([TimeSpan]::FromSeconds(30))
+        $liveReservation = @(Get-LedgerRowsForSpec -Spec $reservationOwnerSpec |
+            Where-Object { [string]$_.row_kind -ceq 'teardown_lease' -and
+                [string]$_.status -ceq 'reserved' }) | Select-Object -Last 1
+
+        $capacityResult = Invoke-DispatchCase -CaseName 'teardown reservation capacity occupant' `
+            -Spec 'task4-teardown-reservation-capacity' -Fixture $capacityFixture `
+            -FakePath $noWriteFake -ExtraParameters @{ MachineCeiling = 1 }
+        $blockedResult = Invoke-DispatchCase -CaseName 'live teardown reservation sibling refusal' `
+            -Spec 'task4-teardown-reservation-blocked' -Fixture $reservedWorktree `
+            -FakePath $noWriteFake -ExtraParameters @{
+                MachineCeiling = 4
+                AllowSharedWorktree = $true
+                AllowSharedWorktreeReason = 'reservation must remain exclusive'
+            }
+
+        # Remove the fixture reservation under the production mutex protocol. The paused owner then
+        # proves its final close is tolerant of an already-removed reservation.
+        $testMutex = [System.Threading.Mutex]::new($false, 'ApexCodexRunLedger')
+        $testMutexAcquired = $false
+        try {
+            try { $testMutexAcquired = $testMutex.WaitOne([TimeSpan]::FromSeconds(30)) }
+            catch [System.Threading.AbandonedMutexException] { $testMutexAcquired = $true }
+            if (-not $testMutexAcquired) { throw 'Timed out removing the test teardown reservation.' }
+            $remainingLedgerLines = @([System.IO.File]::ReadAllLines($ledgerPath) |
+                Where-Object {
+                    try { $candidate = $_ | ConvertFrom-Json } catch { return $true }
+                    return [string]$candidate.row_kind -cne 'teardown_lease' -or
+                        [string]$candidate.run_id -cne [string]$liveReservation.run_id
+                })
+            [System.IO.File]::WriteAllLines($ledgerPath, [string[]]$remainingLedgerLines,
+                [System.Text.UTF8Encoding]::new($false))
+        }
+        finally {
+            if ($testMutexAcquired) { $testMutex.ReleaseMutex() }
+            $testMutex.Dispose()
+        }
+
+        $proceededResult = Invoke-DispatchCase `
+            -CaseName 'removed teardown reservation permits dispatch' `
+            -Spec 'task4-teardown-reservation-proceeded' -Fixture $reservedWorktree `
+            -FakePath $noWriteFake -ExtraParameters @{ MachineCeiling = 4 }
+
+        Assert-Case -Label 'teardown-reservation-counts-capacity' `
+            -Condition ($reservationReady -and $null -ne $liveReservation -and
+                $capacityResult.ExitCode -eq 79) `
+            -Detail ("ready={0}, reservation={1}, capacity_exit={2}" -f
+                $reservationReady, ($null -ne $liveReservation), $capacityResult.ExitCode)
+        Assert-Case -Label 'teardown-reservation-blocks-sibling' `
+            -Condition ($reservationReady -and $null -ne $liveReservation -and
+                [string]$liveReservation.worktree -ceq $reservedWorktree.Path -and
+                -not [string]::IsNullOrWhiteSpace([string]$liveReservation.worktree_key) -and
+                [int]$liveReservation.pid -gt 0 -and
+                -not [string]::IsNullOrWhiteSpace([string]$liveReservation.started) -and
+                $blockedResult.ExitCode -eq 80 -and $proceededResult.ExitCode -eq 0) `
+            -Detail ("ready={0}, row={1}, blocked_exit={2}, proceeded_exit={3}" -f
+                $reservationReady, ($null -ne $liveReservation), $blockedResult.ExitCode,
+                $proceededResult.ExitCode)
+    }
+    finally {
+        [void]$releaseEvent.Set()
+        if ($reservationJob) {
+            $finishedReservationJob = Wait-Job -Job $reservationJob -Timeout 40
+            if (-not $finishedReservationJob) { Stop-Job -Job $reservationJob }
+            $reservationJobResult = @(Receive-Job -Job $reservationJob) | Select-Object -Last 1
+            Remove-Job -Job $reservationJob -Force
+        }
+        $readyEvent.Dispose()
+        $releaseEvent.Dispose()
+    }
+
+    # A teardown reservation is bookkeeping, not adoptable work. If its recorded owner is dead,
+    # the next orphan scan closes it and names its real row kind without suggesting -Adopt.
+    $staleTeardownFixture = New-FixtureRepo -Name 'stale-teardown-lease'
+    $staleTeardownSpec = 'task4-stale-teardown-lease'
+    $staleTeardownRunId = '88888888888888888888888888888888'
+    $staleTeardownKey = ([string](@(Invoke-FixtureGit -Repo $staleTeardownFixture.Path `
+                -GitArguments @('rev-parse', '--show-toplevel'))[0]) -replace '\\', '/'
+        ).TrimEnd('/').ToLowerInvariant()
+    Add-TestLedgerRow -Row @{
+        run_id = $staleTeardownRunId
+        row_kind = 'teardown_lease'
+        status = 'reserved'
+        pid = 2147483647
+        pid_start = '2000-01-01T00:00:00.0000000Z'
+        worktree = $staleTeardownFixture.Path
+        worktree_key = $staleTeardownKey
+        spec = $staleTeardownSpec
+        task = 'stale-teardown-owner'
+        phase = 'build'
+        sandbox = 'workspace-write'
+        effort = 'medium'
+        started = '2000-01-01T00:00:00.0000000Z'
+    }
+    $staleTeardownResult = Invoke-DispatchCase -CaseName 'dead teardown lease closes on orphan scan' `
+        -Spec $staleTeardownSpec -Fixture $staleTeardownFixture -FakePath $noWriteFake `
+        -ExtraParameters @{ MachineCeiling = 4 }
+    $closedTeardownLease = @($staleTeardownResult.Rows |
+        Where-Object { [string]$_.row_kind -ceq 'teardown_lease' -and
+            [string]$_.run_id -ceq $staleTeardownRunId }) | Select-Object -Last 1
+    Assert-Case -Label 'stale-teardown-lease-closes-with-row-kind-announcement' `
+        -Condition ($staleTeardownResult.ExitCode -eq 0 -and
+            [string]$closedTeardownLease.status -ceq 'closed' -and
+            -not [string]::IsNullOrWhiteSpace([string]$closedTeardownLease.ended) -and
+            $staleTeardownResult.Output.Contains(
+                "[dispatch] ORPHANED TEARDOWN LEASE $staleTeardownRunId") -and
+            -not $staleTeardownResult.Output.Contains("-Adopt -RunId $staleTeardownRunId")) `
+        -Detail ("exit={0}, status={1}, ended={2}, kind_line={3}, adopt_hint={4}" -f
+            $staleTeardownResult.ExitCode, $closedTeardownLease.status,
+            $closedTeardownLease.ended,
+            $staleTeardownResult.Output.Contains(
+                "[dispatch] ORPHANED TEARDOWN LEASE $staleTeardownRunId"),
+            $staleTeardownResult.Output.Contains("-Adopt -RunId $staleTeardownRunId"))
 
     $main = New-FixtureRepo -Name 'owned-success-main'
     $ownedSuccess = New-FixtureWorktree -Fixture $main -Name 'owned-success'
@@ -957,6 +1466,110 @@ _(coding writes here)_
             $exit81Lease.cleanup_obligation, $exit81Lease.branch_teardown_obligation,
             $result.Output.Contains($exit81RuntimePath))
 
+    $exit81WriteHost = @(Select-String -LiteralPath $dispatch -SimpleMatch `
+        'Write-Host $exit81Detail')
+    $exit81WriteOutput = @(Select-String -LiteralPath $dispatch -SimpleMatch `
+        'Write-Output ("[dispatch] REFUSED (exit 81): declared_runtime_paths')
+    Assert-Case -Label 'exit81-writehost-stream' `
+        -Condition ($result.ExitCode -eq 81 -and $exit81WriteHost.Count -eq 1 -and
+            $exit81WriteOutput.Count -eq 0) `
+        -Detail ("exit={0}, writehost_matches={1}, writeoutput_matches={2}" -f
+            $result.ExitCode, $exit81WriteHost.Count, $exit81WriteOutput.Count)
+
+    $exit81PrintedLine = @($result.Output -split '\r?\n' |
+        Where-Object { $_.StartsWith('[dispatch] REFUSED (exit 81):') }) | Select-Object -First 1
+    $exit81Event = if ($result.EventFiles.Count -eq 1) {
+        Get-Content -Raw -LiteralPath $result.EventFiles[0] | ConvertFrom-Json
+    }
+    else { $null }
+    $exit81ExpectedDetail = if ($null -ne $exit81PrintedLine -and $exit81PrintedLine.Length -gt 512) {
+        $exit81PrintedLine.Substring(0, 512)
+    }
+    else { [string]$exit81PrintedLine }
+    Assert-Case -Label 'exit81-event-detail-is-printed-prefix-byte-exact' `
+        -Condition ($null -ne $exit81Event -and
+            [string]$exit81Event.detail -ceq $exit81ExpectedDetail -and
+            -not [bool]$exit81Event.truncated) `
+        -Detail ("files={0}, detail_equal={1}, truncated={2}" -f
+            $result.EventFiles.Count,
+            ($null -ne $exit81Event -and [string]$exit81Event.detail -ceq $exit81ExpectedDetail),
+            $(if ($null -ne $exit81Event) { [bool]$exit81Event.truncated } else { '<no event>' }))
+
+    # Companion over-cap refusal: the durable detail is exactly the first 512 characters of the
+    # printed line, and its truncation bit records that the console line continued beyond it.
+    $exit81LongSpec = 'task5-owned-exit81-over-cap'
+    $exit81LongRuntimePath = 'runtime/' + (('segment/' * 50) -join '') + 'invisible-tool.bin'
+    Write-Utf8NoBom -Path (Join-Path $main.Path "docs\changes\$exit81LongSpec.md") -Content @"
+---
+spec: $exit81LongSpec
+status: draft
+autonomy_level: L2
+declared_runtime_paths:
+  - $exit81LongRuntimePath
+---
+# Spec: fixture placeholder
+## Intent
+- Intent: exercise the bounded production exit-81 event detail.
+## Assumptions
+- none -> impact: Low
+## Prerequisites
+- none
+## Files to Change
+| File | Operation | Notes |
+|------|-----------|-------|
+| src/a.py | modify | placeholder |
+## Tasks
+- [ ] **Task 1: placeholder** - files: `src/a.py` - anchor: `orig` - replace it. - done when: changed.
+## Wave plan
+Wave 1: [Task 1]
+## Permissions
+### File Operations
+| Action | Paths |
+|--------|-------|
+| Modify | src/a.py |
+### Commands
+(none)
+### Git Operations
+(none)
+### Environment Access
+(none)
+### Network
+(none)
+## Specialist Context
+(none)
+## Documentation
+(none)
+## Acceptance Criteria
+- [ ] **Task 1** -> verify: the placeholder change is present.
+## Progress
+_(coding writes here)_
+"@
+    Invoke-FixtureGit -Repo $main.Path -GitArguments @('add', '-A') | Out-Null
+    Invoke-FixtureGit -Repo $main.Path -GitArguments @('commit', '-q', '-m', 'add exit-81 over-cap spec') | Out-Null
+    $main.BaseSha = ([string]@(Invoke-FixtureGit -Repo $main.Path `
+                -GitArguments @('rev-parse', 'HEAD'))[0]).Trim()
+    $ownedExit81Long = New-FixtureWorktree -Fixture $main -Name 'owned-exit81-over-cap'
+    $exit81LongResult = Invoke-DispatchCase -CaseName 'owned exit-81 over-cap refusal detail' `
+        -Spec $exit81LongSpec -Fixture $ownedExit81Long -FakePath $noWriteFake `
+        -ExtraParameters @{ OwnedWorktree = $true; SkipBaselineCheck = $false }
+    $exit81LongPrintedLine = @($exit81LongResult.Output -split '\r?\n' |
+        Where-Object { $_.StartsWith('[dispatch] REFUSED (exit 81):') }) | Select-Object -First 1
+    $exit81LongEvent = if ($exit81LongResult.EventFiles.Count -eq 1) {
+        Get-Content -Raw -LiteralPath $exit81LongResult.EventFiles[0] | ConvertFrom-Json
+    }
+    else { $null }
+    Assert-Case -Label 'exit81-event-detail-over-cap-truncated' `
+        -Condition ($exit81LongResult.ExitCode -eq 81 -and
+            $null -ne $exit81LongPrintedLine -and $exit81LongPrintedLine.Length -gt 512 -and
+            $null -ne $exit81LongEvent -and [bool]$exit81LongEvent.truncated -and
+            [string]$exit81LongEvent.detail -ceq $exit81LongPrintedLine.Substring(0, 512)) `
+        -Detail ("exit={0}, line_length={1}, files={2}, truncated={3}, prefix_equal={4}" -f
+            $exit81LongResult.ExitCode, $exit81LongPrintedLine.Length,
+            $exit81LongResult.EventFiles.Count,
+            $(if ($null -ne $exit81LongEvent) { [bool]$exit81LongEvent.truncated } else { '<no event>' }),
+            ($null -ne $exit81LongEvent -and $null -ne $exit81LongPrintedLine -and
+                [string]$exit81LongEvent.detail -ceq $exit81LongPrintedLine.Substring(0, [Math]::Min(512, $exit81LongPrintedLine.Length))))
+
     $main = New-FixtureRepo -Name 'owned-prelease-main'
     $ownedPrelease = New-FixtureWorktree -Fixture $main -Name 'owned-prelease'
     $capacitySiblingId = 'task5-capacity-sibling'
@@ -984,7 +1597,7 @@ _(coding writes here)_
     $recordThenThrowDispatcher = New-ScopeStubDispatcher `
         -Name 'stub-record-then-throw' -Mode 'missing-written-paths'
     $recordThenThrowSource = [System.IO.File]::ReadAllText($recordThenThrowDispatcher)
-    $postRecordLine = '                Write-Host $record.cleanup_obligation -ForegroundColor Yellow'
+    $postRecordLine = '            Write-Host $record.cleanup_obligation -ForegroundColor Yellow'
     $recordThenThrowFixtureSource = $recordThenThrowSource.Replace(
         $postRecordLine, "                throw 'forced post-record creator teardown failure'")
     if ($recordThenThrowFixtureSource -ceq $recordThenThrowSource) {
@@ -1029,6 +1642,38 @@ _(coding writes here)_
             $listOutput.Contains($standaloneRemovalCommand),
             $listOutput.Contains($successBranchCommand))
 
+    $branchObligationLine = 'branch_teardown_obligation: {0}' -f
+        $ownedSuccess.Branch
+    $branchObligationIndex = -1
+    for ($i = 0; $i -lt $listOutputLines.Count; $i++) {
+        if ($listOutputLines[$i] -ceq $branchObligationLine) {
+            $branchObligationIndex = $i
+            break
+        }
+    }
+    $capturedBranchCommand = if ($branchObligationIndex -ge 0 -and
+            ($branchObligationIndex + 1) -lt $listOutputLines.Count) {
+        [string]$listOutputLines[$branchObligationIndex + 1]
+    }
+    else {
+        ''
+    }
+    $expectedBranchBytes = [System.Text.Encoding]::UTF8.GetBytes($successBranchCommand)
+    $capturedBranchBytes = [System.Text.Encoding]::UTF8.GetBytes($capturedBranchCommand)
+    $branchBytesEqual = $expectedBranchBytes.Length -eq $capturedBranchBytes.Length
+    if ($branchBytesEqual) {
+        for ($i = 0; $i -lt $expectedBranchBytes.Length; $i++) {
+            if ($expectedBranchBytes[$i] -ne $capturedBranchBytes[$i]) {
+                $branchBytesEqual = $false
+                break
+            }
+        }
+    }
+    Assert-Case -Label 'obligations-branch-delete-literal' `
+        -Condition ($listExit -eq 0 -and $branchBytesEqual) `
+        -Detail ("expected='{0}', captured='{1}', byte_exact={2}" -f
+            $successBranchCommand, $capturedBranchCommand, $branchBytesEqual)
+
     $previousErrorActionPreference = $ErrorActionPreference
     $ErrorActionPreference = 'Continue'
     try {
@@ -1049,8 +1694,8 @@ _(coding writes here)_
             $commandTwoExit, ($commandTwoOutput -join '; '))
 
     $forbiddenTeardownPatterns = @(Select-String -Path $dispatch `
-        -Pattern 'worktree remove.*--force|branch -[dD]')
-    Assert-Case -Label 'dispatcher contains no force-remove or branch-delete invocation' `
+        -Pattern 'worktree remove.*--force')
+    Assert-Case -Label 'dispatcher contains no force-remove invocation' `
         -Condition ($forbiddenTeardownPatterns.Count -eq 0) `
         -Detail ("forbidden_matches={0}" -f $forbiddenTeardownPatterns.Count)
 }

@@ -1,7 +1,7 @@
 ﻿---
 skill: apex-plan
-version: 2.4.0
-last_updated: 2026-07-29
+version: 2.4.1
+last_updated: 2026-08-02
 sources:
   - docs/technical/adr/ADR-010-multi-pass-review.md
   - docs/technical/adr/ADR-011-instinct-loop-no-engine.md
@@ -161,8 +161,7 @@ fails that, it is also too far ahead to write.
 
 **`## Wave plan`** (specs with â‰¥3 tasks): derive a **PROPOSED** wave plan from the *stated*
 dependencies â€” `Wave 1: [1, 2] | Wave 2: [3]`. The **dependencies are binding**; the **grouping is advisory**.
-Final task selection and sequencing are **orchestrator-owned** (ADR-046 D1; interim: the
-host performs them as executor until that agent contract ships). Do the analysis here so the
+Final task selection and sequencing are **orchestrator-owned** — the dispatched `apex-build-orchestrator` on an attended build, the host as executor on an unattended one (ADR-046 D1). Do the analysis here so the
 executor has a defensible starting point, not so it is spared judgement. Independence you can't
 establish â†’ sequential.
 

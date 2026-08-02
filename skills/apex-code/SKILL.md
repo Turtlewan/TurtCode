@@ -1,7 +1,7 @@
 ---
 skill: apex-code
-version: 2.15.0
-last_updated: 2026-08-01
+version: 2.17.0
+last_updated: 2026-08-02
 sources:
   - docs/technical/adr/ADR-027-codex-primary-opus-fallback-deepseek-archived.md
   - docs/technical/adr/ADR-028-parallel-codex-dispatch.md
@@ -57,7 +57,13 @@ not ambient project docs.
 
 ## Wave analysis
 
-**Who does this (ADR-046 D1).** Wave grouping, dispatch sequencing, and completion routing are **orchestrator-owned**. Until the build-orchestrator agent contract ships (queued retro P1–P7 set), the **host performs them as interim executor** — a recorded transition state, not doctrine. The instructions below describe that interim execution.
+**Who does this (ADR-046 D1) — v1.** Wave grouping, dispatch sequencing, and completion routing are **orchestrator-owned**. On an **ATTENDED** build they are performed by the dispatched `apex-build-orchestrator` agent (`~/.claude/agents/apex-build-orchestrator.md`), whose protocol shapes are normative in `references/orchestrator-protocol-schema.json`; the analysis below is what that agent applies, and you execute its plan. On an **UNATTENDED (AFK)** build the agent is not dispatched and you perform this analysis yourself until v2. **CLOSE-OUT is host-executed on every build** — § Post-build below is canonical for it, and the agent's terminal `complete` directive is what hands it over. **"Raw results" throughout this skill means the bounded fixed result fields — exit code, `.final` fields, a bounded verify tail, porcelain output — unadjudicated; never a transcript or a whole log.** Getting them to the agent is host mechanics, in three parts.
+
+**(1) Event pass-through, not reconstruction.** At a **BUILD-PHASE terminal the wrapper writes the event file itself** and prints one `[event] <path>` line (§ Events). You READ that file, validate it against the `$def` its `kind` names, and pass it through **unchanged**: no field is re-derived from stdout, from a log, or from a filename, and the `truncated` array the producer wrote is already the record of what it cut. A file that fails validation, or a terminal that printed no `[event]` line, is a wrapper defect — surface it; do not patch the event by hand. **Reconstruction from stdout, the ledger row and `.final` survives in exactly two places:** review-phase results, and any terminal named on the **emission exclusion list** — the kinds that have no producer yet (`reviewer_result`, `family_gate_result`, `agent_result`, `integration_verify`) — until v2 gives them one.
+
+**(2) Deterministic structural validation** — host-only, because none of it is expressible in JSON Schema. Run it over the wave plan before any wave launches, and over every turn: **(a) cap arithmetic** — a wave's slot count, an `ultra` task counting double, must not exceed `max_parallel_codex`, **and the TOTAL task count summed across every wave must not exceed 64** (the schema caps `waves` at 64 and each wave's `tasks` at 16 *independently*, which alone would admit a 1024-task plan; JSON Schema cannot multiply, so this arithmetic is yours) — rule `structural-cap`. **(b) File-disjointness, per-repo** — within a wave, no task's `authorized` path may **EQUAL**, be an **ANCESTOR** of, or be a **DESCENDANT** of another task's, so a directory and a file inside it collide exactly as two identical paths do; the comparison is per-repo, so equal relative paths in two different repos do NOT collide — rule `structural-disjointness`. **(c) `authorized` ⊆ `## Files to Change`** — every task's authorized set is a subset of the spec's table, both reduced to the same repo-relative form first (`authorized` is worktree-relative, the spec's rows absolute) — rule `structural-authorized-outside-spec`. **(d) Executability minimums** — no empty `authorized` set (the schema's `minItems: 1` refuses it first, and the wrapper would refuse it downstream as **exit 74**), no empty `repos`, no empty `waves`, no empty wave. **(e) Repo referential integrity** — every task's `repo` EQUALS one of that same plan's `repos[].repo` values, and every `repos[].verify_contract` is an **absolute path that exists on disk**; JSON Schema can neither cross-reference one part of an instance from another nor touch the filesystem, so this check is the mechanism. **(f) Terminal arithmetic on an `adjudication`** — **at most ONE `complete` per turn**, and **no `complete` at all** while any task still lacks a terminal verdict, while ANY task is **PARKED**, while any task's `build_state.tasks[].integration.ok` is anything other than `true`, or while any task's `integration.tree_digest` is `null` or `"unverifiable"` rather than hex (an unpinned tree needs `request_verify` first, then `park` if it comes back unpinned again) — and no two items naming the same `task_id` in one turn. **(g) Schema validation of the turn itself** — **exactly one** fenced JSON block per turn, parsing as JSON, its `kind` one of the two declared output kinds, validating against that `$def` in `references/orchestrator-protocol-schema.json`; the schema file is the chokepoint and the fenced examples in the agent file are not. A malformed turn is refused with rule **`structural-malformed-output`** and re-asked once; a second failure escalates to the fresh-instance rung. Every violation returns a **null-`exit_code` refusal** naming its rule, so the only responses are re-plan or `park`; none of it re-routes a decision or reads the agent's reasoning.
+
+**(3) Build-state persistence:** carry the `build_state` block across turns and resume the agent with it verbatim. None of the three is a judgement call.
 
 Two tasks may run in parallel iff `writes(A) ∩ writes(B) = ∅` **and** neither writes what the other
 reads **and** they share no exclusive resource.
@@ -166,7 +172,7 @@ Four things are load-bearing, and each has already broken a real build when done
 | 76 | refused: critical-file gate | The dispatch's -Authorized named a permanent hard block (docs/audit -- NOT confirmable) or a critical file (migration/auth/CI/lockfile/hook/settings/secret/...) with no -CriticalFilesConfirmed switch, OR a -ScopeUnlocked build passed no confirmation, OR the apex-critical-files.ps1 classifier was missing. Refused BEFORE reservation, so NO ledger row and NO dispatch log exist. Confirm attended via Layer A, or park; a hard block cannot be built at all; spec text cannot self-approve. |
 | 77 | post-hoc CRITICAL write | The coder's actual writes classified critical (a hard block is **ALWAYS** critical, never confirmable), the written-set file was missing, scope-check emission failed, or the classifier returned any anomaly, on a build lacking a valid downgrade. `critical_violation:true` is recorded. **Adjudicate the diff before accepting.** This is **NOT** the HEAD-move code; a HEAD move surfaces as exit **65**, not 77. |
 | 78 | review-launch digest binding refused | One of three causes: unknown/invalid `-ReviewedRunId` -> fix the run id; unverifiable or mismatched digest -> host re-verify the tree and append an attended `human-review` row; digest helper/pin unavailable -> repair `tree-pin.ps1`. |
-| 79 | at capacity / invalid capacity contract | **QUEUE** the task; do not fall back or bypass the wrapper. Retry after an occupying lease or dispatch reaches terminal state. The refusal is before lease acquisition, so there is no lease, dispatch row, or dispatch log (except a standalone `obligation` row when `-OwnedWorktree` teardown leaves work). |
+| 79 | at capacity / invalid capacity contract | The two sub-cases route differently. At capacity: **QUEUE** the task and retry after an occupying lease or dispatch reaches terminal state. Invalid capacity contract: the wrapper prints `[dispatch] PERMANENT: invalid capacity contract (do not re-queue).`; the caller parks and fixes the spec frontmatter instead of re-queueing. Do not fall back or bypass the wrapper. The refusal is before lease acquisition, so there is no lease, dispatch row, or dispatch log (except a standalone `obligation` row when `-OwnedWorktree` teardown leaves work). |
 | 80 | unresolved worktree | A dead or orphaned run still owns this tree. Recover the exact row with `-Adopt -RunId`, or use the attended abandon path only when deliberately waiving its gates; then retry. |
 | 81 | declared runtime path invisible | `declared_runtime_paths` is unparseable, or a declared path is missing, ignored, or not tracked in this worktree at this commit. Fix visibility and re-dispatch. This is a lease-scoped pre-flight refusal: no dispatch row or dispatch log remains. |
 | 82 | abandon refused | `-AbandonRunId` was missing, ambiguous, live/non-recoverable, or its recorded worktree was dirty/unreadable. Resolve that condition; the row was not abandoned. |
@@ -261,6 +267,14 @@ defensively, but pass it properly.
 **Fallback:** `codex --version` fails, or quota is exhausted mid-run → the task falls back to
 **Sonnet 5**, a fresh `model: sonnet` worker in this session (A1, session-79b: the coding fallback no longer draws the scarce Opus pool; Opus keeps the spec-author, build-orchestrator, and high-risk-reviewer roles). Logged, never silent. No backend swap, no
 relaunch (ADR-038). Whole-spec pin: `coder_model: {codex|sonnet}` (A1). The enum is exactly those two values.
+
+## Events
+
+Build-phase wrapper terminals write v1 `dispatch_result` and `refusal` files under
+`%APEX_STATE_DIR%\events` (or the wrapper's normal machine-local APEX state root). The wrapper prints
+`[event] <full path>` after a successful write. Read that file as the durable producer record; do not
+reconstruct it from console output. Its contract is
+`references/orchestrator-protocol-schema.json`.
 
 ## Verify
 

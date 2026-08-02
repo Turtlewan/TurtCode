@@ -348,6 +348,7 @@ function Invoke-DispatchCase {
         [Parameter(Mandatory)][string]$FakeRepo,
         [hashtable]$ExtraParameters = @{},
         [hashtable]$FakeEnvironment = @{},
+        [switch]$CaptureInformationStream,
         [string]$DispatchPath = $dispatch
     )
 
@@ -376,9 +377,29 @@ function Invoke-DispatchCase {
     }
 
     Write-Host "`n===== CASE: $CaseName =====" -ForegroundColor Cyan
-    $captured = @(& $DispatchPath @parameters *>&1)
+    if ($CaptureInformationStream) {
+        $captured = @(& $DispatchPath @parameters 6>&1)
+        $outputText = (@($captured | ForEach-Object {
+            if ($_ -is [System.Management.Automation.InformationRecord]) {
+                [string]$_.MessageData
+            }
+            else {
+                [string]$_
+            }
+        }) -join [Environment]::NewLine)
+    }
+    else {
+        $captured = @(& $DispatchPath @parameters *>&1)
+        $outputText = (@($captured | ForEach-Object {
+            if ($_ -is [System.Management.Automation.InformationRecord]) {
+                [string]$_.MessageData
+            }
+            else {
+                [string]$_
+            }
+        }) -join [Environment]::NewLine)
+    }
     $exitCode = $LASTEXITCODE
-    $outputText = ($captured | Out-String)
     if (-not [string]::IsNullOrWhiteSpace($outputText)) {
         Write-Host $outputText.TrimEnd()
     }
@@ -552,7 +573,8 @@ declared_runtime_paths:
         ($runtimePath -replace '/', '\') = "ignored runtime tool`n"
         "docs\changes\$spec.md" = $runtimeSpec
     }
-    $result = Invoke-DispatchCase -CaseName 'DECLARED runtime ignored' -Spec $spec -Repo $repo -FakeRepo $repo
+    $result = Invoke-DispatchCase -CaseName 'DECLARED runtime ignored' -Spec $spec -Repo $repo -FakeRepo $repo `
+        -CaptureInformationStream
     Assert-Case -Label 'runtime ignored exits 81 cleanly' `
         -Condition ($result.ExitCode -eq 81) -Detail "expected 81, got $($result.ExitCode)"
     Assert-Case -Label 'runtime ignored lease-only refusal' `
@@ -612,7 +634,8 @@ declared_runtime_paths:
         -ExtraFiles @{ "docs\changes\$spec.md" = $runtimeSpec }
     Write-Utf8NoBom -Path (Join-Path $repo ($untrackedRuntimePath -replace '/', '\')) `
         -Content "untracked runtime tool`n"
-    $result = Invoke-DispatchCase -CaseName 'DECLARED runtime untracked' -Spec $spec -Repo $repo -FakeRepo $repo
+    $result = Invoke-DispatchCase -CaseName 'DECLARED runtime untracked' -Spec $spec -Repo $repo -FakeRepo $repo `
+        -CaptureInformationStream
     Assert-Case -Label 'runtime untracked-not-ignored exits 81' `
         -Condition ($result.ExitCode -eq 81 -and
             $result.Output -match [regex]::Escape($untrackedRuntimePath) -and
@@ -632,7 +655,8 @@ declared_runtime_paths:
 "@
     $repo = New-FixtureRepo -Name 'runtime-missing' -AgentsContent $greenRecipe `
         -ExtraFiles @{ "docs\changes\$spec.md" = $runtimeSpec }
-    $result = Invoke-DispatchCase -CaseName 'DECLARED runtime missing' -Spec $spec -Repo $repo -FakeRepo $repo
+    $result = Invoke-DispatchCase -CaseName 'DECLARED runtime missing' -Spec $spec -Repo $repo -FakeRepo $repo `
+        -CaptureInformationStream
     Assert-Case -Label 'runtime missing exits 81' `
         -Condition ($result.ExitCode -eq 81 -and
             $result.Output -match [regex]::Escape($missingRuntimePath) -and
@@ -868,6 +892,78 @@ declared_runtime_paths:
         -Detail ("exit={0}; one refusal_exit=71 close; no refused-run dispatch row/log" -f $result.ExitCode)
     Set-TestLedgerRowStatus -RunId $seededSiblingRunId -Status 'done'
 
+    $spec = New-UniqueSpec -CaseName 'allowshared-adopting-still-80'
+    $repo = New-FixtureRepo -Name 'allowshared-adopting-still-80' -AgentsContent $greenRecipe
+    $fixtureTop = @(
+        Invoke-FixtureGit -Repo $repo -GitArguments @('rev-parse', '--show-toplevel')
+    )[0]
+    $fixtureWorktreeKey = (([string]$fixtureTop) -replace '\\', '/').TrimEnd('/').ToLowerInvariant()
+    $fixtureProcessStamp = (Get-Process -Id $PID).StartTime.ToUniversalTime().ToString('o')
+    $adoptingSiblingRunId = [guid]::NewGuid().ToString('N')
+    Add-TestLedgerRow -Row ([ordered]@{
+        run_id = $adoptingSiblingRunId
+        row_kind = 'dispatch'
+        status = 'adopting'
+        pid = $PID
+        pid_start = $fixtureProcessStamp
+        launcher_pid = $PID
+        launcher_start = $fixtureProcessStamp
+        worktree = $repo
+        worktree_key = $fixtureWorktreeKey
+        spec = $spec
+        task = 'seeded-adopting-sibling'
+        phase = 'build'
+        sandbox = 'workspace-write'
+        effort = 'medium'
+        started = [DateTime]::UtcNow.ToString('o')
+    })
+    $adoptingResult = Invoke-DispatchCase -CaseName 'allowshared-adopting-still-80' -Spec $spec `
+        -Repo $repo -FakeRepo $repo -ExtraParameters @{
+            SkipBaselineCheck = $true
+            AllowSharedWorktree = $true
+            AllowSharedWorktreeReason = 'prove adoption remains un-overridable'
+        }
+    Assert-Case -Label 'allowshared-adopting-still-80' `
+        -Condition ($adoptingResult.ExitCode -eq 80 -and
+            $adoptingResult.Output -match 'status=adopting' -and
+            (Test-LeaseScopedRefusal -Result $adoptingResult -ExitCode 80)) `
+        -Detail ("exit={0}; adopting sibling remains unresolved" -f $adoptingResult.ExitCode)
+    Set-TestLedgerRowStatus -RunId $adoptingSiblingRunId -Status 'done'
+
+    $runningSiblingRunId = [guid]::NewGuid().ToString('N')
+    Add-TestLedgerRow -Row ([ordered]@{
+        run_id = $runningSiblingRunId
+        row_kind = 'dispatch'
+        status = 'running'
+        pid = $PID
+        pid_start = $fixtureProcessStamp
+        launcher_pid = $PID
+        launcher_start = $fixtureProcessStamp
+        worktree = $repo
+        worktree_key = $fixtureWorktreeKey
+        spec = $spec
+        task = 'seeded-running-sibling'
+        phase = 'build'
+        sandbox = 'workspace-write'
+        effort = 'medium'
+        started = [DateTime]::UtcNow.ToString('o')
+    })
+    $runningResult = Invoke-DispatchCase -CaseName 'allowshared-running-still-launches' -Spec $spec `
+        -Repo $repo -FakeRepo $repo -ExtraParameters @{
+            SkipBaselineCheck = $true
+            AllowSharedWorktree = $true
+            AllowSharedWorktreeReason = 'prove running sibling remains shareable'
+        } -FakeEnvironment @{ FAKE_CODEX_INSCOPE_ONLY = '1' }
+    Assert-Case -Label 'allowshared running sibling still launches' `
+        -Condition ($runningResult.ExitCode -eq 0 -and
+            @($runningResult.Rows | Where-Object {
+                    [string]$_.row_kind -ceq 'dispatch' -and
+                    [string]$_.task -ceq 'task-7' -and
+                    [string]$_.status -ceq 'done'
+                }).Count -eq 1) `
+        -Detail ("exit={0}; shared dispatch completed" -f $runningResult.ExitCode)
+    Set-TestLedgerRowStatus -RunId $runningSiblingRunId -Status 'done'
+
     # Fault-inject a throw immediately after the atomic lease append. Running the instrumented copy
     # in a child PowerShell proves the wrapper's real unhandled-exception code while keeping this
     # suite alive to inspect the close row.
@@ -961,6 +1057,28 @@ exit 0
     Assert-Case -Label 'capacity refusal preserves ledger bytes' `
         -Condition ($beforeCapacityBytes -ceq $afterCapacityBytes) `
         -Detail 'every pre-existing line remains byte-identical and no refusal row is appended'
+
+    $invalidCapacitySpec = 'capacity-invalid-contract'
+    $invalidCapacityRepo = New-FixtureRepo -Name $invalidCapacitySpec -AgentsContent $greenRecipe `
+        -ExtraFiles @{
+            "docs\changes\$invalidCapacitySpec.md" = (New-GreenFixtureSpec -Spec $invalidCapacitySpec `
+                -AdditionalFrontmatter 'max_parallel_codex: [1, 2')
+        }
+    $invalidCapacity = Invoke-DispatchCase -CaseName 'exit79-invalid-contract-marker' `
+        -Spec $invalidCapacitySpec -Repo $invalidCapacityRepo -FakeRepo $invalidCapacityRepo `
+        -ExtraParameters @{ SkipBaselineCheck = $true; MachineCeiling = 2 }
+    $permanentCapacityMarker = '[dispatch] PERMANENT: invalid capacity contract (do not re-queue).'
+    $invalidCapacityLines = @($invalidCapacity.Output -split '\r?\n')
+    $atCapacityLines = @($surplus.Output -split '\r?\n')
+    Assert-Case -Label 'exit79-invalid-contract-marker' `
+        -Condition ($invalidCapacity.ExitCode -eq 79 -and
+            $invalidCapacityLines -ccontains $permanentCapacityMarker -and
+            $atCapacityLines -cnotcontains $permanentCapacityMarker) `
+        -Detail ("invalid exit={0}, marker present={1}; at-capacity marker absent={2}" -f
+            $invalidCapacity.ExitCode,
+            ($invalidCapacityLines -ccontains $permanentCapacityMarker),
+            ($atCapacityLines -cnotcontains $permanentCapacityMarker))
+
     Wait-Job -Job $capacityJobs | Out-Null
     $machineJobResults = @($capacityJobs | Receive-Job)
     Assert-Case -Label 'machine cap holders complete' `

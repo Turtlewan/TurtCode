@@ -186,17 +186,54 @@ try {
         )
     )
 
+    # Exact production shapes from codex-dispatch.ps1's lease and lease_close writers.
+    $productionShapeLeaseFixture = [pscustomobject][ordered]@{
+        run_id = 'refused-lease'
+        launcher_pid = $PID
+        launcher_start = '2026-02-05T00:59:59Z'
+        worktree = 'C:\fixtures\newer-refused-lease-with-close-ignored'
+        worktree_key = 'worktree-newer-refused-lease-with-close-ignored'
+        spec = 'family-gate-test/newer-refused-lease-with-close-ignored'
+        task = 'task-newer-refused-lease-with-close-ignored'
+        phase = 'build'
+        sandbox = 'workspace-write'
+        started = '2026-02-05T01:00:00Z'
+        log_path = 'C:\fixtures\logs\refused-lease.log'
+        effort = 'medium'
+        attended = $null
+        row_kind = 'lease'
+        status = 'leasing'
+    }
+    $productionShapeLeaseCloseFixture = [pscustomobject][ordered]@{
+        run_id = 'refused-lease'
+        row_kind = 'lease_close'
+        status = 'refused-preflight'
+        refusal_exit = 78
+        ended = '2026-02-05T01:01:00Z'
+        log_path = 'C:\fixtures\logs\refused-lease.log'
+        effort = 'medium'
+        attended = $null
+    }
+
     $newCases = @(
         New-TestCase -Name 'newer-refused-lease-with-close-ignored' -ExpectedExitCode 0 -Rows @(
             New-FixtureRow -Spec 'family-gate-test/newer-refused-lease-with-close-ignored' -Task 'task-newer-refused-lease-with-close-ignored' -WorktreeKey 'worktree-newer-refused-lease-with-close-ignored' -Phase 'build' -RunId 'build-before-refused-lease' -BuilderFamily 'openai' -Status 'done' -Started '2026-02-05T00:00:00Z'
             New-FixtureRow -Spec 'family-gate-test/newer-refused-lease-with-close-ignored' -Task 'task-newer-refused-lease-with-close-ignored' -WorktreeKey 'worktree-newer-refused-lease-with-close-ignored' -Phase 'review' -RunId 'review-before-refused-lease' -ReviewerFamily 'anthropic' -ReviewedRunId 'build-before-refused-lease' -Status 'done' -Started '2026-02-05T00:01:00Z'
-            New-FixtureRow -Spec 'family-gate-test/newer-refused-lease-with-close-ignored' -Task 'task-newer-refused-lease-with-close-ignored' -WorktreeKey 'worktree-newer-refused-lease-with-close-ignored' -Phase 'build' -RunId 'refused-lease' -Status 'leasing' -Started '2026-02-05T01:00:00Z' -ExtraFields ([ordered]@{ row_kind = 'lease' })
+            $productionShapeLeaseFixture
+            $productionShapeLeaseCloseFixture
+        )
+        New-TestCase -Name 'gate-exception-row-not-skipped' -ExpectedExitCode 13 `
+            -ExpectedOutputSubstring "missing or empty required field 'phase'" -Rows @(
+            New-FixtureRow -Spec 'family-gate-test/gate-exception-row-not-skipped' -Task 'task-gate-exception-row-not-skipped' -WorktreeKey 'worktree-gate-exception-row-not-skipped' -Phase 'build' -RunId 'exception-old-build' -BuilderFamily 'openai' -Status 'done' -Started '2026-02-05T02:00:00Z'
+            New-FixtureRow -Spec 'family-gate-test/gate-exception-row-not-skipped' -Task 'task-gate-exception-row-not-skipped' -WorktreeKey 'worktree-gate-exception-row-not-skipped' -Phase 'review' -RunId 'exception-old-review' -ReviewerFamily 'anthropic' -ReviewedRunId 'exception-old-build' -Status 'done' -Started '2026-02-05T02:01:00Z'
             [pscustomobject][ordered]@{
-                run_id = 'refused-lease'
-                row_kind = 'lease_close'
-                status = 'refused-preflight'
-                refusal_exit = 78
-                ended = '2026-02-05T01:01:00Z'
+                run_id = 'exception-row'
+                row_kind = 'exception'
+                spec = 'family-gate-test/gate-exception-row-not-skipped'
+                task = 'task-gate-exception-row-not-skipped'
+                worktree_key = 'worktree-gate-exception-row-not-skipped'
+                status = 'running'
+                started = '2026-02-05T03:00:00Z'
             }
         )
         New-TestCase -Name 'newer-orphaned-artifact-ignored' -ExpectedExitCode 0 -Rows @(
@@ -308,6 +345,29 @@ try {
     [System.IO.File]::WriteAllLines($legacyReserializedPath, [string[]]$legacyJsonLines, $utf8NoBom)
 
     $failures = @()
+    $expectedLeaseFields = @(
+        'run_id', 'launcher_pid', 'launcher_start', 'worktree', 'worktree_key', 'spec', 'task',
+        'phase', 'sandbox', 'started', 'log_path', 'effort', 'attended', 'row_kind', 'status'
+    )
+    $expectedLeaseCloseFields = @(
+        'run_id', 'row_kind', 'status', 'refusal_exit', 'ended', 'log_path', 'effort', 'attended'
+    )
+    $actualLeaseFields = @($productionShapeLeaseFixture.PSObject.Properties.Name)
+    $actualLeaseCloseFields = @($productionShapeLeaseCloseFixture.PSObject.Properties.Name)
+    $leaseFixturesMatchProduction =
+        (($actualLeaseFields -join '|') -ceq ($expectedLeaseFields -join '|')) -and
+        (($actualLeaseCloseFields -join '|') -ceq ($expectedLeaseCloseFields -join '|'))
+    if ($leaseFixturesMatchProduction) {
+        Write-Output 'PASS lease-fixture-production-shape -- lease fixtures match both production writers field-for-field.'
+    }
+    else {
+        $failures += [pscustomobject]@{
+            Name = 'lease-fixture-production-shape'
+            Expected = "lease=$($expectedLeaseFields -join ','); close=$($expectedLeaseCloseFields -join ',')"
+            Actual = "lease=$($actualLeaseFields -join ','); close=$($actualLeaseCloseFields -join ',')"
+            Output = ''
+        }
+    }
     $expectedLegacySerializationHash = '5B5802C3ABC47D948F583A2D930946BCF718037AB69502616161631829AF13F4'
     $actualLegacySerializationHash = (Get-FileHash -Algorithm SHA256 -LiteralPath $legacyReserializedPath).Hash
     if ($actualLegacySerializationHash -ceq $expectedLegacySerializationHash) {

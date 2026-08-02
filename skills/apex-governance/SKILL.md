@@ -1,7 +1,7 @@
 ---
 skill: apex-governance
-version: 2.3.0
-last_updated: 2026-07-29
+version: 2.3.1
+last_updated: 2026-08-02
 sources:
   - docs/technical/adr/ADR-010-multi-pass-review.md
   - docs/technical/adr/ADR-027-codex-primary-opus-fallback-deepseek-archived.md
