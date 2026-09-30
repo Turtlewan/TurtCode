@@ -231,6 +231,50 @@ function Get-PsArrayLiteral {
     return $entries
 }
 
+function New-RuntimeMarkerRepo {
+    param(
+        [Parameter(Mandatory = $true)][string]$Name,
+        [string[]]$Files = @('src/a.py', 'skills/apex/SKILL.md')
+    )
+
+    $repoPath = New-TestRepo -Name $Name -Files $Files
+    $ignorePath = Join-Path -Path $repoPath -ChildPath '.gitignore'
+    [System.IO.File]::WriteAllText(
+        $ignorePath,
+        "/skills/synced/`n/skills/synced-foo/`n",
+        [System.Text.UTF8Encoding]::new($false)
+    )
+    Invoke-TestGit -RepoPath $repoPath -GitArguments @('add', '--', '.gitignore')
+    Invoke-TestGit -RepoPath $repoPath -GitArguments @('commit', '-q', '-m', 'add runtime marker ignores')
+    return $repoPath
+}
+
+function Write-RuntimeMarkers {
+    param(
+        [Parameter(Mandatory = $true)][string]$RepoPath,
+        [string]$Content = "marker`r`n"
+    )
+
+    foreach ($relativePath in @(
+            'skills/synced/.bucket-u1',
+            'skills/synced/u1/.last-complete-round',
+            'skills/synced/u1/manifest.json'
+        )) {
+        $fullPath = Join-Path -Path $RepoPath -ChildPath $relativePath
+        New-Item -ItemType Directory -Force -Path (Split-Path -Parent $fullPath) | Out-Null
+        [System.IO.File]::WriteAllText($fullPath, $Content, [System.Text.Encoding]::ASCII)
+    }
+}
+
+function Write-RuntimeMarkerSeed {
+    param([Parameter(Mandatory = $true)][string]$RepoPath)
+
+    Write-RuntimeMarkers -RepoPath $RepoPath
+    $skillPath = Join-Path -Path $RepoPath -ChildPath 'skills/synced/u1/docs/SKILL.md'
+    New-Item -ItemType Directory -Force -Path (Split-Path -Parent $skillPath) | Out-Null
+    [System.IO.File]::WriteAllText($skillPath, "seeded skill`r`n", [System.Text.Encoding]::ASCII)
+}
+
 try {
     if (-not (Test-Path -LiteralPath $checkerPath -PathType Leaf)) {
         throw "Scope checker was not found at '$checkerPath'."
@@ -670,6 +714,225 @@ try {
     Assert-True -Name 'runtime ls-tree inventory failure exits non-zero' -Condition ($runtimeLsTree.ExitCode -ne 0) -Detail ("expected non-zero, got {0}" -f $runtimeLsTree.ExitCode)
     Assert-WrittenPaths -Name 'runtime ls-tree inventory failure attributes churn' -Path $runtimeLsTreeFile -Expected @('projects', 'projects/session-x.jsonl')
     Assert-True -Name 'runtime ls-tree inventory failure is loud' -Condition ($runtimeLsTree.Output -match 'runtime inventory could not be built') -Detail $runtimeLsTree.Output
+
+    # Runtime marker (1): rewrites inside a collapsed ignored directory do not move scope state.
+    $runtimeMarkerRewriteRepo = New-RuntimeMarkerRepo -Name 'runtime-marker-rewrite'
+    Write-RuntimeMarkerSeed -RepoPath $runtimeMarkerRewriteRepo
+    [string[]]$runtimeMarkerRewriteStatus = @(& $gitPath -C $runtimeMarkerRewriteRepo status --porcelain --ignored=traditional)
+    Assert-True -Name 'runtime marker 1 fixture is one collapsed ignored entry' -Condition ($runtimeMarkerRewriteStatus -contains '!! skills/synced/') -Detail ("status [{0}]" -f ($runtimeMarkerRewriteStatus -join ', '))
+    $runtimeMarkerRewriteState = Join-Path $testRoot 'state-runtime-marker-rewrite'
+    $runtimeMarkerRewriteFile = Join-Path $testRoot 'written-runtime-marker-rewrite.txt'
+    $runtimeMarkerRewriteSnapshot = Invoke-ScopeCheck -CheckerArguments @('-Snapshot', '-Worktree', $runtimeMarkerRewriteRepo, '-Task', 'runtime-marker-rewrite', '-StateDirectory', $runtimeMarkerRewriteState, '-RuntimeExclusionRoot', $runtimeMarkerRewriteRepo)
+    Assert-True -Name 'runtime marker 1 snapshot ordering succeeds' -Condition ($runtimeMarkerRewriteSnapshot.ExitCode -eq 0) -Detail ("expected 0, got {0}: {1}" -f $runtimeMarkerRewriteSnapshot.ExitCode, $runtimeMarkerRewriteSnapshot.Output)
+    Write-RuntimeMarkers -RepoPath $runtimeMarkerRewriteRepo -Content "marker rewritten with longer content`r`n"
+    $runtimeMarkerRewrite = Invoke-ScopeCheck -CheckerArguments @('-Check', '-Worktree', $runtimeMarkerRewriteRepo, '-Task', 'runtime-marker-rewrite', '-StateDirectory', $runtimeMarkerRewriteState, '-RuntimeExclusionRoot', $runtimeMarkerRewriteRepo, '-WrittenPathsFile', $runtimeMarkerRewriteFile)
+    Assert-True -Name 'runtime marker 1 rewrites exit clean' -Condition ($runtimeMarkerRewrite.ExitCode -eq 0) -Detail ("expected 0, got {0}: {1}" -f $runtimeMarkerRewrite.ExitCode, $runtimeMarkerRewrite.Output)
+    Assert-WrittenPaths -Name 'runtime marker 1 rewrites emit no paths' -Path $runtimeMarkerRewriteFile -Expected @()
+
+    # Runtime marker (2): a newly created marker-only tree is excluded and reported as excluded.
+    $runtimeMarkerCreatedRepo = New-RuntimeMarkerRepo -Name 'runtime-marker-created'
+    $runtimeMarkerCreatedState = Join-Path $testRoot 'state-runtime-marker-created'
+    $runtimeMarkerCreatedFile = Join-Path $testRoot 'written-runtime-marker-created.txt'
+    $runtimeMarkerCreatedSnapshot = Invoke-ScopeCheck -CheckerArguments @('-Snapshot', '-Worktree', $runtimeMarkerCreatedRepo, '-Task', 'runtime-marker-created', '-StateDirectory', $runtimeMarkerCreatedState, '-RuntimeExclusionRoot', $runtimeMarkerCreatedRepo)
+    Assert-True -Name 'runtime marker 2 snapshot succeeds' -Condition ($runtimeMarkerCreatedSnapshot.ExitCode -eq 0) -Detail ("expected 0, got {0}" -f $runtimeMarkerCreatedSnapshot.ExitCode)
+    Write-RuntimeMarkers -RepoPath $runtimeMarkerCreatedRepo
+    $runtimeMarkerCreated = Invoke-ScopeCheck -CheckerArguments @('-Check', '-Worktree', $runtimeMarkerCreatedRepo, '-Task', 'runtime-marker-created', '-StateDirectory', $runtimeMarkerCreatedState, '-RuntimeExclusionRoot', $runtimeMarkerCreatedRepo, '-WrittenPathsFile', $runtimeMarkerCreatedFile)
+    Assert-True -Name 'runtime marker 2 creation exits clean' -Condition ($runtimeMarkerCreated.ExitCode -eq 0) -Detail ("expected 0, got {0}: {1}" -f $runtimeMarkerCreated.ExitCode, $runtimeMarkerCreated.Output)
+    Assert-WrittenPaths -Name 'runtime marker 2 creation emits no paths' -Path $runtimeMarkerCreatedFile -Expected @()
+    Assert-True -Name 'runtime marker 2 reports excluded paths' -Condition ($runtimeMarkerCreated.Output -match 'runtime path\(s\) excluded') -Detail $runtimeMarkerCreated.Output
+
+    # Runtime marker (3): deleting a marker-only tree is excluded without a GONE verdict.
+    $runtimeMarkerGoneRepo = New-RuntimeMarkerRepo -Name 'runtime-marker-gone'
+    Write-RuntimeMarkers -RepoPath $runtimeMarkerGoneRepo
+    $runtimeMarkerGoneState = Join-Path $testRoot 'state-runtime-marker-gone'
+    $runtimeMarkerGoneFile = Join-Path $testRoot 'written-runtime-marker-gone.txt'
+    $runtimeMarkerGoneSnapshot = Invoke-ScopeCheck -CheckerArguments @('-Snapshot', '-Worktree', $runtimeMarkerGoneRepo, '-Task', 'runtime-marker-gone', '-StateDirectory', $runtimeMarkerGoneState, '-RuntimeExclusionRoot', $runtimeMarkerGoneRepo)
+    Assert-True -Name 'runtime marker 3 snapshot succeeds' -Condition ($runtimeMarkerGoneSnapshot.ExitCode -eq 0) -Detail ("expected 0, got {0}" -f $runtimeMarkerGoneSnapshot.ExitCode)
+    Remove-Item -LiteralPath (Join-Path $runtimeMarkerGoneRepo 'skills/synced') -Recurse -Force
+    $runtimeMarkerGone = Invoke-ScopeCheck -CheckerArguments @('-Check', '-Worktree', $runtimeMarkerGoneRepo, '-Task', 'runtime-marker-gone', '-StateDirectory', $runtimeMarkerGoneState, '-RuntimeExclusionRoot', $runtimeMarkerGoneRepo, '-WrittenPathsFile', $runtimeMarkerGoneFile)
+    Assert-True -Name 'runtime marker 3 deletion exits clean without GONE' -Condition ($runtimeMarkerGone.ExitCode -eq 0 -and $runtimeMarkerGone.Output -notmatch '(?m)^\s*GONE\s+skills/synced(?:/|$)') -Detail ("exit {0}: {1}" -f $runtimeMarkerGone.ExitCode, $runtimeMarkerGone.Output)
+    Assert-WrittenPaths -Name 'runtime marker 3 deletion emits no paths' -Path $runtimeMarkerGoneFile -Expected @()
+
+    # Runtime marker (4): a root SKILL.md remains attributable inside the collapsed directory.
+    $runtimeMarkerRootSkillRepo = New-RuntimeMarkerRepo -Name 'runtime-marker-root-skill'
+    Write-RuntimeMarkerSeed -RepoPath $runtimeMarkerRootSkillRepo
+    $runtimeMarkerRootSkillState = Join-Path $testRoot 'state-runtime-marker-root-skill'
+    $runtimeMarkerRootSkillFile = Join-Path $testRoot 'written-runtime-marker-root-skill.txt'
+    [void](Invoke-ScopeCheck -CheckerArguments @('-Snapshot', '-Worktree', $runtimeMarkerRootSkillRepo, '-Task', 'runtime-marker-root-skill', '-StateDirectory', $runtimeMarkerRootSkillState, '-RuntimeExclusionRoot', $runtimeMarkerRootSkillRepo))
+    [System.IO.File]::WriteAllText((Join-Path $runtimeMarkerRootSkillRepo 'skills/synced/SKILL.md'), "new skill`r`n", [System.Text.Encoding]::ASCII)
+    $runtimeMarkerRootSkill = Invoke-ScopeCheck -CheckerArguments @('-Check', '-Worktree', $runtimeMarkerRootSkillRepo, '-Task', 'runtime-marker-root-skill', '-StateDirectory', $runtimeMarkerRootSkillState, '-RuntimeExclusionRoot', $runtimeMarkerRootSkillRepo, '-WrittenPathsFile', $runtimeMarkerRootSkillFile)
+    [string[]]$runtimeMarkerRootSkillWritten = if (Test-Path -LiteralPath $runtimeMarkerRootSkillFile -PathType Leaf) { [System.IO.File]::ReadAllLines($runtimeMarkerRootSkillFile) } else { @() }
+    Assert-True -Name 'runtime marker 4 root skill is attributed' -Condition ($runtimeMarkerRootSkill.ExitCode -ne 0 -and $runtimeMarkerRootSkillWritten -contains 'skills/synced/SKILL.md') -Detail ("exit {0}, paths [{1}]" -f $runtimeMarkerRootSkill.ExitCode, ($runtimeMarkerRootSkillWritten -join ', '))
+
+    # Runtime marker (5): a nested SKILL.md remains attributable.
+    $runtimeMarkerNestedSkillRepo = New-RuntimeMarkerRepo -Name 'runtime-marker-nested-skill'
+    Write-RuntimeMarkerSeed -RepoPath $runtimeMarkerNestedSkillRepo
+    $runtimeMarkerNestedSkillState = Join-Path $testRoot 'state-runtime-marker-nested-skill'
+    $runtimeMarkerNestedSkillFile = Join-Path $testRoot 'written-runtime-marker-nested-skill.txt'
+    [void](Invoke-ScopeCheck -CheckerArguments @('-Snapshot', '-Worktree', $runtimeMarkerNestedSkillRepo, '-Task', 'runtime-marker-nested-skill', '-StateDirectory', $runtimeMarkerNestedSkillState, '-RuntimeExclusionRoot', $runtimeMarkerNestedSkillRepo))
+    $runtimeMarkerNestedSkillPath = Join-Path $runtimeMarkerNestedSkillRepo 'skills/synced/u1/x/SKILL.md'
+    New-Item -ItemType Directory -Force -Path (Split-Path -Parent $runtimeMarkerNestedSkillPath) | Out-Null
+    [System.IO.File]::WriteAllText($runtimeMarkerNestedSkillPath, "nested skill`r`n", [System.Text.Encoding]::ASCII)
+    $runtimeMarkerNestedSkill = Invoke-ScopeCheck -CheckerArguments @('-Check', '-Worktree', $runtimeMarkerNestedSkillRepo, '-Task', 'runtime-marker-nested-skill', '-StateDirectory', $runtimeMarkerNestedSkillState, '-RuntimeExclusionRoot', $runtimeMarkerNestedSkillRepo, '-WrittenPathsFile', $runtimeMarkerNestedSkillFile)
+    [string[]]$runtimeMarkerNestedSkillWritten = if (Test-Path -LiteralPath $runtimeMarkerNestedSkillFile -PathType Leaf) { [System.IO.File]::ReadAllLines($runtimeMarkerNestedSkillFile) } else { @() }
+    Assert-True -Name 'runtime marker 5 nested skill is attributed' -Condition ($runtimeMarkerNestedSkill.ExitCode -ne 0 -and $runtimeMarkerNestedSkillWritten -contains 'skills/synced/u1/x/SKILL.md') -Detail ("exit {0}, paths [{1}]" -f $runtimeMarkerNestedSkill.ExitCode, ($runtimeMarkerNestedSkillWritten -join ', '))
+
+    # Runtime marker (6): a nested script remains attributable.
+    $runtimeMarkerScriptRepo = New-RuntimeMarkerRepo -Name 'runtime-marker-script'
+    Write-RuntimeMarkerSeed -RepoPath $runtimeMarkerScriptRepo
+    $runtimeMarkerScriptState = Join-Path $testRoot 'state-runtime-marker-script'
+    $runtimeMarkerScriptFile = Join-Path $testRoot 'written-runtime-marker-script.txt'
+    [void](Invoke-ScopeCheck -CheckerArguments @('-Snapshot', '-Worktree', $runtimeMarkerScriptRepo, '-Task', 'runtime-marker-script', '-StateDirectory', $runtimeMarkerScriptState, '-RuntimeExclusionRoot', $runtimeMarkerScriptRepo))
+    $runtimeMarkerScriptPath = Join-Path $runtimeMarkerScriptRepo 'skills/synced/u1/x/scripts/a.py'
+    New-Item -ItemType Directory -Force -Path (Split-Path -Parent $runtimeMarkerScriptPath) | Out-Null
+    [System.IO.File]::WriteAllText($runtimeMarkerScriptPath, "print('x')`r`n", [System.Text.Encoding]::ASCII)
+    $runtimeMarkerScript = Invoke-ScopeCheck -CheckerArguments @('-Check', '-Worktree', $runtimeMarkerScriptRepo, '-Task', 'runtime-marker-script', '-StateDirectory', $runtimeMarkerScriptState, '-RuntimeExclusionRoot', $runtimeMarkerScriptRepo, '-WrittenPathsFile', $runtimeMarkerScriptFile)
+    [string[]]$runtimeMarkerScriptWritten = if (Test-Path -LiteralPath $runtimeMarkerScriptFile -PathType Leaf) { [System.IO.File]::ReadAllLines($runtimeMarkerScriptFile) } else { @() }
+    Assert-True -Name 'runtime marker 6 nested script is attributed' -Condition ($runtimeMarkerScript.ExitCode -ne 0 -and $runtimeMarkerScriptWritten -contains 'skills/synced/u1/x/scripts/a.py') -Detail ("exit {0}, paths [{1}]" -f $runtimeMarkerScript.ExitCode, ($runtimeMarkerScriptWritten -join ', '))
+
+    # Runtime marker (7): deleting seeded non-marker content remains attributable.
+    $runtimeMarkerDocsGoneRepo = New-RuntimeMarkerRepo -Name 'runtime-marker-docs-gone'
+    Write-RuntimeMarkerSeed -RepoPath $runtimeMarkerDocsGoneRepo
+    $runtimeMarkerDocsGoneState = Join-Path $testRoot 'state-runtime-marker-docs-gone'
+    $runtimeMarkerDocsGoneFile = Join-Path $testRoot 'written-runtime-marker-docs-gone.txt'
+    [void](Invoke-ScopeCheck -CheckerArguments @('-Snapshot', '-Worktree', $runtimeMarkerDocsGoneRepo, '-Task', 'runtime-marker-docs-gone', '-StateDirectory', $runtimeMarkerDocsGoneState, '-RuntimeExclusionRoot', $runtimeMarkerDocsGoneRepo))
+    Remove-Item -LiteralPath (Join-Path $runtimeMarkerDocsGoneRepo 'skills/synced/u1/docs') -Recurse -Force
+    $runtimeMarkerDocsGone = Invoke-ScopeCheck -CheckerArguments @('-Check', '-Worktree', $runtimeMarkerDocsGoneRepo, '-Task', 'runtime-marker-docs-gone', '-StateDirectory', $runtimeMarkerDocsGoneState, '-RuntimeExclusionRoot', $runtimeMarkerDocsGoneRepo, '-WrittenPathsFile', $runtimeMarkerDocsGoneFile)
+    [string[]]$runtimeMarkerDocsGoneWritten = if (Test-Path -LiteralPath $runtimeMarkerDocsGoneFile -PathType Leaf) { [System.IO.File]::ReadAllLines($runtimeMarkerDocsGoneFile) } else { @() }
+    Assert-True -Name 'runtime marker 7 deleted docs are attributed' -Condition ($runtimeMarkerDocsGone.ExitCode -ne 0 -and $runtimeMarkerDocsGoneWritten -contains 'skills/synced') -Detail ("exit {0}, paths [{1}]" -f $runtimeMarkerDocsGone.ExitCode, ($runtimeMarkerDocsGoneWritten -join ', '))
+
+    # Runtime marker (8): marker names outside skills/synced are not excluded.
+    $runtimeMarkerSiblingRepo = New-RuntimeMarkerRepo -Name 'runtime-marker-sibling'
+    $runtimeMarkerSiblingState = Join-Path $testRoot 'state-runtime-marker-sibling'
+    $runtimeMarkerSiblingFile = Join-Path $testRoot 'written-runtime-marker-sibling.txt'
+    [void](Invoke-ScopeCheck -CheckerArguments @('-Snapshot', '-Worktree', $runtimeMarkerSiblingRepo, '-Task', 'runtime-marker-sibling', '-StateDirectory', $runtimeMarkerSiblingState, '-RuntimeExclusionRoot', $runtimeMarkerSiblingRepo))
+    $runtimeMarkerSiblingPath = Join-Path $runtimeMarkerSiblingRepo 'skills/synced-foo/u1/manifest.json'
+    New-Item -ItemType Directory -Force -Path (Split-Path -Parent $runtimeMarkerSiblingPath) | Out-Null
+    [System.IO.File]::WriteAllText($runtimeMarkerSiblingPath, "marker`r`n", [System.Text.Encoding]::ASCII)
+    $runtimeMarkerSibling = Invoke-ScopeCheck -CheckerArguments @('-Check', '-Worktree', $runtimeMarkerSiblingRepo, '-Task', 'runtime-marker-sibling', '-StateDirectory', $runtimeMarkerSiblingState, '-RuntimeExclusionRoot', $runtimeMarkerSiblingRepo, '-WrittenPathsFile', $runtimeMarkerSiblingFile)
+    [string[]]$runtimeMarkerSiblingWritten = if (Test-Path -LiteralPath $runtimeMarkerSiblingFile -PathType Leaf) { [System.IO.File]::ReadAllLines($runtimeMarkerSiblingFile) } else { @() }
+    Assert-True -Name 'runtime marker 8 sibling path is attributed' -Condition ($runtimeMarkerSibling.ExitCode -ne 0 -and $runtimeMarkerSiblingWritten -contains 'skills/synced-foo/u1/manifest.json') -Detail ("exit {0}, paths [{1}]" -f $runtimeMarkerSibling.ExitCode, ($runtimeMarkerSiblingWritten -join ', '))
+
+    # Runtime marker (9): marker rewrites are attributable away from the configured runtime root.
+    $runtimeMarkerWrongRootRepo = New-RuntimeMarkerRepo -Name 'runtime-marker-wrong-root'
+    Write-RuntimeMarkerSeed -RepoPath $runtimeMarkerWrongRootRepo
+    $runtimeMarkerWrongRootState = Join-Path $testRoot 'state-runtime-marker-wrong-root'
+    $runtimeMarkerWrongRootSnapshot = Invoke-ScopeCheck -CheckerArguments @('-Snapshot', '-Worktree', $runtimeMarkerWrongRootRepo, '-Task', 'runtime-marker-wrong-root', '-StateDirectory', $runtimeMarkerWrongRootState)
+    Assert-True -Name 'runtime marker 9 snapshot succeeds' -Condition ($runtimeMarkerWrongRootSnapshot.ExitCode -eq 0) -Detail ("expected 0, got {0}" -f $runtimeMarkerWrongRootSnapshot.ExitCode)
+    Write-RuntimeMarkers -RepoPath $runtimeMarkerWrongRootRepo -Content "marker rewritten with longer content`r`n"
+    $runtimeMarkerWrongRoot = Invoke-ScopeCheck -CheckerArguments @('-Check', '-Worktree', $runtimeMarkerWrongRootRepo, '-Task', 'runtime-marker-wrong-root', '-StateDirectory', $runtimeMarkerWrongRootState)
+    Assert-True -Name 'runtime marker 9 rewrites outside root exit non-zero' -Condition ($runtimeMarkerWrongRoot.ExitCode -ne 0) -Detail ("expected non-zero, got {0}: {1}" -f $runtimeMarkerWrongRoot.ExitCode, $runtimeMarkerWrongRoot.Output)
+
+    # Runtime marker (10): an index/HEAD-tracked manifest remains attributable.
+    $runtimeMarkerTrackedRepo = New-TestRepo -Name 'runtime-marker-tracked' -Files @('src/a.py', 'skills/apex/SKILL.md', 'skills/synced/u1/manifest.json')
+    $runtimeMarkerTrackedState = Join-Path $testRoot 'state-runtime-marker-tracked'
+    $runtimeMarkerTrackedFile = Join-Path $testRoot 'written-runtime-marker-tracked.txt'
+    $runtimeMarkerTrackedSnapshot = Invoke-ScopeCheck -CheckerArguments @('-Snapshot', '-Worktree', $runtimeMarkerTrackedRepo, '-Task', 'runtime-marker-tracked', '-StateDirectory', $runtimeMarkerTrackedState, '-RuntimeExclusionRoot', $runtimeMarkerTrackedRepo)
+    Assert-True -Name 'runtime marker 10 snapshot succeeds' -Condition ($runtimeMarkerTrackedSnapshot.ExitCode -eq 0) -Detail ("expected 0, got {0}" -f $runtimeMarkerTrackedSnapshot.ExitCode)
+    Add-Content -LiteralPath (Join-Path $runtimeMarkerTrackedRepo 'skills/synced/u1/manifest.json') -Value 'tracked change' -Encoding ASCII
+    $runtimeMarkerTracked = Invoke-ScopeCheck -CheckerArguments @('-Check', '-Worktree', $runtimeMarkerTrackedRepo, '-Task', 'runtime-marker-tracked', '-StateDirectory', $runtimeMarkerTrackedState, '-RuntimeExclusionRoot', $runtimeMarkerTrackedRepo, '-WrittenPathsFile', $runtimeMarkerTrackedFile)
+    Assert-True -Name 'runtime marker 10 tracked manifest exits non-zero' -Condition ($runtimeMarkerTracked.ExitCode -ne 0) -Detail ("expected non-zero, got {0}" -f $runtimeMarkerTracked.ExitCode)
+    Assert-WrittenPaths -Name 'runtime marker 10 tracked manifest is attributed' -Path $runtimeMarkerTrackedFile -Expected @('skills/synced/u1/manifest.json')
+
+    # Runtime marker (11): untracked marker leaves are excluded beside a tracked synced skill.
+    $runtimeMarkerLeavesRepo = New-TestRepo -Name 'runtime-marker-leaves' -Files @('src/a.py', 'skills/synced/u1/docs/SKILL.md')
+    $runtimeMarkerLeavesState = Join-Path $testRoot 'state-runtime-marker-leaves'
+    $runtimeMarkerLeavesFile = Join-Path $testRoot 'written-runtime-marker-leaves.txt'
+    $runtimeMarkerLeavesSnapshot = Invoke-ScopeCheck -CheckerArguments @('-Snapshot', '-Worktree', $runtimeMarkerLeavesRepo, '-Task', 'runtime-marker-leaves', '-StateDirectory', $runtimeMarkerLeavesState, '-RuntimeExclusionRoot', $runtimeMarkerLeavesRepo)
+    Assert-True -Name 'runtime marker 11 snapshot succeeds' -Condition ($runtimeMarkerLeavesSnapshot.ExitCode -eq 0) -Detail ("expected 0, got {0}" -f $runtimeMarkerLeavesSnapshot.ExitCode)
+    Write-RuntimeMarkers -RepoPath $runtimeMarkerLeavesRepo
+    $runtimeMarkerLeaves = Invoke-ScopeCheck -CheckerArguments @('-Check', '-Worktree', $runtimeMarkerLeavesRepo, '-Task', 'runtime-marker-leaves', '-StateDirectory', $runtimeMarkerLeavesState, '-RuntimeExclusionRoot', $runtimeMarkerLeavesRepo, '-WrittenPathsFile', $runtimeMarkerLeavesFile)
+    Assert-True -Name 'runtime marker 11 untracked leaves exit clean' -Condition ($runtimeMarkerLeaves.ExitCode -eq 0) -Detail ("expected 0, got {0}: {1}" -f $runtimeMarkerLeaves.ExitCode, $runtimeMarkerLeaves.Output)
+    Assert-WrittenPaths -Name 'runtime marker 11 untracked leaves emit no paths' -Path $runtimeMarkerLeavesFile -Expected @()
+
+    # Runtime marker (12): the non-collecting branch also reports a clean marker rewrite.
+    $runtimeMarkerNoWrittenRepo = New-RuntimeMarkerRepo -Name 'runtime-marker-no-written'
+    Write-RuntimeMarkerSeed -RepoPath $runtimeMarkerNoWrittenRepo
+    $runtimeMarkerNoWrittenState = Join-Path $testRoot 'state-runtime-marker-no-written'
+    $runtimeMarkerNoWrittenSnapshot = Invoke-ScopeCheck -CheckerArguments @('-Snapshot', '-Worktree', $runtimeMarkerNoWrittenRepo, '-Task', 'runtime-marker-no-written', '-StateDirectory', $runtimeMarkerNoWrittenState, '-RuntimeExclusionRoot', $runtimeMarkerNoWrittenRepo)
+    Assert-True -Name 'runtime marker 12 snapshot succeeds' -Condition ($runtimeMarkerNoWrittenSnapshot.ExitCode -eq 0) -Detail ("expected 0, got {0}" -f $runtimeMarkerNoWrittenSnapshot.ExitCode)
+    Write-RuntimeMarkers -RepoPath $runtimeMarkerNoWrittenRepo -Content "marker rewritten with longer content`r`n"
+    $runtimeMarkerNoWritten = Invoke-ScopeCheck -CheckerArguments @('-Check', '-Worktree', $runtimeMarkerNoWrittenRepo, '-Task', 'runtime-marker-no-written', '-StateDirectory', $runtimeMarkerNoWrittenState, '-RuntimeExclusionRoot', $runtimeMarkerNoWrittenRepo)
+    Assert-True -Name 'runtime marker 12 non-collecting branch exits clean' -Condition ($runtimeMarkerNoWritten.ExitCode -eq 0 -and $runtimeMarkerNoWritten.Output -match '(?m)^\[scope\].* clean -') -Detail ("exit {0}: {1}" -f $runtimeMarkerNoWritten.ExitCode, $runtimeMarkerNoWritten.Output)
+
+    # Runtime marker (13): scope-check and tree-pin exclusion lists stay in exact lockstep.
+    $runtimeMarkerTreePinPath = Join-Path $PSScriptRoot 'tree-pin.ps1'
+    foreach ($runtimeMarkerListName in @('runtimeExclusions', 'runtimeMarkerPatterns')) {
+        [string[]]$runtimeMarkerCheckerList = @(Get-PsArrayLiteral -Path $checkerPath -Name $runtimeMarkerListName)
+        [string[]]$runtimeMarkerTreePinList = @(Get-PsArrayLiteral -Path $runtimeMarkerTreePinPath -Name $runtimeMarkerListName)
+        Assert-True -Name ("runtime marker 13 checker {0} parses non-empty" -f $runtimeMarkerListName) -Condition ($runtimeMarkerCheckerList.Count -gt 0) -Detail ("entries [{0}]" -f ($runtimeMarkerCheckerList -join ', '))
+        Assert-True -Name ("runtime marker 13 tree-pin {0} parses non-empty" -f $runtimeMarkerListName) -Condition ($runtimeMarkerTreePinList.Count -gt 0) -Detail ("entries [{0}]" -f ($runtimeMarkerTreePinList -join ', '))
+        Assert-True -Name ("runtime marker 13 {0} counts match" -f $runtimeMarkerListName) -Condition ($runtimeMarkerCheckerList.Count -eq $runtimeMarkerTreePinList.Count) -Detail ("checker {0}, tree-pin {1}" -f $runtimeMarkerCheckerList.Count, $runtimeMarkerTreePinList.Count)
+        $runtimeMarkerListsEqual = $runtimeMarkerCheckerList.Count -eq $runtimeMarkerTreePinList.Count
+        if ($runtimeMarkerListsEqual) {
+            for ($runtimeMarkerListIndex = 0; $runtimeMarkerListIndex -lt $runtimeMarkerCheckerList.Count; $runtimeMarkerListIndex++) {
+                if ($runtimeMarkerCheckerList[$runtimeMarkerListIndex] -cne $runtimeMarkerTreePinList[$runtimeMarkerListIndex]) {
+                    $runtimeMarkerListsEqual = $false
+                    break
+                }
+            }
+        }
+        Assert-True -Name ("runtime marker 13 {0} order matches" -f $runtimeMarkerListName) -Condition $runtimeMarkerListsEqual -Detail ("checker [{0}], tree-pin [{1}]" -f ($runtimeMarkerCheckerList -join ', '), ($runtimeMarkerTreePinList -join ', '))
+        if ($runtimeMarkerListName -ceq 'runtimeMarkerPatterns') {
+            Assert-True -Name 'runtime marker 13 pattern count is exactly three' -Condition ($runtimeMarkerCheckerList.Count -eq 3) -Detail ("expected 3, got {0}" -f $runtimeMarkerCheckerList.Count)
+        }
+    }
+
+    # Runtime marker (14): a directory named like a bucket marker is never leaf-excluded.
+    $runtimeMarkerBucketDirectoryRepo = New-RuntimeMarkerRepo -Name 'runtime-marker-bucket-directory' -Files @('src/a.py', 'skills/apex/SKILL.md', 'skills/synced/u1/docs/SKILL.md')
+    $runtimeMarkerBucketDirectoryState = Join-Path $testRoot 'state-runtime-marker-bucket-directory'
+    $runtimeMarkerBucketDirectoryFile = Join-Path $testRoot 'written-runtime-marker-bucket-directory.txt'
+    $runtimeMarkerBucketDirectorySnapshot = Invoke-ScopeCheck -CheckerArguments @('-Snapshot', '-Worktree', $runtimeMarkerBucketDirectoryRepo, '-Task', 'runtime-marker-bucket-directory', '-StateDirectory', $runtimeMarkerBucketDirectoryState, '-RuntimeExclusionRoot', $runtimeMarkerBucketDirectoryRepo)
+    Assert-True -Name 'runtime marker 14 snapshot succeeds' -Condition ($runtimeMarkerBucketDirectorySnapshot.ExitCode -eq 0) -Detail ("expected 0, got {0}" -f $runtimeMarkerBucketDirectorySnapshot.ExitCode)
+    $runtimeMarkerBucketDirectoryPath = Join-Path $runtimeMarkerBucketDirectoryRepo 'skills/synced/.bucket-u1/SKILL.md'
+    New-Item -ItemType Directory -Force -Path (Split-Path -Parent $runtimeMarkerBucketDirectoryPath) | Out-Null
+    [System.IO.File]::WriteAllText($runtimeMarkerBucketDirectoryPath, "not a marker`r`n", [System.Text.Encoding]::ASCII)
+    $runtimeMarkerBucketDirectory = Invoke-ScopeCheck -CheckerArguments @('-Check', '-Worktree', $runtimeMarkerBucketDirectoryRepo, '-Task', 'runtime-marker-bucket-directory', '-StateDirectory', $runtimeMarkerBucketDirectoryState, '-RuntimeExclusionRoot', $runtimeMarkerBucketDirectoryRepo, '-WrittenPathsFile', $runtimeMarkerBucketDirectoryFile)
+    [string[]]$runtimeMarkerBucketDirectoryWritten = if (Test-Path -LiteralPath $runtimeMarkerBucketDirectoryFile -PathType Leaf) { [System.IO.File]::ReadAllLines($runtimeMarkerBucketDirectoryFile) } else { @() }
+    $runtimeMarkerBucketDirectoryHasPath = @($runtimeMarkerBucketDirectoryWritten | Where-Object { $_.StartsWith('skills/synced/.bucket-u1', [System.StringComparison]::Ordinal) }).Count -gt 0
+    Assert-True -Name 'runtime marker 14 bucket directory is attributed' -Condition ($runtimeMarkerBucketDirectory.ExitCode -ne 0 -and $runtimeMarkerBucketDirectoryHasPath) -Detail ("exit {0}, paths [{1}]" -f $runtimeMarkerBucketDirectory.ExitCode, ($runtimeMarkerBucketDirectoryWritten -join ', '))
+
+    # Runtime marker (15): a directory named manifest.json is never leaf-excluded.
+    $runtimeMarkerManifestDirectoryRepo = New-RuntimeMarkerRepo -Name 'runtime-marker-manifest-directory' -Files @('src/a.py', 'skills/apex/SKILL.md', 'skills/synced/u1/docs/SKILL.md')
+    $runtimeMarkerManifestDirectoryState = Join-Path $testRoot 'state-runtime-marker-manifest-directory'
+    $runtimeMarkerManifestDirectoryFile = Join-Path $testRoot 'written-runtime-marker-manifest-directory.txt'
+    $runtimeMarkerManifestDirectorySnapshot = Invoke-ScopeCheck -CheckerArguments @('-Snapshot', '-Worktree', $runtimeMarkerManifestDirectoryRepo, '-Task', 'runtime-marker-manifest-directory', '-StateDirectory', $runtimeMarkerManifestDirectoryState, '-RuntimeExclusionRoot', $runtimeMarkerManifestDirectoryRepo)
+    Assert-True -Name 'runtime marker 15 snapshot succeeds' -Condition ($runtimeMarkerManifestDirectorySnapshot.ExitCode -eq 0) -Detail ("expected 0, got {0}" -f $runtimeMarkerManifestDirectorySnapshot.ExitCode)
+    $runtimeMarkerManifestDirectoryPath = Join-Path $runtimeMarkerManifestDirectoryRepo 'skills/synced/u1/manifest.json/run.ps1'
+    New-Item -ItemType Directory -Force -Path (Split-Path -Parent $runtimeMarkerManifestDirectoryPath) | Out-Null
+    [System.IO.File]::WriteAllText($runtimeMarkerManifestDirectoryPath, "Write-Output 'run'`r`n", [System.Text.Encoding]::ASCII)
+    $runtimeMarkerManifestDirectory = Invoke-ScopeCheck -CheckerArguments @('-Check', '-Worktree', $runtimeMarkerManifestDirectoryRepo, '-Task', 'runtime-marker-manifest-directory', '-StateDirectory', $runtimeMarkerManifestDirectoryState, '-RuntimeExclusionRoot', $runtimeMarkerManifestDirectoryRepo, '-WrittenPathsFile', $runtimeMarkerManifestDirectoryFile)
+    [string[]]$runtimeMarkerManifestDirectoryWritten = if (Test-Path -LiteralPath $runtimeMarkerManifestDirectoryFile -PathType Leaf) { [System.IO.File]::ReadAllLines($runtimeMarkerManifestDirectoryFile) } else { @() }
+    $runtimeMarkerManifestDirectoryHasPath = @($runtimeMarkerManifestDirectoryWritten | Where-Object { $_.StartsWith('skills/synced/u1/manifest.json', [System.StringComparison]::Ordinal) }).Count -gt 0
+    Assert-True -Name 'runtime marker 15 manifest directory is attributed' -Condition ($runtimeMarkerManifestDirectory.ExitCode -ne 0 -and $runtimeMarkerManifestDirectoryHasPath) -Detail ("exit {0}, paths [{1}]" -f $runtimeMarkerManifestDirectory.ExitCode, ($runtimeMarkerManifestDirectoryWritten -join ', '))
+
+    # Runtime marker (16): removing an individually listed marker leaf is excluded without GONE.
+    $runtimeMarkerLeafGoneRepo = New-RuntimeMarkerRepo -Name 'runtime-marker-leaf-gone' -Files @('src/a.py', 'skills/apex/SKILL.md', 'skills/synced/u1/docs/SKILL.md')
+    Write-RuntimeMarkers -RepoPath $runtimeMarkerLeafGoneRepo
+    [System.IO.File]::WriteAllText((Join-Path $runtimeMarkerLeafGoneRepo 'skills/synced/u1/notes.md'), "notes`r`n", [System.Text.Encoding]::ASCII)
+    [string[]]$runtimeMarkerLeafGoneStatus = @(& $gitPath -C $runtimeMarkerLeafGoneRepo status --porcelain --ignored=traditional)
+    Assert-True -Name 'runtime marker 16 manifest is an individual ignored entry' -Condition ($runtimeMarkerLeafGoneStatus -contains '!! skills/synced/u1/manifest.json') -Detail ("status [{0}]" -f ($runtimeMarkerLeafGoneStatus -join ', '))
+    $runtimeMarkerLeafGoneState = Join-Path $testRoot 'state-runtime-marker-leaf-gone'
+    $runtimeMarkerLeafGoneFile = Join-Path $testRoot 'written-runtime-marker-leaf-gone.txt'
+    $runtimeMarkerLeafGoneSnapshot = Invoke-ScopeCheck -CheckerArguments @('-Snapshot', '-Worktree', $runtimeMarkerLeafGoneRepo, '-Task', 'runtime-marker-leaf-gone', '-StateDirectory', $runtimeMarkerLeafGoneState, '-RuntimeExclusionRoot', $runtimeMarkerLeafGoneRepo)
+    Assert-True -Name 'runtime marker 16 snapshot succeeds' -Condition ($runtimeMarkerLeafGoneSnapshot.ExitCode -eq 0) -Detail ("expected 0, got {0}" -f $runtimeMarkerLeafGoneSnapshot.ExitCode)
+    Remove-Item -LiteralPath (Join-Path $runtimeMarkerLeafGoneRepo 'skills/synced/u1/manifest.json') -Force
+    $runtimeMarkerLeafGone = Invoke-ScopeCheck -CheckerArguments @('-Check', '-Worktree', $runtimeMarkerLeafGoneRepo, '-Task', 'runtime-marker-leaf-gone', '-StateDirectory', $runtimeMarkerLeafGoneState, '-RuntimeExclusionRoot', $runtimeMarkerLeafGoneRepo, '-WrittenPathsFile', $runtimeMarkerLeafGoneFile)
+    Assert-True -Name 'runtime marker 16 removed marker exits clean without GONE' -Condition ($runtimeMarkerLeafGone.ExitCode -eq 0 -and $runtimeMarkerLeafGone.Output -notmatch '(?m)^\s*GONE\s+skills/synced/u1/manifest\.json') -Detail ("exit {0}: {1}" -f $runtimeMarkerLeafGone.ExitCode, $runtimeMarkerLeafGone.Output)
+    Assert-WrittenPaths -Name 'runtime marker 16 removed marker emits no paths' -Path $runtimeMarkerLeafGoneFile -Expected @()
+
+    # Runtime marker (17): removing an individually listed non-marker leaf remains attributable.
+    $runtimeMarkerNoteGoneRepo = New-RuntimeMarkerRepo -Name 'runtime-marker-note-gone' -Files @('src/a.py', 'skills/apex/SKILL.md', 'skills/synced/u1/docs/SKILL.md')
+    Write-RuntimeMarkers -RepoPath $runtimeMarkerNoteGoneRepo
+    [System.IO.File]::WriteAllText((Join-Path $runtimeMarkerNoteGoneRepo 'skills/synced/u1/notes.md'), "notes`r`n", [System.Text.Encoding]::ASCII)
+    $runtimeMarkerNoteGoneState = Join-Path $testRoot 'state-runtime-marker-note-gone'
+    $runtimeMarkerNoteGoneFile = Join-Path $testRoot 'written-runtime-marker-note-gone.txt'
+    $runtimeMarkerNoteGoneSnapshot = Invoke-ScopeCheck -CheckerArguments @('-Snapshot', '-Worktree', $runtimeMarkerNoteGoneRepo, '-Task', 'runtime-marker-note-gone', '-StateDirectory', $runtimeMarkerNoteGoneState, '-RuntimeExclusionRoot', $runtimeMarkerNoteGoneRepo)
+    Assert-True -Name 'runtime marker 17 snapshot succeeds' -Condition ($runtimeMarkerNoteGoneSnapshot.ExitCode -eq 0) -Detail ("expected 0, got {0}" -f $runtimeMarkerNoteGoneSnapshot.ExitCode)
+    Remove-Item -LiteralPath (Join-Path $runtimeMarkerNoteGoneRepo 'skills/synced/u1/notes.md') -Force
+    $runtimeMarkerNoteGone = Invoke-ScopeCheck -CheckerArguments @('-Check', '-Worktree', $runtimeMarkerNoteGoneRepo, '-Task', 'runtime-marker-note-gone', '-StateDirectory', $runtimeMarkerNoteGoneState, '-RuntimeExclusionRoot', $runtimeMarkerNoteGoneRepo, '-WrittenPathsFile', $runtimeMarkerNoteGoneFile)
+    [string[]]$runtimeMarkerNoteGoneWritten = if (Test-Path -LiteralPath $runtimeMarkerNoteGoneFile -PathType Leaf) { [System.IO.File]::ReadAllLines($runtimeMarkerNoteGoneFile) } else { @() }
+    Assert-True -Name 'runtime marker 17 removed note is attributed with GONE' -Condition ($runtimeMarkerNoteGone.ExitCode -ne 0 -and $runtimeMarkerNoteGone.Output -match '(?m)^\s*GONE\s+skills/synced/u1/notes\.md' -and $runtimeMarkerNoteGoneWritten -contains 'skills/synced/u1/notes.md') -Detail ("exit {0}, paths [{1}]: {2}" -f $runtimeMarkerNoteGone.ExitCode, ($runtimeMarkerNoteGoneWritten -join ', '), $runtimeMarkerNoteGone.Output)
 
     # Derived-cache (1): ignored scratch created during dispatch is excluded and emits nothing.
     $derivedScratchRepo = New-IgnoredCacheRepo -Name 'derived-scratch-created'

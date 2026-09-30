@@ -102,20 +102,41 @@ function Invoke-Git {
 # for it means the fingerprint is identical before and after a coder rewrites every file inside it --
 # so Verify returns 0 and the gate blesses content the reviewer never saw. The pin then certifies
 # precisely the blind spot it was built to eliminate.
-function Get-PathDigest([string]$Root, [string]$relPath) {
+# Lockstep: identical in tree-pin.ps1 and codex-scope-check.ps1.
+$runtimeMarkerPatterns = @(
+    '^skills/synced/\.bucket-[^/]+$',
+    '^skills/synced/[^/]+/\.last-complete-round$',
+    '^skills/synced/[^/]+/manifest\.json$'
+)
+function Test-IsRuntimeMarker([string]$NormalizedPath) {
+    foreach ($pattern in $runtimeMarkerPatterns) {
+        if ([regex]::IsMatch($NormalizedPath, $pattern, [System.Text.RegularExpressions.RegexOptions]::IgnoreCase)) {
+            return $true
+        }
+    }
+    return $false
+}
+
+function Get-PathDigest([string]$Root, [string]$relPath, [bool]$SkipRuntimeMarkers = $false) {
     $full = Join-Path $Root $relPath
 
     if (Test-Path -LiteralPath $full -PathType Container) {
         # Keep this digest field-for-field aligned with Get-ContentHash in codex-scope-check.ps1.
         $parts = New-Object System.Collections.Generic.List[string]
+        $skippedRuntimeMarkers = 0
         $enumErr = $null
         foreach ($file in (Get-ChildItem -LiteralPath $full -Recurse -File -Force -ErrorAction SilentlyContinue -ErrorVariable enumErr |
                 Sort-Object FullName)) {
             $rel = $file.FullName.Substring($Root.Length).TrimStart([char]92, [char]47) -replace '\\', '/'
+            if ($SkipRuntimeMarkers -and (Test-IsRuntimeMarker $rel)) {
+                $skippedRuntimeMarkers++
+                continue
+            }
             $parts.Add("$rel|$($file.Length)|$($file.LastWriteTimeUtc.Ticks)")
         }
         # A subtree we could not read must not fingerprint identically to one we could.
         if ($enumErr -and $enumErr.Count -gt 0) { $parts.Add("UNREADABLE|$($enumErr.Count)") }
+        if ($parts.Count -eq 0 -and $skippedRuntimeMarkers -gt 0) { return $null }
         if ($parts.Count -eq 0) { return 'dir:empty' }
         $sha = [System.Security.Cryptography.SHA256]::Create()
         try {
@@ -233,6 +254,11 @@ function Get-TreeFingerprint([string]$Root, [bool]$ApplyRuntimeExclusions) {
                 }
             }
             if ($excluded) { continue }
+            if (-not $path.EndsWith('/') -and
+                    (Test-Path -LiteralPath (Join-Path $Root $path) -PathType Leaf) -and
+                    (Test-IsRuntimeMarker $normalizedPath)) {
+                continue
+            }
         }
         # Tool caches: every worktree, ignored entries only.
         if ($xy -eq '!!') {
@@ -248,7 +274,9 @@ function Get-TreeFingerprint([string]$Root, [bool]$ApplyRuntimeExclusions) {
             }
             if ($isToolCache) { continue }
         }
-        $lines += "$xy $path work:$(Get-PathDigest $Root $path) index:$(Get-IndexDigest $Root $path)"
+        $work = Get-PathDigest $Root $path ($ApplyRuntimeExclusions -and $xy -eq '!!')
+        if ($null -eq $work) { continue }
+        $lines += "$xy $path work:$work index:$(Get-IndexDigest $Root $path)"
     }
 
     $joined = [string]::Join("`n", $lines)
@@ -326,7 +354,7 @@ foreach ($tree in $trees) {
 
     $pinLines = [System.IO.File]::ReadAllLines($tree.PinPath)
     if ($pinLines.Count -eq 0 -or $pinLines[0] -ne 'treepin-v2') {
-        Write-Host 'pin predates digest scheme v2 — re-pin'
+        Write-Host 'pin predates digest scheme v2 -- re-pin'
         $failed = $true
         continue
     }

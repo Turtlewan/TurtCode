@@ -5,6 +5,8 @@ $ErrorActionPreference = 'Stop'
 $scriptPath = Join-Path $PSScriptRoot 'tree-pin.ps1'
 $testRoot = Join-Path ([System.IO.Path]::GetTempPath()) ("apex-tree-pin-test-$PID-" + [guid]::NewGuid().ToString('N'))
 $failures = New-Object System.Collections.Generic.List[string]
+$restoreGitConfigGlobal = $false
+$savedGitConfigGlobal = $null
 
 function Assert-Equal([string]$Name, $Expected, $Actual) {
     if ($Expected -eq $Actual) {
@@ -54,6 +56,28 @@ function Write-Utf8File([string]$Path, [string]$Content) {
         New-Item -ItemType Directory -Path $parent -Force | Out-Null
     }
     [System.IO.File]::WriteAllText($Path, $Content, [System.Text.UTF8Encoding]::new($false))
+}
+
+function Add-FixtureCommit($Fixture, [string[]]$Paths, [string]$Message, [switch]$Force) {
+    $addArgs = @('-C', $Fixture.Root, 'add')
+    if ($Force) { $addArgs += '-f' }
+    $addArgs += '--'
+    $addArgs += $Paths
+    & git @addArgs
+    if ($LASTEXITCODE -ne 0) { throw "git add failed for $($Fixture.Name) fixture" }
+    & git -C $Fixture.Root -c user.name='APEX tree-pin test' -c user.email='tree-pin-test@example.invalid' commit --quiet -m $Message
+    if ($LASTEXITCODE -ne 0) { throw "git commit failed for $($Fixture.Name) fixture" }
+}
+
+function Write-SyncedMarkers($Fixture, [string]$Suffix) {
+    Write-Utf8File (Join-Path $Fixture.Root 'skills/synced/.bucket-u1') "bucket$Suffix`n"
+    Write-Utf8File (Join-Path $Fixture.Root 'skills/synced/u1/.last-complete-round') "round$Suffix`n"
+    Write-Utf8File (Join-Path $Fixture.Root 'skills/synced/u1/manifest.json') "{`"marker`":`"manifest$Suffix`"}`n"
+}
+
+function Write-SyncedSeed($Fixture) {
+    Write-SyncedMarkers $Fixture '-seed'
+    Write-Utf8File (Join-Path $Fixture.Root 'skills/synced/u1/docs/SKILL.md') "# Seeded skill`n"
 }
 
 function New-TestFixture([string]$Name, [string]$FileName, [string]$Content) {
@@ -206,7 +230,7 @@ try {
         [System.Text.UTF8Encoding]::new($false))
     $result = Invoke-TreePin (@('-Verify') + $argsForCase)
     Assert-Equal 'v1-format pin verifies with exit 69' 69 $result.ExitCode
-    Assert-True 'v1-format pin requests a re-pin' ($result.Output -match '^pin predates digest scheme v2 — re-pin$')
+    Assert-True 'v1-format pin requests a re-pin' ($result.Output -match '^pin predates digest scheme v2 -- re-pin$')
     Assert-True 'v1-format pin does not render the tree-moved banner' ($result.Output -notmatch 'THE TREE MOVED')
 
     $fixture = New-TestFixture 'fresh-v2' 'tracked.txt' "fresh fixture`n"
@@ -294,6 +318,180 @@ try {
     Write-Utf8File (Join-Path $fixture.Root 'projects/item.txt') "not runtime tree`n"
     $result = Invoke-TreePin (@('-Verify') + $argsForCase)
     Assert-Equal 'ignored projects churn off the runtime tree moves the tree' 69 $result.ExitCode
+
+    # Synced runtime markers are filtered only when they are ignored regular files under the
+    # configured runtime root. Isolate the fixtures from any user-level global excludes first.
+    $savedGitConfigGlobal = [Environment]::GetEnvironmentVariable('GIT_CONFIG_GLOBAL', 'Process')
+    $restoreGitConfigGlobal = $true
+    $isolatedGlobalIgnore = Join-Path $testRoot 'empty-global-ignore'
+    $isolatedGlobalConfig = Join-Path $testRoot 'isolated-global.gitconfig'
+    Write-Utf8File $isolatedGlobalIgnore ''
+    $isolatedGlobalIgnoreForConfig = $isolatedGlobalIgnore -replace '\\', '/'
+    Write-Utf8File $isolatedGlobalConfig "[core]`n    excludesFile = $isolatedGlobalIgnoreForConfig`n"
+    $env:GIT_CONFIG_GLOBAL = $isolatedGlobalConfig
+
+    $fixture = New-TestFixture 'synced-marker-rewrites' '.gitignore' "/skills/synced/`n/skills/synced-foo/`n"
+    Write-Utf8File (Join-Path $fixture.Root 'skills/apex/SKILL.md') "# APEX skill`n"
+    Add-FixtureCommit $fixture @('skills/apex/SKILL.md') 'Track APEX skill'
+    Write-SyncedSeed $fixture
+    $argsForCase = Get-FixtureArgs $fixture $fixture.Root
+    $result = Invoke-TreePin (@('-Pin') + $argsForCase)
+    Assert-Equal 'synced marker rewrites baseline pin exits 0' 0 $result.ExitCode
+    Write-SyncedMarkers $fixture '-rewritten-with-longer-content'
+    $result = Invoke-TreePin (@('-Verify') + $argsForCase)
+    Assert-Equal 'rewriting all synced runtime markers verifies unchanged' 0 $result.ExitCode
+
+    $fixture = New-TestFixture 'synced-created-after-pin' '.gitignore' "/skills/synced/`n/skills/synced-foo/`n"
+    Write-Utf8File (Join-Path $fixture.Root 'skills/apex/SKILL.md') "# APEX skill`n"
+    Add-FixtureCommit $fixture @('skills/apex/SKILL.md') 'Track APEX skill'
+    $argsForCase = Get-FixtureArgs $fixture $fixture.Root
+    $result = Invoke-TreePin (@('-Pin') + $argsForCase)
+    Assert-Equal 'synced markers absent baseline pin exits 0' 0 $result.ExitCode
+    Write-SyncedMarkers $fixture '-created-after-pin'
+    $result = Invoke-TreePin (@('-Verify') + $argsForCase)
+    Assert-Equal 'creating only synced runtime markers verifies unchanged' 0 $result.ExitCode
+
+    $fixture = New-TestFixture 'synced-root-skill' '.gitignore' "/skills/synced/`n/skills/synced-foo/`n"
+    Write-Utf8File (Join-Path $fixture.Root 'skills/apex/SKILL.md') "# APEX skill`n"
+    Add-FixtureCommit $fixture @('skills/apex/SKILL.md') 'Track APEX skill'
+    Write-SyncedSeed $fixture
+    $argsForCase = Get-FixtureArgs $fixture $fixture.Root
+    $result = Invoke-TreePin (@('-Pin') + $argsForCase)
+    Assert-Equal 'synced root skill baseline pin exits 0' 0 $result.ExitCode
+    Write-Utf8File (Join-Path $fixture.Root 'skills/synced/SKILL.md') "# Root synced skill`n"
+    $result = Invoke-TreePin (@('-Verify') + $argsForCase)
+    Assert-Equal 'new root synced SKILL.md moves the tree' 69 $result.ExitCode
+
+    $fixture = New-TestFixture 'synced-nested-skill' '.gitignore' "/skills/synced/`n/skills/synced-foo/`n"
+    Write-Utf8File (Join-Path $fixture.Root 'skills/apex/SKILL.md') "# APEX skill`n"
+    Add-FixtureCommit $fixture @('skills/apex/SKILL.md') 'Track APEX skill'
+    Write-SyncedSeed $fixture
+    $argsForCase = Get-FixtureArgs $fixture $fixture.Root
+    $result = Invoke-TreePin (@('-Pin') + $argsForCase)
+    Assert-Equal 'synced nested skill baseline pin exits 0' 0 $result.ExitCode
+    Write-Utf8File (Join-Path $fixture.Root 'skills/synced/u1/x/SKILL.md') "# Nested synced skill`n"
+    $result = Invoke-TreePin (@('-Verify') + $argsForCase)
+    Assert-Equal 'new nested synced SKILL.md moves the tree' 69 $result.ExitCode
+
+    $fixture = New-TestFixture 'synced-nested-script' '.gitignore' "/skills/synced/`n/skills/synced-foo/`n"
+    Write-Utf8File (Join-Path $fixture.Root 'skills/apex/SKILL.md') "# APEX skill`n"
+    Add-FixtureCommit $fixture @('skills/apex/SKILL.md') 'Track APEX skill'
+    Write-SyncedSeed $fixture
+    $argsForCase = Get-FixtureArgs $fixture $fixture.Root
+    $result = Invoke-TreePin (@('-Pin') + $argsForCase)
+    Assert-Equal 'synced nested script baseline pin exits 0' 0 $result.ExitCode
+    Write-Utf8File (Join-Path $fixture.Root 'skills/synced/u1/x/scripts/a.py') "print('synced')`n"
+    $result = Invoke-TreePin (@('-Verify') + $argsForCase)
+    Assert-Equal 'new nested synced script moves the tree' 69 $result.ExitCode
+
+    $fixture = New-TestFixture 'synced-deep-manifest' '.gitignore' "/skills/synced/`n/skills/synced-foo/`n"
+    Write-Utf8File (Join-Path $fixture.Root 'skills/apex/SKILL.md') "# APEX skill`n"
+    Add-FixtureCommit $fixture @('skills/apex/SKILL.md') 'Track APEX skill'
+    Write-SyncedSeed $fixture
+    $argsForCase = Get-FixtureArgs $fixture $fixture.Root
+    $result = Invoke-TreePin (@('-Pin') + $argsForCase)
+    Assert-Equal 'synced deep manifest baseline pin exits 0' 0 $result.ExitCode
+    Write-Utf8File (Join-Path $fixture.Root 'skills/synced/u1/docs/manifest.json') "{`"tooDeep`":true}`n"
+    $result = Invoke-TreePin (@('-Verify') + $argsForCase)
+    Assert-Equal 'too-deep synced manifest moves the tree' 69 $result.ExitCode
+
+    $fixture = New-TestFixture 'synced-delete-docs' '.gitignore' "/skills/synced/`n/skills/synced-foo/`n"
+    Write-Utf8File (Join-Path $fixture.Root 'skills/apex/SKILL.md') "# APEX skill`n"
+    Add-FixtureCommit $fixture @('skills/apex/SKILL.md') 'Track APEX skill'
+    Write-SyncedSeed $fixture
+    $argsForCase = Get-FixtureArgs $fixture $fixture.Root
+    $result = Invoke-TreePin (@('-Pin') + $argsForCase)
+    Assert-Equal 'synced docs deletion baseline pin exits 0' 0 $result.ExitCode
+    Remove-Item -LiteralPath (Join-Path $fixture.Root 'skills/synced/u1/docs') -Recurse -Force
+    $result = Invoke-TreePin (@('-Verify') + $argsForCase)
+    Assert-Equal 'deleting synced docs moves the tree' 69 $result.ExitCode
+
+    $fixture = New-TestFixture 'synced-near-miss-root' '.gitignore' "/skills/synced/`n/skills/synced-foo/`n"
+    Write-Utf8File (Join-Path $fixture.Root 'skills/apex/SKILL.md') "# APEX skill`n"
+    Add-FixtureCommit $fixture @('skills/apex/SKILL.md') 'Track APEX skill'
+    $argsForCase = Get-FixtureArgs $fixture $fixture.Root
+    $result = Invoke-TreePin (@('-Pin') + $argsForCase)
+    Assert-Equal 'synced near-miss root baseline pin exits 0' 0 $result.ExitCode
+    Write-Utf8File (Join-Path $fixture.Root 'skills/synced-foo/.bucket-u1') "near-miss bucket`n"
+    Write-Utf8File (Join-Path $fixture.Root 'skills/synced-foo/u1/manifest.json') "{`"nearMiss`":true}`n"
+    $result = Invoke-TreePin (@('-Verify') + $argsForCase)
+    Assert-Equal 'markers under synced-foo move the tree' 69 $result.ExitCode
+
+    $fixture = New-TestFixture 'synced-off-runtime-root' '.gitignore' "/skills/synced/`n/skills/synced-foo/`n"
+    Write-Utf8File (Join-Path $fixture.Root 'skills/apex/SKILL.md') "# APEX skill`n"
+    Add-FixtureCommit $fixture @('skills/apex/SKILL.md') 'Track APEX skill'
+    Write-SyncedSeed $fixture
+    $syncedDifferentRuntimeRoot = Join-Path $testRoot 'synced-separate-runtime-root'
+    New-Item -ItemType Directory -Path $syncedDifferentRuntimeRoot | Out-Null
+    $argsForCase = Get-FixtureArgs $fixture $syncedDifferentRuntimeRoot
+    $result = Invoke-TreePin (@('-Pin') + $argsForCase)
+    Assert-Equal 'synced off-runtime-root baseline pin exits 0' 0 $result.ExitCode
+    Write-SyncedMarkers $fixture '-rewritten-off-runtime-root-with-longer-content'
+    $result = Invoke-TreePin (@('-Verify') + $argsForCase)
+    Assert-Equal 'synced marker rewrites off the runtime root move the tree' 69 $result.ExitCode
+
+    $fixture = New-TestFixture 'synced-tracked-marker' '.gitignore' "/skills/synced/`n/skills/synced-foo/`n"
+    Write-Utf8File (Join-Path $fixture.Root 'skills/apex/SKILL.md') "# APEX skill`n"
+    Add-FixtureCommit $fixture @('skills/apex/SKILL.md') 'Track APEX skill'
+    Write-SyncedSeed $fixture
+    Add-FixtureCommit $fixture @('skills/synced/u1/manifest.json') 'Track synced manifest' -Force
+    $argsForCase = Get-FixtureArgs $fixture $fixture.Root
+    $result = Invoke-TreePin (@('-Pin') + $argsForCase)
+    Assert-Equal 'tracked synced marker baseline pin exits 0' 0 $result.ExitCode
+    Write-Utf8File (Join-Path $fixture.Root 'skills/synced/u1/manifest.json') "{`"marker`":`"tracked manifest rewritten with longer content`"}`n"
+    $result = Invoke-TreePin (@('-Verify') + $argsForCase)
+    Assert-Equal 'rewriting a tracked synced marker moves the tree' 69 $result.ExitCode
+
+    $fixture = New-TestFixture 'synced-ignored-leaves' '.gitignore' "/skills/synced/`n/skills/synced-foo/`n"
+    Write-Utf8File (Join-Path $fixture.Root 'skills/apex/SKILL.md') "# APEX skill`n"
+    Add-FixtureCommit $fixture @('skills/apex/SKILL.md') 'Track APEX skill'
+    Write-SyncedSeed $fixture
+    Add-FixtureCommit $fixture @('skills/synced/u1/docs/SKILL.md') 'Track seeded synced skill' -Force
+    $argsForCase = Get-FixtureArgs $fixture $fixture.Root
+    $result = Invoke-TreePin (@('-Pin') + $argsForCase)
+    Assert-Equal 'individual ignored marker leaves baseline pin exits 0' 0 $result.ExitCode
+    Write-SyncedMarkers $fixture '-rewritten-as-individual-ignored-leaves'
+    $result = Invoke-TreePin (@('-Verify') + $argsForCase)
+    Assert-Equal 'rewriting individual ignored marker leaves verifies unchanged' 0 $result.ExitCode
+
+    $fixture = New-TestFixture 'synced-untracked-markers' '.gitignore' ''
+    Write-Utf8File (Join-Path $fixture.Root 'skills/apex/SKILL.md') "# APEX skill`n"
+    Add-FixtureCommit $fixture @('skills/apex/SKILL.md') 'Track APEX skill'
+    $argsForCase = Get-FixtureArgs $fixture $fixture.Root
+    $result = Invoke-TreePin (@('-Pin') + $argsForCase)
+    Assert-Equal 'untracked synced markers baseline pin exits 0' 0 $result.ExitCode
+    Write-SyncedMarkers $fixture '-untracked'
+    $syncedStatusLines = @(& git -C $fixture.Root status --porcelain --ignored=traditional -- skills/synced)
+    if ($LASTEXITCODE -ne 0) { throw 'git status failed for synced-untracked-markers fixture' }
+    Assert-True 'untracked synced marker status contains only question-mark entries' (
+        $syncedStatusLines.Count -gt 0 -and
+        @($syncedStatusLines | Where-Object { $_ -notmatch '^\?\? ' }).Count -eq 0)
+    $result = Invoke-TreePin (@('-Verify') + $argsForCase)
+    Assert-Equal 'untracked synced markers move the tree' 69 $result.ExitCode
+
+    $fixture = New-TestFixture 'synced-bucket-directory' '.gitignore' "/skills/synced/`n/skills/synced-foo/`n"
+    Write-Utf8File (Join-Path $fixture.Root 'skills/apex/SKILL.md') "# APEX skill`n"
+    Add-FixtureCommit $fixture @('skills/apex/SKILL.md') 'Track APEX skill'
+    Write-Utf8File (Join-Path $fixture.Root 'skills/synced/u1/docs/SKILL.md') "# Tracked synced skill`n"
+    Add-FixtureCommit $fixture @('skills/synced/u1/docs/SKILL.md') 'Track synced skill' -Force
+    $argsForCase = Get-FixtureArgs $fixture $fixture.Root
+    $result = Invoke-TreePin (@('-Pin') + $argsForCase)
+    Assert-Equal 'bucket directory baseline pin exits 0' 0 $result.ExitCode
+    Write-Utf8File (Join-Path $fixture.Root 'skills/synced/.bucket-u1/SKILL.md') "# Not a marker file`n"
+    $result = Invoke-TreePin (@('-Verify') + $argsForCase)
+    Assert-Equal 'bucket-named directory moves the tree' 69 $result.ExitCode
+
+    $fixture = New-TestFixture 'synced-manifest-directory' '.gitignore' "/skills/synced/`n/skills/synced-foo/`n"
+    Write-Utf8File (Join-Path $fixture.Root 'skills/apex/SKILL.md') "# APEX skill`n"
+    Add-FixtureCommit $fixture @('skills/apex/SKILL.md') 'Track APEX skill'
+    Write-Utf8File (Join-Path $fixture.Root 'skills/synced/u1/docs/SKILL.md') "# Tracked synced skill`n"
+    Add-FixtureCommit $fixture @('skills/synced/u1/docs/SKILL.md') 'Track synced skill' -Force
+    $argsForCase = Get-FixtureArgs $fixture $fixture.Root
+    $result = Invoke-TreePin (@('-Pin') + $argsForCase)
+    Assert-Equal 'manifest directory baseline pin exits 0' 0 $result.ExitCode
+    Write-Utf8File (Join-Path $fixture.Root 'skills/synced/u1/manifest.json/run.ps1') "Write-Host 'not a marker file'`n"
+    $result = Invoke-TreePin (@('-Verify') + $argsForCase)
+    Assert-Equal 'manifest-named directory moves the tree' 69 $result.ExitCode
 
     # Digest is a compute-only, single-tree interface: one bare digest and no pin artifact.
     $fixture = New-TestFixture 'digest-contract' 'tracked.txt' "digest fixture`n"
@@ -402,6 +600,13 @@ try {
     $failures.Add("suite error: $($_.Exception.Message)")
     Write-Host "FAIL: suite error: $($_.Exception.Message)" -ForegroundColor Red
 } finally {
+    if ($restoreGitConfigGlobal) {
+        if ($null -eq $savedGitConfigGlobal) {
+            Remove-Item Env:GIT_CONFIG_GLOBAL -ErrorAction SilentlyContinue
+        } else {
+            $env:GIT_CONFIG_GLOBAL = $savedGitConfigGlobal
+        }
+    }
     if ((Test-Path -LiteralPath $testRoot) -and
             $testRoot.StartsWith([System.IO.Path]::GetTempPath(), [System.StringComparison]::OrdinalIgnoreCase)) {
         Remove-Item -LiteralPath $testRoot -Recurse -Force -ErrorAction SilentlyContinue

@@ -249,15 +249,21 @@ function Get-ContentHash([string]$relPath) {
         # deletes, and edits. Byte-identical with a deliberately preserved mtime is out of scope (a
         # careless coder, not a hostile one -- the gate's stated threat model).
         $parts = New-Object System.Collections.Generic.List[string]
+        $skippedRuntimeMarkers = 0
         $enumErr = $null
         foreach ($file in (Get-ChildItem -LiteralPath $full -Recurse -File -Force -ErrorAction SilentlyContinue -ErrorVariable enumErr |
                 Sort-Object FullName)) {
             $rel = $file.FullName.Substring($repo.Length).TrimStart([char]92, [char]47) -replace '\\', '/'
+            if ($applyRuntimeExclusions -and (Test-IsRuntimeMarker $rel)) {
+                $skippedRuntimeMarkers++
+                continue
+            }
             $parts.Add("$rel|$($file.Length)|$($file.LastWriteTimeUtc.Ticks)")
         }
         # A subtree we could not read must not fingerprint identically to one we could -- fold the
         # failure count in so a newly-unreadable subtree changes the hash rather than silently passing.
         if ($enumErr -and $enumErr.Count -gt 0) { $parts.Add("UNREADABLE|$($enumErr.Count)") }
+        if ($parts.Count -eq 0 -and $skippedRuntimeMarkers -gt 0) { return 'dir:runtime-markers-only' }
         if ($parts.Count -eq 0) { return 'dir:empty' }
         $sha = [System.Security.Cryptography.SHA256]::Create()
         try {
@@ -525,6 +531,28 @@ if ($EncodingScan) {
     exit 73
 }
 
+$resolvedRuntimeExclusionRoot = $null
+if (Test-Path -LiteralPath $RuntimeExclusionRoot -PathType Container) {
+    $resolvedRuntimeExclusionRoot = (Resolve-Path -LiteralPath $RuntimeExclusionRoot).Path.TrimEnd('\', '/')
+}
+$applyRuntimeExclusions = ($null -ne $resolvedRuntimeExclusionRoot -and
+    $repo.TrimEnd('\', '/').Equals($resolvedRuntimeExclusionRoot, [System.StringComparison]::OrdinalIgnoreCase))
+
+# Lockstep: identical in tree-pin.ps1 and codex-scope-check.ps1.
+$runtimeMarkerPatterns = @(
+    '^skills/synced/\.bucket-[^/]+$',
+    '^skills/synced/[^/]+/\.last-complete-round$',
+    '^skills/synced/[^/]+/manifest\.json$'
+)
+function Test-IsRuntimeMarker([string]$NormalizedPath) {
+    foreach ($pattern in $runtimeMarkerPatterns) {
+        if ([regex]::IsMatch($NormalizedPath, $pattern, [System.Text.RegularExpressions.RegexOptions]::IgnoreCase)) {
+            return $true
+        }
+    }
+    return $false
+}
+
 # ---------------------------------------------------------------------------------- SNAPSHOT
 if ($Snapshot) {
     $dirty = Get-DirtySet
@@ -681,6 +709,45 @@ function Test-IsRuntimePath([string]$NormalizedPath) {
     return $false
 }
 
+function Test-IsRuntimeMarkerFile([string]$n) {
+    if (-not (Test-IsRuntimeMarker $n)) { return $false }
+
+    $full = Join-Path $repo $n
+    if (Test-Path -LiteralPath $full -PathType Leaf) {
+        foreach ($k in $nowDirty.Keys) {
+            $rawNowPath = ([string]$k) -replace '\\', '/'
+            if ((Normalize $k) -eq $n -and $rawNowPath.EndsWith('/')) { return $false }
+        }
+        return $true
+    }
+
+    if (Test-Path -LiteralPath $full) { return $false }
+    foreach ($d in @($snap.dirty)) {
+        $rawSnapshotPath = ([string]$d) -replace '\\', '/'
+        if ((Normalize $d) -eq $n -and -not $rawSnapshotPath.EndsWith('/') -and
+                $preState.ContainsKey($n) -and ([string]$preState[$n]) -match '^work:[0-9a-f]+ index:') {
+            return $true
+        }
+    }
+    return $false
+}
+
+function Test-IsMarkerOnlyTransition([string]$n) {
+    if (-not ($n.Equals('skills', [System.StringComparison]::OrdinalIgnoreCase) -or
+            $n.Equals('skills/synced', [System.StringComparison]::OrdinalIgnoreCase) -or
+            $n.StartsWith('skills/synced/', [System.StringComparison]::OrdinalIgnoreCase))) {
+        return $false
+    }
+
+    $currentState = Get-ContentHash $n
+    if ($currentState -ne '-' -and $currentState -ne 'dir:runtime-markers-only') { return $false }
+    if (-not $preState.ContainsKey($n)) { return $true }
+
+    $snapshotState = [string]$preState[$n]
+    return ($snapshotState.StartsWith('work:dir:runtime-markers-only ', [System.StringComparison]::Ordinal) -or
+        $snapshotState.StartsWith('work:- ', [System.StringComparison]::Ordinal))
+}
+
 # Three-way name state:
 #   SANCTIONED: .codex-scratch is the only scratch directory name a coder may create.
 #   DEPRECATED-BUT-EXCLUDED: .scratch, .apex-tmp, and .sandbox-cache remain excluded only to reduce
@@ -708,12 +775,6 @@ function Test-IsDerivedCachePath([string]$NormalizedPath) {
     return $false
 }
 
-$resolvedRuntimeExclusionRoot = $null
-if (Test-Path -LiteralPath $RuntimeExclusionRoot -PathType Container) {
-    $resolvedRuntimeExclusionRoot = (Resolve-Path -LiteralPath $RuntimeExclusionRoot).Path.TrimEnd('\', '/')
-}
-$applyRuntimeExclusions = ($null -ne $resolvedRuntimeExclusionRoot -and
-    $repo.TrimEnd('\', '/').Equals($resolvedRuntimeExclusionRoot, [System.StringComparison]::OrdinalIgnoreCase))
 $applyDerivedCacheExclusions = $true
 
 $curatedFiles = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
@@ -753,7 +814,7 @@ if ($collectWritten) {
     # keep its GONE/untouched/isDirty classification line-for-line identical to this branch.
     $writtenSet = New-Object System.Collections.Generic.List[string]
     foreach ($n in $allPaths) {
-        if ($applyRuntimeExclusions -and (Test-IsRuntimePath $n) -and -not (Test-IsHostCurated $n)) {
+        if ($applyRuntimeExclusions -and -not (Test-IsHostCurated $n) -and ((Test-IsRuntimePath $n) -or (Test-IsRuntimeMarkerFile $n) -or (Test-IsMarkerOnlyTransition $n))) {
             $runtimeExcludedCount++
             continue
         }
@@ -829,7 +890,7 @@ if ($collectWritten) {
     # Lockstep sibling: the collecting branch differs only by writtenSet accumulation;
     # keep its GONE/untouched/isDirty classification line-for-line identical to this branch.
     foreach ($n in $allPaths) {
-        if ($applyRuntimeExclusions -and (Test-IsRuntimePath $n) -and -not (Test-IsHostCurated $n)) {
+        if ($applyRuntimeExclusions -and -not (Test-IsHostCurated $n) -and ((Test-IsRuntimePath $n) -or (Test-IsRuntimeMarkerFile $n) -or (Test-IsMarkerOnlyTransition $n))) {
             $runtimeExcludedCount++
             continue
         }
