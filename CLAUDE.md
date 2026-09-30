@@ -33,7 +33,8 @@ down, ask: **would a bare agent, with nothing loaded, already do this?** If yes,
 ## Git
 
 - Draft the message, show it, get approval, then commit. Record the short SHA.
-- Commit per-spec when a spec completes; sweep the remainder at session end.
+- One commit per spec, but hold the drafted messages and present them for approval together at
+  session end; sweep the remainder then too.
 - Per-task commits on transient `codex/<task-id>` worktree branches are build mechanics
   (ADR-046 D1): the draft→show→approve exchange governs integration-branch commits (per-spec,
   session-end), not those throwaway branches, which are torn down post-integration per D8.
