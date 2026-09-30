@@ -15,6 +15,8 @@ param(
     [string]$Phase,
     [ValidateSet('low', 'medium', 'high', 'xhigh', 'max', 'ultra')]
     [string]$Effort = 'medium',
+    [ValidateSet('gpt-5.6-sol', 'gpt-6-sol', IgnoreCase = $false)]
+    [string]$Model = 'gpt-5.6-sol',
     [ValidateRange(1, 16)]
     [int]$MachineCeiling = 4,
     [ValidateRange(1, 2147483647)]
@@ -50,6 +52,10 @@ param(
     [string]$NoTreePinReason,
     # Bootstrap/emergency escape: bypass the dispatch pre-flight, recorded loudly and in the ledger row.
     [switch]$SkipBaselineCheck,
+    # Enables the draft-spec authoring path while preserving the normal build safety gates.
+    [switch]$AuthorSpec,
+    # Binds a revise dispatch to the caller-observed git object id of the existing draft.
+    [string]$ExpectedDigest,
     # -CriticalFilesConfirmed is set ONLY by the apex-code skill's Layer A step after a real attended
     # human confirmation -- a spec's `## Permissions` text never sets it.
     # -CriticalFilesConfirmedNote carries a free-text who/when string for the ledger.
@@ -83,6 +89,71 @@ $ErrorActionPreference = 'Stop'
 $script:pendingExitCode = 'unknown'
 $script:abandonRequested = $PSBoundParameters.ContainsKey('AbandonRunId')
 $script:attendedTelemetry = $(if ($PSBoundParameters.ContainsKey('Attended')) { [bool]$Attended } else { $null })
+$script:authorMode = ''
+
+if (-not [string]::IsNullOrEmpty($ExpectedDigest) -and -not $AuthorSpec) {
+    Write-Host '[dispatch] REFUSED (exit 74): -ExpectedDigest is only valid with -AuthorSpec' -ForegroundColor Red
+    exit 74
+}
+if (-not $AuthorSpec -and -not $Adopt -and -not $ListObligations -and
+        -not $PSBoundParameters.ContainsKey('AbandonRunId') -and
+        $Phase -ceq 'build' -and $Task -ieq 'author') {
+    Write-Host '[dispatch] REFUSED (exit 74): -Task author is reserved for -AuthorSpec dispatches' -ForegroundColor Red
+    exit 74
+}
+if ($AuthorSpec) {
+    $authorConflict = $null
+    foreach ($candidate in @(
+            @{ Present = [bool]$Adopt; Name = '-Adopt' },
+            @{ Present = $PSBoundParameters.ContainsKey('AbandonRunId'); Name = '-AbandonRunId' },
+            @{ Present = [bool]$ListObligations; Name = '-ListObligations' },
+            @{ Present = [bool]$SkipBaselineCheck; Name = '-SkipBaselineCheck' },
+            @{ Present = [bool]$ScopeUnlocked; Name = '-ScopeUnlocked' },
+            @{ Present = [bool]$AllowSharedWorktree; Name = '-AllowSharedWorktree' }
+        )) {
+        if ($candidate.Present) {
+            $authorConflict = $candidate.Name
+            break
+        }
+    }
+    if ($authorConflict) {
+        Write-Host "[dispatch] REFUSED (exit 74): -AuthorSpec cannot be combined with $authorConflict" -ForegroundColor Red
+        exit 74
+    }
+
+    if (($PSBoundParameters.ContainsKey('Phase') -and $Phase -cne 'build') -or
+            ($PSBoundParameters.ContainsKey('Schema') -and $Schema -cne 'completion') -or
+            ($PSBoundParameters.ContainsKey('Sandbox') -and $Sandbox -cne 'workspace-write')) {
+        Write-Host "[dispatch] REFUSED (exit 74): -AuthorSpec implies -Phase build -Schema completion -Sandbox workspace-write (got '$Phase/$Schema/$Sandbox')" -ForegroundColor Red
+        exit 74
+    }
+    if (-not ($Task -ieq 'author')) {
+        Write-Host "[dispatch] REFUSED (exit 74): -AuthorSpec requires -Task author (got '$Task')" -ForegroundColor Red
+        exit 74
+    }
+    if ($Authorized.Count -ne 1) {
+        Write-Host "[dispatch] REFUSED (exit 74): -AuthorSpec requires exactly one -Authorized path (got $($Authorized.Count))" -ForegroundColor Red
+        exit 74
+    }
+    if ($Authorized[0] -cnotmatch '^docs/drafts/[a-z0-9-]+\.md\z') {
+        Write-Host "[dispatch] REFUSED (exit 74): -AuthorSpec path '$($Authorized[0])' must match ^docs/drafts/[a-z0-9-]+\.md\z" -ForegroundColor Red
+        exit 74
+    }
+    $authorDraftName = [System.IO.Path]::GetFileNameWithoutExtension($Authorized[0])
+    if ($Spec -cne $authorDraftName) {
+        Write-Host "[dispatch] REFUSED (exit 74): -AuthorSpec requires -Spec to equal the draft name '$authorDraftName' (got '$Spec')" -ForegroundColor Red
+        exit 74
+    }
+    if (-not [string]::IsNullOrEmpty($ExpectedDigest) -and
+            $ExpectedDigest -cnotmatch '^([0-9a-f]{40}|[0-9a-f]{64})\z') {
+        Write-Host "[dispatch] REFUSED (exit 74): -ExpectedDigest '$ExpectedDigest' is not a lowercase hex git object id" -ForegroundColor Red
+        exit 74
+    }
+
+    $Phase = 'build'
+    $Schema = 'completion'
+    $Sandbox = 'workspace-write'
+}
 
 if (-not $ListObligations) {
 # Exit 74 = caller-contract error, refused before any I/O; no state dir touched.
@@ -298,6 +369,51 @@ function Get-SpecFrontmatterValue {
     }
 
     return $null
+}
+
+function Invoke-AuthorGit {
+    param([Parameter(Mandatory)][string[]]$GitArgs)
+
+    $previousErrorActionPreference = $ErrorActionPreference
+    $output = @()
+    $launchError = $null
+    $global:LASTEXITCODE = -987654
+    try {
+        $ErrorActionPreference = 'Continue'
+        try {
+            $output = @(& git -C $Worktree @GitArgs 2>$null)
+        }
+        catch {
+            $launchError = $_.Exception.Message
+        }
+        $exitCode = $global:LASTEXITCODE
+    }
+    finally {
+        $ErrorActionPreference = $previousErrorActionPreference
+    }
+
+    return [pscustomobject]@{
+        ExitCode = $exitCode
+        Output = @($output)
+        LaunchError = $launchError
+    }
+}
+
+function Assert-AuthorNoReparse {
+    foreach ($p in @('docs', 'docs/drafts', $authorPath)) {
+        $pFull = Join-Path $Worktree ($p -replace '/', '\')
+        try {
+            $attributes = [System.IO.File]::GetAttributes($pFull)
+        }
+        catch {
+            $attributes = $null
+        }
+        if ($null -ne $attributes -and
+                ($attributes -band [System.IO.FileAttributes]::ReparsePoint)) {
+            Write-DispatchRefusalLine -Message "[dispatch] REFUSED (exit 74): -AuthorSpec path '$p' is a reparse point (symlink or junction) -- refusing to author through it"
+            Exit-Dispatch 74
+        }
+    }
 }
 
 function ConvertTo-ProcessArgument {
@@ -2295,9 +2411,12 @@ function Invoke-Adopt {
     $adoptScopeExit = 0
     $adoptScript = Join-Path $PSScriptRoot 'codex-scope-check.ps1'
     $adoptIsBuildPhase = ($adoptPhase -ceq 'build')
+    $adoptIsAuthor = ((@($match.PSObject.Properties.Name) -ccontains 'dispatch_kind') -and
+        [string]$match.dispatch_kind -ceq 'author')
     $adoptGates = $null
     $adoptCriticalViolation = $null
     $adoptScopeCheckText = $null
+    $adoptWrittenPathsFile = Join-Path $harnessStateDir "written-$([string]$match.run_id).txt"
     if ($match.scope_armed -and -not (Test-Path $adoptScript)) {
         Exit-AdoptDispatchFailure -Match $match `
             -Message "This run armed a scope check, but codex-scope-check.ps1 is missing ($adoptScript). Refusing to adopt: an armed gate that cannot run must not be silently skipped." `
@@ -2355,6 +2474,36 @@ function Invoke-Adopt {
         }
         if ($adoptScopeExit -ne 0) {
             Write-Host "[adopt] The adopted run wrote OUTSIDE its authorized set (scope exit $adoptScopeExit)." -ForegroundColor Red
+        }
+    }
+
+    if ($adoptIsAuthor) {
+        if (-not (Test-Path -LiteralPath $adoptWrittenPathsFile)) {
+            $adoptAuthorWritten = @()
+        }
+        else {
+            $adoptAuthorWritten = @(Get-Content -LiteralPath $adoptWrittenPathsFile -Encoding UTF8 |
+                Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
+        }
+
+        $adoptAuthorized = @($match.authorized)
+        $adoptAuthorPath = if ($adoptAuthorized.Count -eq 1) { [string]$adoptAuthorized[0] } else { '' }
+        $adoptAuthorFull = if ($adoptAuthorPath) {
+            Join-Path $adoptWorktree ($adoptAuthorPath -replace '/', '\')
+        }
+        else {
+            $null
+        }
+        $adoptAuthorWriteIsExact = ($adoptAuthorized.Count -eq 1 -and
+            -not [string]::IsNullOrWhiteSpace($adoptAuthorPath) -and
+            @($adoptAuthorWritten).Count -eq 1 -and
+            @($adoptAuthorWritten)[0] -ceq $adoptAuthorPath -and
+            (Test-Path -LiteralPath $adoptAuthorFull -PathType Leaf) -and
+            -not ((Get-Item -LiteralPath $adoptAuthorFull -Force).Attributes -band [System.IO.FileAttributes]::ReparsePoint))
+        if (-not $adoptAuthorWriteIsExact) {
+            $adoptAuthorWrittenText = if (@($adoptAuthorWritten).Count -eq 0) { '(none)' } else { @($adoptAuthorWritten) -join ', ' }
+            Write-Host "[dispatch] AUTHOR SCOPE VIOLATION: an -AuthorSpec run must leave exactly one regular file at '$adoptAuthorPath' (written set: $adoptAuthorWrittenText)" -ForegroundColor Red
+            if ($adoptScopeExit -eq 0) { $adoptScopeExit = 65 }
         }
     }
 
@@ -2557,6 +2706,84 @@ if (-not (Test-Path -LiteralPath $schemaPath -PathType Leaf)) {
 if ($Phase -eq 'build' -and $Sandbox -eq 'workspace-write' -and $Authorized.Count -eq 0 -and -not $ScopeUnlocked) {
     Write-DispatchRefusalLine -Message '[dispatch] REFUSED (exit 74): workspace-write build has no -Authorized scope list — pass the spec''s ''## Files to change'' list, or -ScopeUnlocked -ScopeUnlockedReason "<why>" to bypass'
     Exit-Dispatch 74
+}
+
+if ($AuthorSpec) {
+    $authorPath = $Authorized[0]
+    $authorFull = Join-Path $Worktree ($authorPath -replace '/', '\')
+
+    Assert-AuthorNoReparse
+
+    $trackedDrafts = Invoke-AuthorGit -GitArgs @('ls-files', '--', 'docs/drafts/')
+    if ($null -ne $trackedDrafts.LaunchError -or
+            $trackedDrafts.ExitCode -eq -987654 -or $trackedDrafts.ExitCode -ne 0) {
+        $gitFailure = if ($null -ne $trackedDrafts.LaunchError) {
+            "launch failed: $($trackedDrafts.LaunchError)"
+        }
+        else {
+            "exit $($trackedDrafts.ExitCode)"
+        }
+        Write-DispatchRefusalLine -Message "[dispatch] REFUSED (exit 74): -AuthorSpec could not verify 'docs/drafts/' with git ($gitFailure) -- failing closed"
+        Exit-Dispatch 74
+    }
+    if ([string]::IsNullOrWhiteSpace((@($trackedDrafts.Output) -join [Environment]::NewLine))) {
+        Write-DispatchRefusalLine -Message "[dispatch] REFUSED (exit 74): -AuthorSpec needs at least one tracked file under docs/drafts/ in '$Worktree' -- an all-untracked docs/drafts/ collapses in git status; commit a placeholder first"
+        Exit-Dispatch 74
+    }
+
+    if (-not (Test-Path -LiteralPath $authorFull)) {
+        if (-not [string]::IsNullOrEmpty($ExpectedDigest)) {
+            Write-DispatchRefusalLine -Message "[dispatch] REFUSED (exit 74): -AuthorSpec revise target '$authorPath' does not exist -- omit -ExpectedDigest to create it"
+            Exit-Dispatch 74
+        }
+
+        $trackedTarget = Invoke-AuthorGit -GitArgs @('ls-files', '--', $authorPath)
+        if ($null -ne $trackedTarget.LaunchError -or
+                $trackedTarget.ExitCode -eq -987654 -or $trackedTarget.ExitCode -ne 0) {
+            $gitFailure = if ($null -ne $trackedTarget.LaunchError) {
+                "launch failed: $($trackedTarget.LaunchError)"
+            }
+            else {
+                "exit $($trackedTarget.ExitCode)"
+            }
+            Write-DispatchRefusalLine -Message "[dispatch] REFUSED (exit 74): -AuthorSpec could not verify '$authorPath' with git ($gitFailure) -- failing closed"
+            Exit-Dispatch 74
+        }
+        if (-not [string]::IsNullOrWhiteSpace((@($trackedTarget.Output) -join [Environment]::NewLine))) {
+            Write-DispatchRefusalLine -Message "[dispatch] REFUSED (exit 74): -AuthorSpec create target '$authorPath' is tracked in git -- restore it and pass -ExpectedDigest to revise, or pick a new name"
+            Exit-Dispatch 74
+        }
+        $script:authorMode = 'create'
+    }
+    else {
+        if (-not (Test-Path -LiteralPath $authorFull -PathType Leaf)) {
+            Write-DispatchRefusalLine -Message "[dispatch] REFUSED (exit 74): -AuthorSpec target '$authorPath' exists but is not a file"
+            Exit-Dispatch 74
+        }
+        if ([string]::IsNullOrEmpty($ExpectedDigest)) {
+            Write-DispatchRefusalLine -Message "[dispatch] REFUSED (exit 74): -AuthorSpec target '$authorPath' already exists -- a revise dispatch requires -ExpectedDigest <git hash-object output>"
+            Exit-Dispatch 74
+        }
+
+        $digestResult = Invoke-AuthorGit -GitArgs @('hash-object', '--', $authorPath)
+        if ($null -ne $digestResult.LaunchError -or
+                $digestResult.ExitCode -eq -987654 -or $digestResult.ExitCode -ne 0) {
+            $gitFailure = if ($null -ne $digestResult.LaunchError) {
+                "launch failed: $($digestResult.LaunchError)"
+            }
+            else {
+                "exit $($digestResult.ExitCode)"
+            }
+            Write-DispatchRefusalLine -Message "[dispatch] REFUSED (exit 74): -AuthorSpec could not verify '$authorPath' with git ($gitFailure) -- failing closed"
+            Exit-Dispatch 74
+        }
+        $actual = ((@($digestResult.Output) -join [Environment]::NewLine).Trim())
+        if ($actual -cne $ExpectedDigest) {
+            Write-DispatchRefusalLine -Message "[dispatch] REFUSED (exit 74): -AuthorSpec revise target '$authorPath' digest $actual does not match -ExpectedDigest $ExpectedDigest"
+            Exit-Dispatch 74
+        }
+        $script:authorMode = 'revise'
+    }
 }
 
 $worktreeKey = Get-WorktreeKey $Worktree
@@ -2974,10 +3201,11 @@ if ($script:capacityRefusal) {
                 Exit-Dispatch 72
             }
 
-            # Nested Join-Path calls preserve Windows PowerShell 5.1 compatibility.
-            $specDirectory = Join-Path $Worktree 'docs\changes'
-            $specFile = Join-Path $specDirectory "$Spec.md"
-            if (Test-Path -LiteralPath $specFile -PathType Leaf) {
+            if (-not $AuthorSpec) {
+                # Nested Join-Path calls preserve Windows PowerShell 5.1 compatibility.
+                $specDirectory = Join-Path $Worktree 'docs\changes'
+                $specFile = Join-Path $specDirectory "$Spec.md"
+                if (Test-Path -LiteralPath $specFile -PathType Leaf) {
                 $specFindings = @(& $preflightSpecValidateScript -SpecPath $specFile)
                 $specValidateExit = $LASTEXITCODE
                 foreach ($finding in $specFindings) { Write-Host $finding }
@@ -3112,6 +3340,56 @@ if ($script:capacityRefusal) {
                     }
                     Exit-Dispatch 81
                 }
+                }
+            }
+            else {
+                Assert-AuthorNoReparse
+
+                if ($script:authorMode -ceq 'revise') {
+                    $digestResult = Invoke-AuthorGit -GitArgs @('hash-object', '--', $authorPath)
+                    if ($null -ne $digestResult.LaunchError -or
+                            $digestResult.ExitCode -eq -987654 -or $digestResult.ExitCode -ne 0) {
+                        $gitFailure = if ($null -ne $digestResult.LaunchError) {
+                            "launch failed: $($digestResult.LaunchError)"
+                        }
+                        else {
+                            "exit $($digestResult.ExitCode)"
+                        }
+                        Write-DispatchRefusalLine -Message "[dispatch] REFUSED (exit 74): -AuthorSpec could not verify '$authorPath' with git ($gitFailure) -- failing closed"
+                        Exit-Dispatch 74
+                    }
+                    $actual = ((@($digestResult.Output) -join [Environment]::NewLine).Trim())
+                    if ($actual -cne $ExpectedDigest) {
+                        Write-DispatchRefusalLine -Message "[dispatch] REFUSED (exit 74): -AuthorSpec revise target '$authorPath' changed before the pre-flight pin armed (digest $actual, expected $ExpectedDigest)"
+                        Exit-Dispatch 74
+                    }
+                }
+                elseif ($script:authorMode -ceq 'create') {
+                    if (Test-Path -LiteralPath $authorFull) {
+                        Write-DispatchRefusalLine -Message "[dispatch] REFUSED (exit 74): -AuthorSpec create target '$authorPath' appeared before the pre-flight pin armed"
+                        Exit-Dispatch 74
+                    }
+
+                    $trackedTarget = Invoke-AuthorGit -GitArgs @('ls-files', '--', $authorPath)
+                    if ($null -ne $trackedTarget.LaunchError -or
+                            $trackedTarget.ExitCode -eq -987654 -or $trackedTarget.ExitCode -ne 0) {
+                        $gitFailure = if ($null -ne $trackedTarget.LaunchError) {
+                            "launch failed: $($trackedTarget.LaunchError)"
+                        }
+                        else {
+                            "exit $($trackedTarget.ExitCode)"
+                        }
+                        Write-DispatchRefusalLine -Message "[dispatch] REFUSED (exit 74): -AuthorSpec could not verify '$authorPath' with git ($gitFailure) -- failing closed"
+                        Exit-Dispatch 74
+                    }
+                    if (-not [string]::IsNullOrWhiteSpace((@($trackedTarget.Output) -join [Environment]::NewLine))) {
+                        Write-DispatchRefusalLine -Message "[dispatch] REFUSED (exit 74): -AuthorSpec create target '$authorPath' appeared before the pre-flight pin armed"
+                        Exit-Dispatch 74
+                    }
+                }
+
+                $baselineSkipped = $true
+                Write-Host '[dispatch] -AuthorSpec: spec, baseline and frontmatter pre-flight steps skipped; tree pin, critical-file check and scope check stay armed' -ForegroundColor Yellow
             }
         }
     }
@@ -3131,7 +3409,7 @@ try {
 } finally {
     $ErrorActionPreference = $previous
 }
-$coderModel = 'gpt-5.6-sol'
+$coderModel = $Model
 $ledgerRow = [ordered]@{
     run_id = $runId
     pid = $null
@@ -3170,6 +3448,9 @@ $ledgerRow = [ordered]@{
     tree_pin_override = ([bool]$TreePinScript -and [bool]$ReviewedRunId)
     critical_files_confirmed = [bool]$CriticalFilesConfirmed
     critical_files_confirmed_note = $(if ($CriticalFilesConfirmed) { $CriticalFilesConfirmedNote } else { '' })
+    model = $coderModel
+    dispatch_kind = $(if ($AuthorSpec) { 'author' } else { '' })
+    author_mode = $script:authorMode
     builder_family = $(if ($Phase -eq 'build') { Get-ModelFamily $coderModel } else { '' })
     reviewer_family = $(if ($Phase -eq 'review' -or $Schema -eq 'review' -or $Schema -eq 'endgate') { Get-ModelFamily $coderModel } else { '' })
     reviewed_run_id = $(if ($Phase -eq 'review' -or $Schema -eq 'review' -or $Schema -eq 'endgate') { $ReviewedRunId } else { '' })
@@ -3881,6 +4162,27 @@ try {
             $scopeCheckThrew = $true
             $scopeCheckErrorNote = "scope_check_error: $($_.Exception.Message)"
             Write-Host "[dispatch] $scopeCheckErrorNote" -ForegroundColor Yellow
+        }
+    }
+
+    if ($AuthorSpec -and -not $scopeCheckThrew) {
+        if (-not (Test-Path -LiteralPath $writtenPathsFile)) {
+            $authorWritten = @()
+        }
+        else {
+            $authorWritten = @(Get-Content -LiteralPath $writtenPathsFile -Encoding UTF8 |
+                Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
+        }
+
+        $authorWriteIsExact = (@($authorWritten).Count -eq 1 -and
+            @($authorWritten)[0] -ceq $authorPath -and
+            (Test-Path -LiteralPath $authorFull -PathType Leaf) -and
+            -not ((Get-Item -LiteralPath $authorFull -Force).Attributes -band [System.IO.FileAttributes]::ReparsePoint))
+        if (-not $authorWriteIsExact) {
+            $authorWrittenText = if (@($authorWritten).Count -eq 0) { '(none)' } else { @($authorWritten) -join ', ' }
+            Write-Host "[dispatch] AUTHOR SCOPE VIOLATION: an -AuthorSpec run must leave exactly one regular file at '$authorPath' (written set: $authorWrittenText)" -ForegroundColor Red
+            $scopeViolation = $true
+            if ($scopeExit -eq 0) { $scopeExit = 65 }
         }
     }
 

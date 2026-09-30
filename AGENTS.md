@@ -16,6 +16,9 @@ powershell.exe -NoProfile -File skills/apex-code/scripts/baseline-check-test.ps1
 powershell.exe -NoProfile -File skills/apex-code/scripts/spec-validate-test.ps1
 powershell.exe -NoProfile -File skills/apex-code/scripts/dispatch-preflight-test.ps1
 powershell.exe -NoProfile -File skills/apex-code/scripts/dispatch-events-test.ps1
+powershell.exe -NoProfile -File skills/apex-code/scripts/tree-pin-test.ps1
+powershell.exe -NoProfile -File skills/apex-code/scripts/scope-check-test.ps1
+powershell.exe -NoProfile -File skills/apex-code/scripts/dispatch-author-test.ps1
 ```
 
 ## Preflight commands

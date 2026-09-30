@@ -9,6 +9,12 @@
 # how the exit-code-is-the-verdict bug survived. Set FAKE_CODEX_STATUS to drive the reported status
 # ('done' | 'done_with_concerns' | 'blocked'), or FAKE_CODEX_NO_REPORT=1 to write nothing at all
 # (the real 0xc0000142 shape: the process exits 0 having failed to produce a verdict).
+# FAKE_CODEX_ARGV_FILE writes the fake's argv one element per line to the named file.
+# FAKE_CODEX_AUTHOR_PATH enables author mode and names its repo-relative draft path.
+# FAKE_CODEX_AUTHOR_NO_WRITE=1 makes author mode leave the draft path untouched.
+# FAKE_CODEX_AUTHOR_AS_DIR=1 makes author mode create the draft path as a directory.
+# FAKE_CODEX_AUTHOR_AS_SYMLINK names the absolute out-of-repo target for an author-path symlink.
+# FAKE_CODEX_AUTHOR_FAIL_EXIT makes author mode write no report and exit with the named code.
 # NO param() block, deliberately. Declaring one with [Parameter(ValueFromRemainingArguments)] makes
 # this an ADVANCED function, which enables PowerShell's partial matching of common parameters -- and
 # then `-o <path>` (which the dispatcher really does pass) dies with "the parameter name 'o' is
@@ -29,6 +35,75 @@ if ($prompt -match 'STANDING SCOPE LOCK') { Write-Output "FAKE-CODEX: scope lock
 $repo = $env:FAKE_CODEX_REPO
 if (-not $repo) { Write-Output "FAKE-CODEX: FAIL - FAKE_CODEX_REPO unset"; exit 1 }
 Set-Location $repo
+
+if ($env:FAKE_CODEX_ARGV_FILE) {
+    [System.IO.File]::WriteAllLines($env:FAKE_CODEX_ARGV_FILE, [string[]]$PassThruArgs,
+        [System.Text.UTF8Encoding]::new($false))
+}
+
+if ($env:FAKE_CODEX_AUTHOR_PATH) {
+    $authorPath = Join-Path $repo $env:FAKE_CODEX_AUTHOR_PATH
+    if ($env:FAKE_CODEX_AUTHOR_NO_WRITE -eq '1') {
+        # Deliberately leave the author path untouched.
+    } elseif ($env:FAKE_CODEX_AUTHOR_AS_DIR -eq '1') {
+        [System.IO.Directory]::CreateDirectory($authorPath) | Out-Null
+        [System.IO.File]::WriteAllText((Join-Path $authorPath 'inner.md'), 'fake author directory',
+            [System.Text.UTF8Encoding]::new($false))
+    } elseif ($env:FAKE_CODEX_AUTHOR_AS_SYMLINK) {
+        Set-Content -LiteralPath $env:FAKE_CODEX_AUTHOR_AS_SYMLINK -Value 'fake symlink target' -NoNewline `
+            -Encoding UTF8 -ErrorAction Stop
+        $authorParent = Split-Path $authorPath -Parent
+        New-Item -ItemType Directory -Path $authorParent -Force -ErrorAction Stop | Out-Null
+        & cmd.exe /c mklink "`"$authorPath`"" "`"$($env:FAKE_CODEX_AUTHOR_AS_SYMLINK)`""
+        if ($LASTEXITCODE -ne 0) {
+            Write-Output "FAKE-CODEX: FAIL - mklink exit $LASTEXITCODE"
+            exit 1
+        }
+    } else {
+        $authorParent = Split-Path $authorPath -Parent
+        [System.IO.Directory]::CreateDirectory($authorParent) | Out-Null
+        $authorText = "---`nspec: fake-author`n---`n# Spec: fake author draft`n"
+        [System.IO.File]::WriteAllText($authorPath, $authorText,
+            [System.Text.UTF8Encoding]::new($false))
+    }
+
+    if ($env:FAKE_CODEX_EXTRA_WRITE) {
+        foreach ($extraWrite in ($env:FAKE_CODEX_EXTRA_WRITE -split ';')) {
+            if ($extraWrite) {
+                $extraWritePath = Join-Path $repo $extraWrite
+                $extraWriteParent = Split-Path $extraWritePath -Parent
+                if ($extraWriteParent) {
+                    [System.IO.Directory]::CreateDirectory($extraWriteParent) | Out-Null
+                }
+                Add-Content -LiteralPath $extraWritePath -Value 'codex extra write'
+            }
+        }
+    }
+
+    if ($env:FAKE_CODEX_AUTHOR_FAIL_EXIT) {
+        Write-Output 'FAKE-CODEX: author fail exit'
+        exit ([int]$env:FAKE_CODEX_AUTHOR_FAIL_EXIT)
+    }
+
+    if ($env:FAKE_CODEX_NO_REPORT -ne '1') {
+        $authorFinalPath = $null
+        for ($i = 0; $i -lt $PassThruArgs.Count - 1; $i++) {
+            if ($PassThruArgs[$i] -eq '-o') { $authorFinalPath = $PassThruArgs[$i + 1]; break }
+        }
+        if ($authorFinalPath) {
+            $authorReport = [ordered]@{
+                status = 'done'; changed_files = @($env:FAKE_CODEX_AUTHOR_PATH)
+                commands_run = @(@{ command = 'pytest'; result = 'pass'; detail = $null })
+                deviations = @(); unresolved = @(); blocker = $null
+            }
+            [System.IO.File]::WriteAllText($authorFinalPath,
+                ($authorReport | ConvertTo-Json -Depth 8), [System.Text.UTF8Encoding]::new($false))
+        }
+    }
+
+    Write-Output 'FAKE-CODEX: author write'
+    exit 0
+}
 
 Add-Content -Path 'src/a.py'       -Value 'codex authorized change'   # in scope   -> keep
 

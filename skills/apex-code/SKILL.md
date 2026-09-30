@@ -1,7 +1,7 @@
 ---
 skill: apex-code
-version: 2.17.0
-last_updated: 2026-08-02
+version: 2.18.0
+last_updated: 2026-09-30
 sources:
   - docs/technical/adr/ADR-027-codex-primary-opus-fallback-deepseek-archived.md
   - docs/technical/adr/ADR-028-parallel-codex-dispatch.md
@@ -364,9 +364,10 @@ never changed, only what was inside it, so a `git status` check would have seen 
    resolve before "complete"; only one -> decisions table, human adjudication. If Codex is still
    unavailable after Claude-fallback builds, a diff-bound attended human review substitutes for the
    unavailable cross-family review (ADR-042); a same-family Claude review remains advisory.
-   `apex-family-gate.ps1` enforces this substitution at completion, not prose alone. The wrapper
-   hardwires `gpt-5.6-sol` and has no `-CoderModel` parameter, so every wrapper-dispatched build or
-   review is family `openai`; ledger family fields describe what it launched, not a caller's claim.
+   `apex-family-gate.ps1` enforces this substitution at completion, not prose alone. The wrapper's
+   `-Model` parameter admits only OpenAI models (`gpt-5.6-sol`, the default, and `gpt-6-sol`), so every
+   wrapper-dispatched build, review or `-AuthorSpec` run is family `openai`; ledger family fields
+   describe what it launched, not a caller's claim.
 3. **AFK only:** the standing end-of-run **Opus** adversarial pass over `run_base_sha..HEAD` —
    read-only, advisory (`references/afk-endgate.md`). Opus, not Sol: Sol is the coder, and the one
    review that runs with nobody watching must not be self-review. Lenses →
