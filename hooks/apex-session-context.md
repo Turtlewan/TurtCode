@@ -27,13 +27,13 @@ host's job. Everything else dispatches.
 
 | Role | Who |
 |------|-----|
-| Host -- reason, plan, challenge only | this session (Fable 5). Dispatches everything below; makes no mechanical edits and writes no code. |
-| Spec author | Opus -- a `model: opus` worker drafts specs/ADRs from the host's plan |
-| Build orchestrator | Opus 5 -- the dispatched `apex-build-orchestrator` agent owns the BUILD PHASE of an ATTENDED build: task selection, wave sequencing, dispatch parameters, exit-code routing, verify adjudication, integration order (owner amendment 2026-07-29; v1 shipped 2026-08-02). Close-out and unattended/AFK builds stay HOST-executed per `~/.claude/skills/apex-code/SKILL.md`. |
+| Host -- reason, plan, challenge only | this session (Opus 5.5, medium effort). Dispatches everything below; makes no mechanical edits and writes no code. |
+| Spec author | gpt-6-sol via the wrapper's `-AuthorSpec` (apex-plan, Writing the spec; ADR-048) |
+| Build orchestrator | Opus 5.5 -- the dispatched `apex-build-orchestrator` agent owns the BUILD PHASE of an ATTENDED build: task selection, wave sequencing, dispatch parameters, exit-code routing, verify adjudication, integration order (owner amendment 2026-07-29; v1 shipped 2026-08-02). Close-out and unattended/AFK builds stay HOST-executed per `~/.claude/skills/apex-code/SKILL.md`. |
 | Coder | Codex `gpt-5.6-sol` -- dispatched per task as a `codex exec` subprocess (own auth, own quota; spends none of the Anthropic pool). Fallback on quota-out: Sonnet 5. |
-| Checker | cross-family, both directions (ADR-032/034) -- Codex checks the host's plans/specs; Claude reviews Codex's code. An agent never reviews its own output. |
+| Checker | Cross-family, both directions: the gpt-5.6-sol pre-draft architecture pass checks the host's (Claude) plans; Claude (apex-spec-reviewer) reviews gpt-6-sol-authored specs; Claude reviews Codex's code. The gpt-5.6-sol cold read of a Sol-authored spec is an independent (same-family) read. An agent never reviews its own output. |
 
-The session model is Fable 5 (expensive, capped share of the weekly pool). A dispatch that omits
+The session model is Opus 5.5 at medium effort. A dispatch that omits
 `model:` inherits it -- always pin the model explicitly; never use fork-type subagents for
 mechanical work (forks always inherit the session model).
 
