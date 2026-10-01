@@ -1,7 +1,7 @@
 # Model-routing build planning — full rubric
 
-**Pin every Claude-side dispatch.** The session model is Fable 5 (expensive) — an `Agent`/`Task`
-dispatch that omits `model:` silently inherits it, not the cheap default, so always pass `model:`
+**Pin every Claude-side dispatch.** The session model is Opus 5.5 at medium effort — an `Agent`/`Task`
+dispatch that omits `model:` inherits Opus 5.5, not the cheap default, so always pass `model:`
 explicitly. Never route mechanical work through a `fork`-type subagent — forks always inherit the
 session model regardless of any pin.
 
@@ -11,8 +11,8 @@ session-79b; ADR-045) the menu is `{codex, sonnet}` and routing **collapses**: C
 coder for every task; **Sonnet 5** is reached only through the three fallback triggers
 (quota-out/unavailable · whole-spec `coder_model: sonnet` pin · terminal verify-failure routing by
 the executor). There is no per-task cost/complexity routing, and the fallback is not a proactive
-choice. Opus keeps the spec-author, build-orchestrator, and high-risk-reviewer roles — it is not a
-coder.
+choice. Specs are authored by gpt-6-sol through the wrapper's `-AuthorSpec` (apex-plan, Writing the
+spec; ADR-048). Opus keeps the build-orchestrator and high-risk-reviewer roles; it is not a coder.
 
 ## Legacy `coder_tier_policy` / DeepSeek tiers — ARCHIVED (ADR-027)
 The old DeepSeek Flash/Pro tiers and the `flash < pro < codex` cost-routing are archived (recoverable,

@@ -1,7 +1,7 @@
-﻿---
+---
 skill: apex-plan
-version: 2.4.1
-last_updated: 2026-08-02
+version: 2.5.0
+last_updated: 2026-10-01
 sources:
   - docs/technical/adr/ADR-010-multi-pass-review.md
   - docs/technical/adr/ADR-011-instinct-loop-no-engine.md
@@ -13,6 +13,7 @@ sources:
   - docs/technical/adr/ADR-032-gpt56-role-split.md
   - docs/technical/adr/ADR-036-remove-knowledge-layer.md
   - docs/technical/adr/ADR-037-three-context-files.md
+  - docs/technical/adr/ADR-048-role-redesign.md
 staleness_threshold: 30d
 description: >
   Use when planning â€” turning requirements into docs/changes specs. Triggers: plan /
@@ -35,7 +36,8 @@ the traps that only surface on a second pass.
 1. Read `docs/status.md` â€” In-Flight, Pending Specs, Open Questions.
 2. Read `docs/drafts/` â€” unfinished specs (`*.review.log` sidecars are review-round records, not drafts).
 3. Check `docs/progress/*.md` â€” capture-at-halt records from blocked builds. Each must be **drained**:
-   patch the spec in place, or pull it back to `docs/drafts/`. Delete the record once drained.
+   pull the spec back to `docs/drafts/` and apply the fixes through an `-AuthorSpec` revise
+   dispatch (see Writing the spec). Delete the record once drained.
 4. Read the latest `docs/handoff/*.md` â€” see Â§ Drain the handoff.
 5. Run the doc-coverage check (below).
 6. Acknowledge: "{n} pending spec(s): {list}. Flags from last build: {or none}. Doc coverage:
@@ -111,11 +113,64 @@ answer BEFORE any spec-author dispatch. Adjudicate its findings into the plan be
 never replaces the post-readiness cold read below, and that read never sees its output.
 
 Template: `~/.claude/skills/apex-orchestrate/templates/spec-template.md`.
-**You do not draft it yourself (ADR-045).** Resolve the open decisions, then dispatch a `model: opus`
-spec-author worker with the plan, the template path, and the target path
-`docs/drafts/{short-name}.md` â€” never straight to `docs/changes/`. The author drafts; you review its
-draft against the rules below and the readiness gate. The rest of this section is the contract you
-hand the author and grade against.
+**You do not draft it yourself (ADR-045, ADR-048).** Resolve the open decisions, then dispatch the
+spec author: gpt-6-sol through the wrapper's author mode. The host assembles a prompt pack (`$pack`)
+containing the adjudicated plan brief, the exact template path
+`~/.claude/skills/apex-orchestrate/templates/spec-template.md`, the target
+`docs/drafts/<short-name>.md` (never straight to `docs/changes/`), and the three rules below (no why
+inline except Intent, mechanism in each task, one concern per task). For an absent draft, create:
+
+```powershell
+& "$env:USERPROFILE\.claude\skills\apex-code\scripts\codex-dispatch.ps1" -AuthorSpec -Model gpt-6-sol -Task author -Spec <short-name> -Authorized "docs/drafts/<short-name>.md" -Worktree <repo> -BaseSha <HEAD> -Effort high -Prompt $pack
+```
+
+A zero exit means the wrapper left exactly that one regular draft file. The author drafts; you
+review its draft against the rules below and the readiness gate. The rest of this section is the
+contract you hand the author and grade against.
+
+**Every later write to an existing draft is a new author dispatch** -- reviewer fixes, readiness
+fixes, cold-read amendments, the post-cap fresh draft, and owner-directed fixes alike. Each is a
+fresh, stateless gpt-6-sol `-AuthorSpec` call with the same arguments plus
+`-ExpectedDigest (git -C <repo> hash-object "docs/drafts/<short-name>.md")` and a prompt containing
+the requested changes. The host never edits the draft itself. Author dispatches into one repo run
+sequentially; do not pass `-AllowSharedWorktree`, which author mode refuses.
+
+**Author exits** (diagnose against the exit-code table in `apex-code`'s `Codex dispatch` section):
+- **0** -> review the draft.
+- **75 with STILL RUNNING in the output** -> wait for the coder's `.final`, then run the wrapper's
+  printed `-Adopt -RunId <id>` command without `-AuthorSpec`, so the skipped scope, tree-pin,
+  encoding, and verdict gates run. Adoption exit 0 -> review; every other adoption result -> the
+  OWNER. Never act on the call's timeout.
+- **Any other non-zero exit**, including `[adopt] REFUSED (exit 75)` -> read the wrapper's printed
+  diagnosis and the `.final`/concerns, then bring them to the OWNER with a recommendation. The host
+  never edits the draft, never deletes or reverts files, and never re-dispatches without the
+  owner's decision.
+- **Quota-out** (a usage-limit/429/quota message in the `.final` or log, or Codex failing to
+  launch) -> the OWNER. Only the owner may approve a `model: sonnet` Agent (non-wrapper) author
+  fallback; record the chosen model and never fall back silently. Before and after that Agent
+  dispatch, record `git hash-object` for every file under `docs/drafts` and the full
+  `git status --porcelain --ignored -uall -- docs/drafts` list; accept only when the target draft
+  is the sole new or changed content and no other path appears. For a revise, also check that the
+  pre-dispatch draft hash matches the expected digest.
+- **74 because the target repo's `docs/drafts` has no tracked file** -> the OWNER; do not seed a
+  file automatically.
+
+**Write freeze.** While an author run is in flight, the host makes NO writes to the target repo --
+including sidecar row completion, status.md, and plan files -- until the coder's `.final` exists or
+the wrapper confirms no coder launched, not merely until the wrapper call returns. Concurrent host
+writes are attributed to the author and cause a false exit 65.
+
+**Author rows in the sidecar.** The HOST creates `docs/drafts/<short-name>.review.log` at whichever
+comes first: the pre-draft arch-check row or the first author dispatch. Rows are only APPENDED,
+never overwritten or recreated; phase-2 completion fills the pending cells of the existing row. Each
+author dispatch gets a two-phase row. At dispatch: Round = `author`, Dispatched (UTC), Reviewer =
+`author:<model>:<create|revise>`, Spec digest = the `-ExpectedDigest` for a revise or `- (create)`,
+Verdict and Disposition = `pending`. After a wrapper run, complete the same row (subject to the
+write freeze) with Verdict = the wrapper exit and Disposition = `launched` only if the ledger has a
+dispatch row AND a child process started; exits 72/74/76/79/80/71 before launch and exit 69 at the
+launch boundary are `not-launched`, even when exit 69 left a ledger row. An owner-approved Sonnet
+Agent dispatch uses Reviewer = `author:sonnet:<create|revise>`, Verdict = `agent`, and Disposition
+= `launched` only after its child process starts. Review rows follow.
 
 **Split rule:** >3 files or >2 logical phases â†’ split. When you split (or write alongside other
 pending specs), make the specs **file-disjoint**, with any real dependency as a `## Prerequisites`
@@ -197,14 +252,19 @@ Every BLOCK resolved in the spec; every FLAG resolved or explicitly accepted wit
 ### Convergence control â€” 3 rounds, per SPEC LIFETIME
 
 Every reviewed spec gets a **review-round record**: a sidecar `docs/drafts/<short-name>.review.log`
-(deliberately not `.md` â€” spec tooling must never pick it up), created by the HOST at round 1, never
-by the author or the reviewer, deleted when the spec promotes to `docs/changes/`. One row per round:
+(deliberately not `.md` â€” spec tooling must never pick it up), created by the HOST at whichever comes first (the pre-draft arch-check row or the first author dispatch), never
+by the author or the reviewer, deleted when the spec promotes to `docs/changes/`. One row per author dispatch or review round:
 
 | Round | Dispatched (UTC) | Reviewer | Spec digest | Verdict | Disposition |
 
 **One ROUND = one review PASS**, however many lenses that pass dispatches in parallel: a 3-lens
 apex-spec-reviewer fan-out is ONE row, and the `Reviewer` cell carries the comma-joined lens list
 (`security, migration safety, mechanism`). The Sol plan-check is its own pass and gets its own row.
+
+**Round-column tokens:** `arch-N` = pre-draft architecture pass; `N` (an integer) = reviewer-family
+round; `sol-N` = Sol cold read; `delib-N` = Sol deliberation; `author` = author dispatch; `owner` =
+an owner decision. Author rows never count toward the reviewer-family round cap or the Sol round
+count.
 
 **Row lifecycle â€” TWO PHASES. This is the single definition; every rule below refers to it.**
 1. **At DISPATCH** the host APPENDS the row with `Round`, `Dispatched (UTC)`, `Reviewer` (the lens
@@ -230,9 +290,9 @@ cherry-picking a clean lens â€” and, being a completed VOID row, it does no
 - **Host precondition â€” read before you dispatch.** Before ANY reviewer-family dispatch, the host
   READS `docs/drafts/<short-name>.review.log` and counts its non-VOID reviewer-family rows per the
   lifecycle definition (`pending` rows included). **At â‰¥3 the dispatch is REFUSED** â€” no reviewer is
-  launched â€” and the spec routes to the post-cap path below. A missing sidecar means round 1: append
+  launched â€” and the spec routes to the post-cap path below. Zero non-VOID integer reviewer-family rows means round 1: append
   the phase-1 row, then dispatch.
-- **The post-cap path is not a dead end.** Fresh draft against the closed fix-list â†’ readiness gate
+- **The post-cap path is not a dead end.** A fresh `-AuthorSpec` revise dispatch against the same draft path and the closed fix-list â†’ readiness gate
   â†’ Sol cold read (still mandatory, still dispatched) â†’ promotion. An exhausted reviewer-family cap
   never blocks that path; it only stops further apex-spec-reviewer passes.
 - **Same-path constraint.** A post-cap fresh draft MUST target the identical
@@ -240,9 +300,10 @@ cherry-picking a clean lens â€” and, being a completed VOID row, it does no
   sidecar is keyed by the name and a rename silently resets the counter. If a rename is truly
   required, it is a manual carry-over step: MOVE the sidecar alongside the spec, keeping its rows â€”
   never recreate it, never start a new one.
-- **At the cap**, stop reviewing and hand a FRESH drafter a **CLOSED fix-list**: the exact
-  unresolved findings as of round 3, frozen. No new lenses, no additions after handoff. The next
-  draft is graded against that list and the readiness gate only.
+- **At the cap**, stop reviewing and send a fresh `-AuthorSpec` revise dispatch, against the same
+  draft path, a **CLOSED fix-list**: the exact unresolved findings as of round 3, frozen. No new
+  lenses, no additions after handoff. The next draft is graded against that list and the readiness
+  gate only.
 - **Write barrier â€” an explicit gate precondition.** A round is dispatched only AFTER the
   completion notification for the last edit to the draft has arrived. Never dispatch while an
   author or editor worker on that draft is in flight; a mid-edit read is the known VOID-round cause.
@@ -262,7 +323,7 @@ cherry-picking a clean lens â€” and, being a completed VOID row, it does no
 
 The model already checks for vague paths, "maybe"/"TBD", missing done-when clauses, and unrequested
 scope (RED-confirmed). **These are the items it does not reliably check.** Every one must pass; if
-any fails, fix in place and re-run from the top.
+any fails, send the fixes through an author revise dispatch, then re-run the full gate from the top.
 
 As the deterministic backstop to the prose Files-to-Change / Coverage / structure checkboxes (which retain judgment depth), on draft->changes promotion run `powershell.exe -NoProfile -File "$env:USERPROFILE\.claude\skills\apex-code\scripts\apex-spec-validate.ps1" -SpecPath <draft>`; a `FAIL` (exit 1) **BLOCKS** promotion.
 
@@ -334,10 +395,25 @@ Deep Details â†’ digest + offer the file. Light â†’ digest only. Bug F
 
 ## Closing the session
 
-- **Deep Details / Light:** move the spec `docs/drafts/` â†’ `docs/changes/`, delete the spec's
-  `<short-name>.review.log` sidecar (host's pen â€” the round record dies with the promotion), then rewrite the
+- **Deep Details / Light:** in order: (1) append one row to
+  `C:\users\user\apex\docs\research\spec-author-trial.md` from the spec's sidecar (next bullet);
+  (2) move the spec `docs/drafts/` -> `docs/changes/`; (3) delete the spec's `<short-name>.review.log`
+  sidecar (host's pen -- the round record dies with the promotion); (4) rewrite the
   `<!-- PLANNING -->` block of `docs/status.md` â€” Pending Specs (scan `docs/changes/`, not `done/`)
   and Open Questions (carry unresolved, add new, **delete resolved**). Update `_Last updated:_`.
+- **Trial log row** (ADR-048), appended before the sidecar is deleted. Columns exactly:
+  `date | repo | spec | author models | reviewer-family rounds | Sol rounds | intent drift | notes`.
+  Use the promotion date and repo path. Author models come only from sidecar `author` rows with
+  Disposition = `launched` and Reviewer = `author:<model>:<create|revise>`: list launched create rows
+  in order, counting repeated models, then revise rows in order with counts, for example
+  `gpt-6-sol create x2; revise gpt-6-sol x1`. Reviewer-family rounds = non-VOID integer `N` rows (one
+  row per multi-lens pass). Sol rounds = non-VOID `sol-N` and `delib-N` rows; `arch-N` rows are
+  excluded. A legacy spec promoted with no sidecar logs author models = `unknown (no sidecar)` and
+  zero round counts. Intent drift = `y` only when the owner flags a mismatch at the confirmation
+  digest, otherwise `n`. A re-promotion of the same repo/spec appends a new row with `re-promote` in
+  notes; never overwrite an earlier row. If the log does not exist yet, create it with the header
+  `| date | repo | spec | author models | reviewer-family rounds | Sol rounds | intent drift | notes |`
+  and its separator, and verify that header with `Select-String -SimpleMatch` before the first append.
 - **status.md is LIVE STATE â€” rewritten, never appended. â‰¤100 lines** (ADR-037). A finished row is
   **deleted**, not marked done; git is the record. Never let a session narrative land here.
 - **Bug Fix:** no status.md update â€” ephemeral.
