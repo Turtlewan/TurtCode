@@ -1,7 +1,7 @@
 ---
 skill: apex-code
-version: 2.18.0
-last_updated: 2026-09-30
+version: 2.18.1
+last_updated: 2026-10-01
 sources:
   - docs/technical/adr/ADR-027-codex-primary-opus-fallback-deepseek-archived.md
   - docs/technical/adr/ADR-028-parallel-codex-dispatch.md
@@ -14,6 +14,7 @@ sources:
   - docs/technical/adr/ADR-038-single-session.md
   - docs/technical/adr/ADR-045-four-role-split.md
   - docs/technical/adr/ADR-046-doctrine-audit-resolutions.md
+  - docs/technical/adr/ADR-048-role-redesign.md
 staleness_threshold: 30d
 description: >
   APEX build workflow — executes docs/changes/ specs: pre-flight, wave-parallel Codex
@@ -265,7 +266,7 @@ defensively, but pass it properly.
 **Parallel Codex** (2+ independent `▸codex` tasks) → `references/parallel-codex.md`.
 
 **Fallback:** `codex --version` fails, or quota is exhausted mid-run → the task falls back to
-**Sonnet 5**, a fresh `model: sonnet` worker in this session (A1, session-79b: the coding fallback no longer draws the scarce Opus pool; Opus keeps the spec-author, build-orchestrator, and high-risk-reviewer roles). Logged, never silent. No backend swap, no
+**Sonnet 5**, a fresh `model: sonnet` worker in this session (A1, session-79b: the coding fallback no longer draws the scarce Opus pool; Opus keeps the build-orchestrator and high-risk-reviewer roles; specs are authored by gpt-6-sol (ADR-048)). Logged, never silent. No backend swap, no
 relaunch (ADR-038). Whole-spec pin: `coder_model: {codex|sonnet}` (A1). The enum is exactly those two values.
 
 ## Events

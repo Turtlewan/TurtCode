@@ -61,7 +61,7 @@ Teardown is permitted **only** under the D8 carve-out (ADR-046) — you created 
 ## Failure / fallback (ADR-027 unchanged)
 A subprocess that exits non-zero / rate-limited → that task falls back to Sonnet 5 (fresh `model: sonnet` worker — ADR-032 as amended by A1, session-79b; quota-out skips the remaining effort rungs — the Codex pool is dead). A
 quota-out on **any** concurrent subprocess means the pool is dead → stop launching further Codex and fall
-back the remaining sub-wave tasks to Sonnet 5 (sequential — A1/ADR-045; Opus keeps the spec-author, build-orchestrator, and high-risk-reviewer roles). A task that won't converge after honest recovery → fork (capture-at-halt).
+back the remaining sub-wave tasks to Sonnet 5 (sequential — A1/ADR-045; Opus keeps the build-orchestrator and high-risk-reviewer roles; specs are authored by gpt-6-sol (ADR-048)). A task that won't converge after honest recovery → fork (capture-at-halt).
 
 ---
 

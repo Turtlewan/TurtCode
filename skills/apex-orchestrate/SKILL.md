@@ -1,7 +1,7 @@
 ---
 skill: apex-orchestrate
-version: 2.2.0
-last_updated: 2026-08-02
+version: 2.3.0
+last_updated: 2026-10-01
 sources:
   - docs/technical/adr/ADR-015-dispatch-return-contract.md
   - docs/technical/adr/ADR-036-remove-knowledge-layer.md
@@ -9,6 +9,7 @@ sources:
   - docs/technical/adr/ADR-038-single-session.md
   - docs/technical/adr/ADR-045-four-role-split.md
   - docs/technical/adr/ADR-046-doctrine-audit-resolutions.md
+  - docs/technical/adr/ADR-048-role-redesign.md
 staleness_threshold: 30d
 description: >
   APEX session orchestrator — runs first every session: orients from docs/status.md,
@@ -52,7 +53,7 @@ half-refactor is unreviewable), then move. Two reads, one line, go.
 
 | Signal | Route to |
 |--------|----------|
-| plan · design · architect · spec · "let's build" · what if | **apex-plan** — then **dispatch a `model: opus` spec author** to draft the spec/ADR from your plan (author contract: `apex-orchestrate/templates/spec-template.md` + apex-plan § Writing the spec; ADR-045); the host does not author it itself |
+| plan · design · architect · spec · "let's build" · what if | **apex-plan**, which dispatches a gpt-6-sol spec author through the wrapper's `-AuthorSpec` (apex-plan, "Writing the spec"; ADR-048) |
 | build · implement · execute · start build | **apex-code**. **ATTENDED builds:** dispatch the `model: opus` **`apex-build-orchestrator`** agent (`~/.claude/agents/apex-build-orchestrator.md`; Opus 5, ADR-045 as amended) with three inputs: (a) the spec's **absolute path** AND (b) its **full text** — path alone is not enough, the agent has no tool that guarantees it can open it; and (c) **one per-repo input block for EVERY repo the spec touches** — the repo root, the absolute path of that repo's `AGENTS.md` verify contract, that repo's HEAD sha, **and that `AGENTS.md`'s `## Verify commands` FENCED BLOCK, copied in VERBATIM**. The agent contract requires the verify commands themselves, not a pointer to them: it has no tool guaranteed to open the file, so a path alone leaves it adjudicating verify results against commands it cannot read. Copy the fence contents exactly — no summary, no reformatting, no command dropped. The per-repo blocks are what the schema's `repos` map is keyed on, so a single-repo build supplies exactly one and a multi-repo build supplies one per repo; a plan can only declare a repo that arrived this way. Add the live tree facts: `git status --porcelain`, existing worktrees and `codex/*` branches, `max_parallel_codex`, the `coder_effort` default, and the build date. It owns the **BUILD PHASE** — task selection, wave sequencing, dispatch parameters, exit-code routing, verify adjudication, retries/escalation/forks, integration order — and you execute its wave plan as mechanics and return bounded results. **Close-out is NOT its scope:** when it emits `complete`, you run the review → docs → family-gate → archival chain per `apex-code/SKILL.md` § Post-build. **UNATTENDED (AFK) builds keep the current host path** — the v1 agent is attended-only and is not dispatched for them. |
 | broken · failing · bug · regression · "why does X" | **apex-debug** |
 | review this spec | apex-plan (dispatched spec review) |
