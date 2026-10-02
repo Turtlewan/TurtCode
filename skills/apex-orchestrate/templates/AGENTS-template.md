@@ -10,7 +10,7 @@ repo. Codex reads this before acting; the nearest-directory AGENTS.md wins. Keep
 ## How to build a spec (APEX convention — universal)
 When asked to implement `docs/changes/<name>.md`:
 1. **Read the whole spec first.** Implement each `## Tasks` item precisely — the task text names its exact files, mechanism, and done-when.
-2. **Surgical scope:** only create/modify files in the spec's `## Files to Change`. `git diff --stat` must show only those.
+2. **Surgical scope:** only create/modify files in the spec's `## Files to Change`. Check with `git status --porcelain -uall` — **not** `git diff --stat`, which never lists a file you *created* (it is untracked) and cannot be made to, since you may not `git add`.
 3. **Run this file's `## Verify commands`** (the recipe's single home, ADR-037) and make every `## Acceptance Criteria` item pass. You run it inside your own worktree and iterate to green. That is not the authoritative pass and not a verdict. The host EXECUTES the recipe as mechanics from the orchestrator's wave plan and returns the raw results; the ORCHESTRATOR owns the pass/fail adjudication and the routing that follows.
 4. **Tests are the contract:** if a check fails, fix the *code* and re-run until green. NEVER weaken, skip, or delete a test to make it pass.
 5. **Stop and ask** if a spec's acceptance criteria cannot be met as written — that is a planning question. Note it; do not improvise around the spec.

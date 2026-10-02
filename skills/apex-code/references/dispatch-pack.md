@@ -20,7 +20,7 @@ Done when: <the task's done-when clause>
   never "adapt to the bound stack">
 
 ## Constraints
-- Surgical scope: only the files listed above; `git diff --stat` must show only those.
+- Surgical scope: only the files listed above; `git status --porcelain -uall` must show no path outside them that was not already dirty when you started. (NOT `git diff --stat` — a file you CREATE is untracked, so it never appears there, and you may not `git add` it into view.)
 - Scratch: if you need a scratch directory, create `.codex-scratch/` at the repo root and nowhere else — it is the only sanctioned name. `.scratch`, `.apex-tmp` and `.sandbox-cache` are DEPRECATED: they are still excluded from the scope check on existing repos, so they raise no violation, but they may lose that exclusion in a future revision — do not use them for new work. Any other invented or task-suffixed variant (`.codex-scratch-task2`) IS reported as an out-of-scope write. If this repo does not gitignore `.codex-scratch/`, it will flag as a scope violation — report that, and do NOT add gitignore entries yourself.
 - <3–7 task-relevant hazards — selection rule below>
 - <autonomy clause verbatim — below>
