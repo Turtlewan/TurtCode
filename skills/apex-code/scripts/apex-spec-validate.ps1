@@ -3,12 +3,16 @@
 Deterministically validates an APEX change specification.
 
 .DESCRIPTION
-Runs four mechanical checks in a fixed order: FILES-COMPLETENESS,
-NO-UNRESOLVED-MARKERS, TASK-CRITERIA-COVERAGE, and STRUCTURE. Exit 0 means
-valid; exit 1 means one or more findings, each printed as
+Runs five mechanical checks in a fixed order: FILES-COMPLETENESS,
+NO-UNRESOLVED-MARKERS, TASK-CRITERIA-COVERAGE, STRUCTURE, and EXEC-MANIFEST.
+Exit 0 means valid; exit 1 means one or more findings, each printed as
 "FAIL <check>: <evidence>".
 
-Fenced code-block content is IGNORED by all four checks alike (checks 1-3 scan only prose/tables/backtick-inline spans outside fences; check 4 STRUCTURE likewise does not count a required heading that appears only inside a fence).
+Fenced code-block content is IGNORED by the original four checks alike (checks
+1-3 scan only prose/tables/backtick-inline spans outside fences; check 4
+STRUCTURE likewise does not count a required heading that appears only inside
+a fence). Check 5 EXEC-MANIFEST reads the single fence in the optional
+Execution manifest section.
 
 FILES-COMPLETENESS mechanically classifies a token as a file path only when it
 has a directory component and a 1-5 character alphanumeric extension. Runtime
@@ -25,7 +29,7 @@ param(
     [switch]$Version
 )
 
-$SpecContractVersion = '1.0.0'
+$SpecContractVersion = '1.1.0'
 $ErrorActionPreference = 'Stop'
 
 if ($Version) {
@@ -166,6 +170,179 @@ function Add-Finding {
     $script:findings.Add(('FAIL {0}: {1}' -f $Check, $Evidence))
 }
 
+function Test-ManifestObjectProperty {
+    param(
+        [object]$Object,
+        [string]$Name
+    )
+
+    if ($null -eq $Object -or $null -eq $Object.PSObject) {
+        return $false
+    }
+
+    foreach ($property in $Object.PSObject.Properties) {
+        if ([string]::Equals($property.Name, $Name, [System.StringComparison]::Ordinal)) {
+            return $true
+        }
+    }
+
+    return $false
+}
+
+function Get-ManifestObjectProperty {
+    param(
+        [object]$Object,
+        [string]$Name
+    )
+
+    foreach ($property in $Object.PSObject.Properties) {
+        if ([string]::Equals($property.Name, $Name, [System.StringComparison]::Ordinal)) {
+            return ,$property.Value
+        }
+    }
+
+    return $null
+}
+
+function Test-ManifestInteger {
+    param([object]$Value)
+
+    return (($Value -is [sbyte]) -or
+        ($Value -is [byte]) -or
+        ($Value -is [int16]) -or
+        ($Value -is [uint16]) -or
+        ($Value -is [int32]) -or
+        ($Value -is [uint32]) -or
+        ($Value -is [int64]) -or
+        ($Value -is [uint64]))
+}
+
+function Test-ManifestRepoRoot {
+    param([string]$Path)
+
+    if ([string]::IsNullOrWhiteSpace($Path) -or $Path.IndexOf('\') -ge 0 -or $Path.Contains('//')) {
+        return $false
+    }
+
+    $remainder = $null
+    if ([regex]::IsMatch($Path, '^[A-Za-z]:/')) {
+        $remainder = $Path.Substring(3)
+    }
+    elseif ($Path.StartsWith('/', [System.StringComparison]::Ordinal)) {
+        $remainder = $Path.Substring(1)
+    }
+    else {
+        return $false
+    }
+
+    if ($remainder.Length -eq 0) {
+        return $true
+    }
+    if ($Path.EndsWith('/', [System.StringComparison]::Ordinal)) {
+        return $false
+    }
+
+    foreach ($segment in $remainder.Split('/')) {
+        if ($segment.Length -eq 0 -or $segment -eq '.' -or $segment -eq '..') {
+            return $false
+        }
+    }
+
+    return $true
+}
+
+function Test-ManifestRelativePath {
+    param([string]$Path)
+
+    if ([string]::IsNullOrWhiteSpace($Path) -or
+        $Path.IndexOf('\') -ge 0 -or
+        $Path.StartsWith('/', [System.StringComparison]::Ordinal) -or
+        [regex]::IsMatch($Path, '^[A-Za-z]:') -or
+        $Path.Contains('//') -or
+        $Path.EndsWith('/', [System.StringComparison]::Ordinal)) {
+        return $false
+    }
+
+    foreach ($segment in $Path.Split('/')) {
+        if ($segment.Length -eq 0 -or $segment -eq '.' -or $segment -eq '..') {
+            return $false
+        }
+    }
+
+    return $true
+}
+
+function Test-AbsolutePathToken {
+    param([string]$Path)
+
+    return ([regex]::IsMatch($Path, '^[A-Za-z]:[\\/]') -or $Path.StartsWith('/', [System.StringComparison]::Ordinal))
+}
+
+function ConvertTo-ManifestIdentity {
+    param(
+        [string]$Root,
+        [string]$RelativePath
+    )
+
+    $rootWithoutTrailingSlash = $Root.TrimEnd('/')
+    return ('{0}/{1}' -f $rootWithoutTrailingSlash, $RelativePath).ToLowerInvariant()
+}
+
+function ConvertTo-AbsoluteManifestIdentity {
+    param([string]$Path)
+
+    return $Path.Replace('\', '/').TrimEnd('/').ToLowerInvariant()
+}
+
+function ConvertFrom-MarkdownCell {
+    param([string]$Text)
+
+    $value = $Text.Trim()
+    if ($value.Length -ge 2 -and $value[0] -eq [char]96 -and $value[$value.Length - 1] -eq [char]96) {
+        $value = $value.Substring(1, $value.Length - 2).Trim()
+    }
+    return $value
+}
+
+function Get-TaskFileTokens {
+    param([string]$Text)
+
+    $tokens = New-Object 'System.Collections.Generic.List[string]'
+    $markerIndex = $Text.LastIndexOf('files:', [System.StringComparison]::OrdinalIgnoreCase)
+    if ($markerIndex -lt 0) {
+        return $tokens.ToArray()
+    }
+
+    $fileText = $Text.Substring($markerIndex + 'files:'.Length)
+    $delimiterIndex = $fileText.IndexOf((' ' + [char]0x2014 + ' '), [System.StringComparison]::Ordinal)
+    if ($delimiterIndex -ge 0) {
+        $fileText = $fileText.Substring(0, $delimiterIndex)
+    }
+
+    $inlineMatches = $inlineCodeRegex.Matches($fileText)
+    if ($inlineMatches.Count -gt 0) {
+        foreach ($match in $inlineMatches) {
+            foreach ($part in $match.Groups[1].Value.Split(',')) {
+                $value = $part.Trim()
+                if ($value.Length -gt 0) {
+                    $tokens.Add($value)
+                }
+            }
+        }
+        return $tokens.ToArray()
+    }
+
+    foreach ($part in $fileText.Split(',')) {
+        $value = (ConvertTo-NormalizedToken -Token $part.Trim())
+        if ($value.Length -gt 0 -and
+            (($value.IndexOf('/') -ge 0) -or ($value.IndexOf('\') -ge 0) -or $fileExtensionRegex.IsMatch($value))) {
+            $tokens.Add($value)
+        }
+    }
+
+    return $tokens.ToArray()
+}
+
 if (-not [System.IO.File]::Exists($SpecPath)) {
     Write-Output ('FAIL STRUCTURE: spec file not found {0}' -f $SpecPath)
     exit 1
@@ -187,6 +364,9 @@ $unclosedFenceLine = $null
 $fenceCharacter = $null
 $fenceLength = 0
 $currentSection = ''
+$executionManifestSectionPresent = $false
+$executionManifestFences = New-Object 'System.Collections.Generic.List[object]'
+$activeExecutionManifestFence = $null
 
 for ($index = 0; $index -lt $lines.Count; $index++) {
     $line = $lines[$index]
@@ -203,7 +383,11 @@ for ($index = 0; $index -lt $lines.Count; $index++) {
                 $unclosedFenceLine = $null
                 $fenceCharacter = $null
                 $fenceLength = 0
+                $activeExecutionManifestFence = $null
             }
+        }
+        elseif ($null -ne $activeExecutionManifestFence) {
+            $activeExecutionManifestFence.Lines.Add($line)
         }
         continue
     }
@@ -214,12 +398,23 @@ for ($index = 0; $index -lt $lines.Count; $index++) {
         $unclosedFenceLine = $index + 1
         $fenceCharacter = $openingFence[0]
         $fenceLength = $openingFence.Length
+        if ([string]::Equals($currentSection, 'Execution manifest', [System.StringComparison]::Ordinal)) {
+            $activeExecutionManifestFence = [pscustomobject]@{
+                LineNumber = $index + 1
+                InfoString = $fenceMatch.Groups['Trailing'].Value.Trim()
+                Lines = New-Object 'System.Collections.Generic.List[string]'
+            }
+            $executionManifestFences.Add($activeExecutionManifestFence)
+        }
         continue
     }
 
     $headingMatch = $headingRegex.Match($line)
     if ($headingMatch.Success) {
         $currentSection = $headingMatch.Groups[1].Value
+        if ([string]::Equals($currentSection, 'Execution manifest', [System.StringComparison]::Ordinal)) {
+            $executionManifestSectionPresent = $true
+        }
     }
 
     $outsideFenceLines.Add([pscustomobject]@{
@@ -449,6 +644,499 @@ foreach ($sectionRule in $nonEmptySections) {
 
     if (-not $hasQualifyingLine) {
         Add-Finding -Check 'STRUCTURE' -Evidence ('empty section {0}' -f $sectionRule.Name)
+    }
+}
+
+# (5) EXEC-MANIFEST
+if ($executionManifestSectionPresent) {
+    try {
+        if ($executionManifestFences.Count -ne 1) {
+            Add-Finding -Check 'EXEC-MANIFEST' -Evidence ('Execution manifest section must contain exactly one fenced block; found {0}' -f $executionManifestFences.Count)
+        }
+        else {
+            $manifestFence = $executionManifestFences[0]
+            if (-not [string]::Equals($manifestFence.InfoString, 'json apex-manifest', [System.StringComparison]::Ordinal)) {
+                Add-Finding -Check 'EXEC-MANIFEST' -Evidence ('fence at line {0} must use info string json apex-manifest' -f $manifestFence.LineNumber)
+            }
+            else {
+                $manifest = $null
+                $manifestParsed = $true
+                try {
+                    $manifest = ($manifestFence.Lines.ToArray() -join "`n") | ConvertFrom-Json -ErrorAction Stop
+                }
+                catch {
+                    $manifestParsed = $false
+                    Add-Finding -Check 'EXEC-MANIFEST' -Evidence ('malformed JSON in fence at line {0}' -f $manifestFence.LineNumber)
+                }
+
+                if ($manifestParsed) {
+                    $shapeValid = $true
+                    if (-not ($manifest -is [pscustomobject])) {
+                        Add-Finding -Check 'EXEC-MANIFEST' -Evidence 'manifest root must be a JSON object'
+                        $shapeValid = $false
+                    }
+
+                    $versionValue = $null
+                    $hasVersion = $shapeValid -and (Test-ManifestObjectProperty -Object $manifest -Name 'version')
+                    if ($hasVersion) {
+                        $versionValue = Get-ManifestObjectProperty -Object $manifest -Name 'version'
+                    }
+                    else {
+                        Add-Finding -Check 'EXEC-MANIFEST' -Evidence 'missing version'
+                        $shapeValid = $false
+                    }
+                    if ($hasVersion -and ((-not (Test-ManifestInteger -Value $versionValue)) -or $versionValue -ne 1)) {
+                        Add-Finding -Check 'EXEC-MANIFEST' -Evidence 'version must be integer 1'
+                        $shapeValid = $false
+                    }
+
+                    $repoRoots = New-Object 'System.Collections.Generic.Dictionary[string,string]' ([System.StringComparer]::Ordinal)
+                    $reposValue = $null
+                    if ($manifest -is [pscustomobject] -and (Test-ManifestObjectProperty -Object $manifest -Name 'repos')) {
+                        $reposValue = Get-ManifestObjectProperty -Object $manifest -Name 'repos'
+                    }
+                    if (-not ($reposValue -is [pscustomobject]) -or $reposValue.PSObject.Properties.Count -eq 0) {
+                        Add-Finding -Check 'EXEC-MANIFEST' -Evidence 'repos must be a nonempty JSON object'
+                        $shapeValid = $false
+                    }
+                    else {
+                        foreach ($repoProperty in $reposValue.PSObject.Properties) {
+                            if ([string]::IsNullOrWhiteSpace($repoProperty.Name) -or
+                                -not ($repoProperty.Value -is [string]) -or
+                                -not (Test-ManifestRepoRoot -Path $repoProperty.Value)) {
+                                Add-Finding -Check 'EXEC-MANIFEST' -Evidence ('repo {0} must have an absolute canonical forward-slash root' -f $repoProperty.Name)
+                                $shapeValid = $false
+                                continue
+                            }
+                            if ($repoRoots.ContainsKey($repoProperty.Name)) {
+                                Add-Finding -Check 'EXEC-MANIFEST' -Evidence ('duplicate repo key {0}' -f $repoProperty.Name)
+                                $shapeValid = $false
+                                continue
+                            }
+                            $repoRoots.Add($repoProperty.Name, $repoProperty.Value)
+                        }
+                    }
+
+                    $tasksValue = $null
+                    if ($manifest -is [pscustomobject] -and (Test-ManifestObjectProperty -Object $manifest -Name 'tasks')) {
+                        $tasksValue = Get-ManifestObjectProperty -Object $manifest -Name 'tasks'
+                    }
+                    if (-not ($tasksValue -is [System.Array])) {
+                        Add-Finding -Check 'EXEC-MANIFEST' -Evidence 'tasks must be a JSON array'
+                        $shapeValid = $false
+                        $tasksValue = @()
+                    }
+
+                    $taskDeclarationRegex = New-Object System.Text.RegularExpressions.Regex(
+                        '^\s*(?:[-*+]|\d+[.)])\s+(?:\[[ xX]\]\s+)?\*\*\s*(?<Title>Task\s+(?<Id>[0-9]+[A-Za-z]?)(?=\b).*?)\*\*',
+                        [System.Text.RegularExpressions.RegexOptions]::CultureInvariant
+                    )
+                    $ownerWordRegex = New-Object System.Text.RegularExpressions.Regex(
+                        '\bOWNER\b',
+                        [System.Text.RegularExpressions.RegexOptions]::CultureInvariant
+                    )
+                    $taskDeclarations = New-Object 'System.Collections.Generic.List[object]'
+                    foreach ($lineRecord in $outsideFenceLines) {
+                        if (-not [string]::Equals($lineRecord.Section, 'Tasks', [System.StringComparison]::Ordinal)) {
+                            continue
+                        }
+                        $declarationMatch = $taskDeclarationRegex.Match($lineRecord.Text)
+                        if (-not $declarationMatch.Success) {
+                            continue
+                        }
+
+                        $title = $declarationMatch.Groups['Title'].Value
+                        $isHostOwner = ($title.IndexOf('(HOST)', [System.StringComparison]::Ordinal) -ge 0) -or $ownerWordRegex.IsMatch($title)
+                        $taskDeclarations.Add([pscustomobject]@{
+                            Id = $declarationMatch.Groups['Id'].Value.ToLowerInvariant()
+                            Title = $title
+                            IsHostOwner = $isHostOwner
+                            Files = @(Get-TaskFileTokens -Text $lineRecord.Text)
+                            LineNumber = $lineRecord.LineNumber
+                        })
+                    }
+
+                    $coderDeclarations = New-Object 'System.Collections.Generic.List[object]'
+                    $hostOwnerDeclarations = New-Object 'System.Collections.Generic.List[object]'
+                    $coderIds = New-Object 'System.Collections.Generic.HashSet[string]' ([System.StringComparer]::OrdinalIgnoreCase)
+                    foreach ($declaration in $taskDeclarations) {
+                        if ($declaration.IsHostOwner) {
+                            $hostOwnerDeclarations.Add($declaration)
+                        }
+                        else {
+                            $coderDeclarations.Add($declaration)
+                            if (-not $coderIds.Add($declaration.Id)) {
+                                Add-Finding -Check 'EXEC-MANIFEST' -Evidence ('duplicate coder task ID {0}' -f $declaration.Id)
+                            }
+                        }
+                    }
+
+                    $allowedEfforts = New-Object 'System.Collections.Generic.HashSet[string]' ([System.StringComparer]::Ordinal)
+                    foreach ($effortName in @('low', 'medium', 'high', 'xhigh', 'max', 'ultra')) {
+                        [void]$allowedEfforts.Add($effortName)
+                    }
+                    $frontmatterEffort = 'medium'
+                    $frontmatterEffortPresent = $false
+                    if ($lines.Count -gt 0 -and [string]::Equals($lines[0].Trim(), '---', [System.StringComparison]::Ordinal)) {
+                        for ($frontmatterIndex = 1; $frontmatterIndex -lt $lines.Count; $frontmatterIndex++) {
+                            if ([string]::Equals($lines[$frontmatterIndex].Trim(), '---', [System.StringComparison]::Ordinal)) {
+                                break
+                            }
+                            $effortMatch = [regex]::Match($lines[$frontmatterIndex], '^coder_effort:\s*(.*?)\s*$')
+                            if ($effortMatch.Success) {
+                                $frontmatterEffort = $effortMatch.Groups[1].Value.Trim().Trim([char[]]@([char]39, [char]34))
+                                $frontmatterEffortPresent = $true
+                            }
+                        }
+                    }
+
+                    $manifestTasks = New-Object 'System.Collections.Generic.List[object]'
+                    $manifestIds = New-Object 'System.Collections.Generic.HashSet[string]' ([System.StringComparer]::OrdinalIgnoreCase)
+                    $manifestIdRegex = New-Object System.Text.RegularExpressions.Regex('^[0-9]+[A-Za-z]?$', [System.Text.RegularExpressions.RegexOptions]::CultureInvariant)
+                    $usesDefaultEffort = $false
+
+                    foreach ($taskValue in $tasksValue) {
+                        if (-not ($taskValue -is [pscustomobject])) {
+                            Add-Finding -Check 'EXEC-MANIFEST' -Evidence 'each tasks entry must be a JSON object'
+                            $shapeValid = $false
+                            continue
+                        }
+
+                        $idValue = $null
+                        if (Test-ManifestObjectProperty -Object $taskValue -Name 'id') {
+                            $idValue = Get-ManifestObjectProperty -Object $taskValue -Name 'id'
+                        }
+                        if (-not ($idValue -is [string]) -or -not $manifestIdRegex.IsMatch($idValue)) {
+                            Add-Finding -Check 'EXEC-MANIFEST' -Evidence 'task id must match a Tasks number with an optional letter suffix'
+                            $shapeValid = $false
+                            continue
+                        }
+                        $canonicalId = $idValue.ToLowerInvariant()
+                        if (-not $manifestIds.Add($canonicalId)) {
+                            Add-Finding -Check 'EXEC-MANIFEST' -Evidence ('duplicate manifest task ID {0}' -f $idValue)
+                            $shapeValid = $false
+                        }
+
+                        $repoValue = $null
+                        if (Test-ManifestObjectProperty -Object $taskValue -Name 'repo') {
+                            $repoValue = Get-ManifestObjectProperty -Object $taskValue -Name 'repo'
+                        }
+                        if (-not ($repoValue -is [string]) -or [string]::IsNullOrWhiteSpace($repoValue) -or -not $repoRoots.ContainsKey($repoValue)) {
+                            Add-Finding -Check 'EXEC-MANIFEST' -Evidence ('task {0} has missing or unknown repo' -f $idValue)
+                            $shapeValid = $false
+                        }
+
+                        $filesValue = $null
+                        if (Test-ManifestObjectProperty -Object $taskValue -Name 'files') {
+                            $filesValue = Get-ManifestObjectProperty -Object $taskValue -Name 'files'
+                        }
+                        if (-not ($filesValue -is [System.Array]) -or $filesValue.Count -eq 0) {
+                            Add-Finding -Check 'EXEC-MANIFEST' -Evidence ('task {0} files must be a nonempty JSON array' -f $idValue)
+                            $shapeValid = $false
+                            $filesValue = @()
+                        }
+
+                        $dependsValue = $null
+                        if (Test-ManifestObjectProperty -Object $taskValue -Name 'depends_on') {
+                            $dependsValue = Get-ManifestObjectProperty -Object $taskValue -Name 'depends_on'
+                        }
+                        if (-not ($dependsValue -is [System.Array])) {
+                            Add-Finding -Check 'EXEC-MANIFEST' -Evidence ('task {0} depends_on must be a JSON array' -f $idValue)
+                            $shapeValid = $false
+                            $dependsValue = @()
+                        }
+
+                        $effortValue = $frontmatterEffort
+                        if (Test-ManifestObjectProperty -Object $taskValue -Name 'effort') {
+                            $effortValue = Get-ManifestObjectProperty -Object $taskValue -Name 'effort'
+                        }
+                        else {
+                            $usesDefaultEffort = $true
+                        }
+                        if (-not ($effortValue -is [string]) -or -not $allowedEfforts.Contains($effortValue)) {
+                            Add-Finding -Check 'EXEC-MANIFEST' -Evidence ('task {0} effort must be low, medium, high, xhigh, max, or ultra' -f $idValue)
+                            $shapeValid = $false
+                        }
+
+                        $manifestFiles = New-Object 'System.Collections.Generic.List[object]'
+                        $taskPathSet = New-Object 'System.Collections.Generic.HashSet[string]' ([System.StringComparer]::OrdinalIgnoreCase)
+                        foreach ($fileValue in $filesValue) {
+                            if (-not ($fileValue -is [pscustomobject])) {
+                                Add-Finding -Check 'EXEC-MANIFEST' -Evidence ('task {0} files entries must be JSON objects' -f $idValue)
+                                $shapeValid = $false
+                                continue
+                            }
+                            $pathValue = $null
+                            $opValue = $null
+                            if (Test-ManifestObjectProperty -Object $fileValue -Name 'path') {
+                                $pathValue = Get-ManifestObjectProperty -Object $fileValue -Name 'path'
+                            }
+                            if (Test-ManifestObjectProperty -Object $fileValue -Name 'op') {
+                                $opValue = Get-ManifestObjectProperty -Object $fileValue -Name 'op'
+                            }
+                            if (-not ($pathValue -is [string]) -or -not (Test-ManifestRelativePath -Path $pathValue)) {
+                                Add-Finding -Check 'EXEC-MANIFEST' -Evidence ('task {0} has a noncanonical file path' -f $idValue)
+                                $shapeValid = $false
+                                continue
+                            }
+                            if (-not ($opValue -is [string]) -or $opValue -cnotmatch '^(?:create|modify|delete)$') {
+                                Add-Finding -Check 'EXEC-MANIFEST' -Evidence ('task {0} file {1} has invalid op' -f $idValue, $pathValue)
+                                $shapeValid = $false
+                                continue
+                            }
+                            if (-not $taskPathSet.Add($pathValue)) {
+                                Add-Finding -Check 'EXEC-MANIFEST' -Evidence ('task {0} repeats file path {1}' -f $idValue, $pathValue)
+                                $shapeValid = $false
+                                continue
+                            }
+                            $manifestFiles.Add([pscustomobject]@{ Path = $pathValue; Op = $opValue })
+                        }
+
+                        $dependencies = New-Object 'System.Collections.Generic.List[string]'
+                        $dependencySet = New-Object 'System.Collections.Generic.HashSet[string]' ([System.StringComparer]::OrdinalIgnoreCase)
+                        foreach ($dependencyValue in $dependsValue) {
+                            if (-not ($dependencyValue -is [string]) -or -not $manifestIdRegex.IsMatch($dependencyValue)) {
+                                Add-Finding -Check 'EXEC-MANIFEST' -Evidence ('task {0} has an invalid dependency ID' -f $idValue)
+                                $shapeValid = $false
+                                continue
+                            }
+                            $canonicalDependency = $dependencyValue.ToLowerInvariant()
+                            if (-not $dependencySet.Add($canonicalDependency)) {
+                                Add-Finding -Check 'EXEC-MANIFEST' -Evidence ('task {0} repeats dependency {1}' -f $idValue, $dependencyValue)
+                                $shapeValid = $false
+                                continue
+                            }
+                            $dependencies.Add($canonicalDependency)
+                        }
+
+                        $manifestTasks.Add([pscustomobject]@{
+                            Id = $canonicalId
+                            Repo = $repoValue
+                            Files = $manifestFiles
+                            DependsOn = $dependencies
+                            Effort = $effortValue
+                        })
+                    }
+
+                    if ($usesDefaultEffort -and $frontmatterEffortPresent -and -not $allowedEfforts.Contains($frontmatterEffort)) {
+                        Add-Finding -Check 'EXEC-MANIFEST' -Evidence 'frontmatter coder_effort used by the manifest is invalid'
+                        $shapeValid = $false
+                    }
+
+                    foreach ($coderId in $coderIds) {
+                        if (-not $manifestIds.Contains($coderId)) {
+                            Add-Finding -Check 'EXEC-MANIFEST' -Evidence ('coder task {0} is missing from manifest' -f $coderId)
+                        }
+                    }
+                    foreach ($manifestId in $manifestIds) {
+                        if (-not $coderIds.Contains($manifestId)) {
+                            Add-Finding -Check 'EXEC-MANIFEST' -Evidence ('manifest task {0} is not a coder task' -f $manifestId)
+                        }
+                    }
+
+                    $manifestTaskById = New-Object 'System.Collections.Generic.Dictionary[string,object]' ([System.StringComparer]::OrdinalIgnoreCase)
+                    foreach ($manifestTask in $manifestTasks) {
+                        if (-not $manifestTaskById.ContainsKey($manifestTask.Id)) {
+                            $manifestTaskById.Add($manifestTask.Id, $manifestTask)
+                        }
+                    }
+
+                    $coderOwnedIdentities = New-Object 'System.Collections.Generic.HashSet[string]' ([System.StringComparer]::OrdinalIgnoreCase)
+                    $manifestFileRecords = New-Object 'System.Collections.Generic.List[object]'
+                    foreach ($manifestTask in $manifestTasks) {
+                        if (-not ($manifestTask.Repo -is [string]) -or -not $repoRoots.ContainsKey($manifestTask.Repo)) {
+                            continue
+                        }
+                        $taskRoot = $repoRoots[$manifestTask.Repo]
+                        foreach ($manifestFile in $manifestTask.Files) {
+                            $identity = ConvertTo-ManifestIdentity -Root $taskRoot -RelativePath $manifestFile.Path
+                            [void]$coderOwnedIdentities.Add($identity)
+                            $manifestFileRecords.Add([pscustomobject]@{
+                                Identity = $identity
+                                Path = $manifestFile.Path
+                                Op = $manifestFile.Op
+                                TaskId = $manifestTask.Id
+                            })
+                        }
+                    }
+
+                    foreach ($coderDeclaration in $coderDeclarations) {
+                        if (-not $manifestTaskById.ContainsKey($coderDeclaration.Id)) {
+                            continue
+                        }
+                        $manifestTask = $manifestTaskById[$coderDeclaration.Id]
+                        if (-not ($manifestTask.Repo -is [string]) -or -not $repoRoots.ContainsKey($manifestTask.Repo)) {
+                            continue
+                        }
+                        $declaredFileIdentities = New-Object 'System.Collections.Generic.HashSet[string]' ([System.StringComparer]::OrdinalIgnoreCase)
+                        foreach ($declaredFile in $coderDeclaration.Files) {
+                            if (Test-AbsolutePathToken -Path $declaredFile) {
+                                [void]$declaredFileIdentities.Add((ConvertTo-AbsoluteManifestIdentity -Path $declaredFile))
+                            }
+                            elseif (Test-ManifestRelativePath -Path $declaredFile) {
+                                [void]$declaredFileIdentities.Add((ConvertTo-ManifestIdentity -Root $repoRoots[$manifestTask.Repo] -RelativePath $declaredFile))
+                            }
+                        }
+
+                        $manifestTaskIdentities = New-Object 'System.Collections.Generic.HashSet[string]' ([System.StringComparer]::OrdinalIgnoreCase)
+                        foreach ($manifestFile in $manifestTask.Files) {
+                            [void]$manifestTaskIdentities.Add((ConvertTo-ManifestIdentity -Root $repoRoots[$manifestTask.Repo] -RelativePath $manifestFile.Path))
+                        }
+                        $sameFiles = $declaredFileIdentities.Count -gt 0 -and $declaredFileIdentities.Count -eq $manifestTaskIdentities.Count
+                        if ($sameFiles) {
+                            foreach ($identity in $manifestTaskIdentities) {
+                                if (-not $declaredFileIdentities.Contains($identity)) {
+                                    $sameFiles = $false
+                                    break
+                                }
+                            }
+                        }
+                        if (-not $sameFiles) {
+                            Add-Finding -Check 'EXEC-MANIFEST' -Evidence ('task {0} manifest files do not equal its Tasks files list' -f $coderDeclaration.Id)
+                        }
+                    }
+
+                    $hostOwnedIdentities = New-Object 'System.Collections.Generic.HashSet[string]' ([System.StringComparer]::OrdinalIgnoreCase)
+                    foreach ($hostDeclaration in $hostOwnerDeclarations) {
+                        foreach ($hostFile in $hostDeclaration.Files) {
+                            if (Test-AbsolutePathToken -Path $hostFile) {
+                                [void]$hostOwnedIdentities.Add((ConvertTo-AbsoluteManifestIdentity -Path $hostFile))
+                            }
+                            elseif (Test-ManifestRelativePath -Path $hostFile) {
+                                foreach ($repoRoot in $repoRoots.Values) {
+                                    [void]$hostOwnedIdentities.Add((ConvertTo-ManifestIdentity -Root $repoRoot -RelativePath $hostFile))
+                                }
+                            }
+                        }
+                    }
+
+                    $allOwnedIdentities = New-Object 'System.Collections.Generic.HashSet[string]' ([System.StringComparer]::OrdinalIgnoreCase)
+                    foreach ($identity in $coderOwnedIdentities) { [void]$allOwnedIdentities.Add($identity) }
+                    foreach ($identity in $hostOwnedIdentities) { [void]$allOwnedIdentities.Add($identity) }
+
+                    $filesTableRows = New-Object 'System.Collections.Generic.List[object]'
+                    foreach ($lineRecord in $outsideFenceLines) {
+                        if (-not [string]::Equals($lineRecord.Section, 'Files to Change', [System.StringComparison]::Ordinal) -or
+                            -not [regex]::IsMatch($lineRecord.Text, '^\s*\|')) {
+                            continue
+                        }
+                        if ([regex]::IsMatch($lineRecord.Text, '^\s*\|[\s\-:|]+\|?\s*$')) {
+                            continue
+                        }
+                        $cells = $lineRecord.Text.Split('|')
+                        if ($cells.Count -lt 3) {
+                            Add-Finding -Check 'EXEC-MANIFEST' -Evidence ('invalid Files to Change row at line {0}' -f $lineRecord.LineNumber)
+                            continue
+                        }
+                        $tablePath = ConvertFrom-MarkdownCell -Text $cells[1]
+                        $tableOp = ConvertFrom-MarkdownCell -Text $cells[2]
+                        if ([string]::Equals($tablePath, 'File', [System.StringComparison]::OrdinalIgnoreCase) -and
+                            [string]::Equals($tableOp, 'operation', [System.StringComparison]::OrdinalIgnoreCase)) {
+                            continue
+                        }
+                        if ([string]::IsNullOrWhiteSpace($tablePath)) {
+                            Add-Finding -Check 'EXEC-MANIFEST' -Evidence ('missing Files to Change path at line {0}' -f $lineRecord.LineNumber)
+                            continue
+                        }
+                        if ($tableOp -cnotmatch '^(?:create|modify|delete)$') {
+                            Add-Finding -Check 'EXEC-MANIFEST' -Evidence ('invalid Files to Change operation for {0}' -f $tablePath)
+                            continue
+                        }
+                        $filesTableRows.Add([pscustomobject]@{
+                            Path = $tablePath
+                            Op = $tableOp
+                            LineNumber = $lineRecord.LineNumber
+                            Identity = $null
+                        })
+                    }
+
+                    foreach ($tableRow in $filesTableRows) {
+                        if (Test-AbsolutePathToken -Path $tableRow.Path) {
+                            $tableRow.Identity = ConvertTo-AbsoluteManifestIdentity -Path $tableRow.Path
+                        }
+                        elseif (-not (Test-ManifestRelativePath -Path $tableRow.Path)) {
+                            Add-Finding -Check 'EXEC-MANIFEST' -Evidence ('noncanonical Files to Change path {0}' -f $tableRow.Path)
+                        }
+                        else {
+                            $candidateIdentities = New-Object 'System.Collections.Generic.HashSet[string]' ([System.StringComparer]::OrdinalIgnoreCase)
+                            foreach ($repoRoot in $repoRoots.Values) {
+                                $candidateIdentity = ConvertTo-ManifestIdentity -Root $repoRoot -RelativePath $tableRow.Path
+                                if ($allOwnedIdentities.Contains($candidateIdentity)) {
+                                    [void]$candidateIdentities.Add($candidateIdentity)
+                                }
+                            }
+                            if ($candidateIdentities.Count -ne 1) {
+                                Add-Finding -Check 'EXEC-MANIFEST' -Evidence ('relative Files to Change path {0} is orphaned or ambiguous' -f $tableRow.Path)
+                            }
+                            else {
+                                foreach ($candidateIdentity in $candidateIdentities) {
+                                    $tableRow.Identity = $candidateIdentity
+                                }
+                            }
+                        }
+
+                        if ($null -ne $tableRow.Identity -and
+                            -not $coderOwnedIdentities.Contains($tableRow.Identity) -and
+                            -not $hostOwnedIdentities.Contains($tableRow.Identity)) {
+                            Add-Finding -Check 'EXEC-MANIFEST' -Evidence ('Files to Change path {0} is not owned by a coder or host/owner task' -f $tableRow.Path)
+                        }
+                    }
+
+                    foreach ($manifestFileRecord in $manifestFileRecords) {
+                        $matchingRows = @($filesTableRows | Where-Object { $null -ne $_.Identity -and [string]::Equals($_.Identity, $manifestFileRecord.Identity, [System.StringComparison]::OrdinalIgnoreCase) })
+                        if ($matchingRows.Count -eq 0) {
+                            Add-Finding -Check 'EXEC-MANIFEST' -Evidence ('manifest path {0} is missing from Files to Change' -f $manifestFileRecord.Path)
+                            continue
+                        }
+                        foreach ($matchingRow in $matchingRows) {
+                            if (-not [string]::Equals($matchingRow.Op, $manifestFileRecord.Op, [System.StringComparison]::Ordinal)) {
+                                Add-Finding -Check 'EXEC-MANIFEST' -Evidence ('operation mismatch for manifest path {0}' -f $manifestFileRecord.Path)
+                            }
+                        }
+                    }
+
+                    foreach ($manifestTask in $manifestTasks) {
+                        foreach ($dependency in $manifestTask.DependsOn) {
+                            if (-not $coderIds.Contains($dependency)) {
+                                Add-Finding -Check 'EXEC-MANIFEST' -Evidence ('task {0} has unknown coder dependency {1}' -f $manifestTask.Id, $dependency)
+                            }
+                        }
+                    }
+
+                    $remainingTasks = New-Object 'System.Collections.Generic.HashSet[string]' ([System.StringComparer]::OrdinalIgnoreCase)
+                    foreach ($manifestTask in $manifestTasks) { [void]$remainingTasks.Add($manifestTask.Id) }
+                    $removedTask = $true
+                    while ($removedTask -and $remainingTasks.Count -gt 0) {
+                        $removedTask = $false
+                        $remainingSnapshot = @($remainingTasks | ForEach-Object { $_ })
+                        foreach ($remainingId in $remainingSnapshot) {
+                            if (-not $manifestTaskById.ContainsKey($remainingId)) {
+                                [void]$remainingTasks.Remove($remainingId)
+                                $removedTask = $true
+                                continue
+                            }
+                            $hasRemainingDependency = $false
+                            foreach ($dependency in $manifestTaskById[$remainingId].DependsOn) {
+                                if ($remainingTasks.Contains($dependency)) {
+                                    $hasRemainingDependency = $true
+                                    break
+                                }
+                            }
+                            if (-not $hasRemainingDependency) {
+                                [void]$remainingTasks.Remove($remainingId)
+                                $removedTask = $true
+                            }
+                        }
+                    }
+                    if ($remainingTasks.Count -gt 0) {
+                        Add-Finding -Check 'EXEC-MANIFEST' -Evidence 'task dependencies contain a cycle'
+                    }
+                }
+            }
+        }
+    }
+    catch {
+        Add-Finding -Check 'EXEC-MANIFEST' -Evidence ('invalid manifest data: {0}' -f $_.Exception.Message)
     }
 }
 

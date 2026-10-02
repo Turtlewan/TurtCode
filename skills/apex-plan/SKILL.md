@@ -1,6 +1,6 @@
 ---
 skill: apex-plan
-version: 2.6.0
+version: 2.7.0
 last_updated: 2026-10-02
 sources:
   - docs/technical/adr/ADR-010-multi-pass-review.md
@@ -113,13 +113,13 @@ Approval gate** banner and get the explicit `Approve? [y / n / edit]` answer BEF
 dispatch. Adjudicate its findings into the plan before drafting. It never replaces the
 post-readiness cold read below, and that read never sees its output.
 
-Template: `~/.claude/skills/apex-orchestrate/templates/spec-template.md`.
+Template: `~/.claude/skills/apex-orchestrate/templates/spec-template.md`. Derive its execution manifest,
+Files to Change, and Tasks list from the same decisions: one entry per coder task, with explicit file operation and dependency IDs; exclude HOST/OWNER tasks from the manifest.
 **You do not draft it yourself (ADR-045, ADR-048).** Resolve the open decisions, then dispatch the
 spec author: gpt-6-sol through the wrapper's author mode. The host assembles a prompt pack (`$pack`)
-containing the adjudicated plan brief, the exact template path
-`~/.claude/skills/apex-orchestrate/templates/spec-template.md`, the target
-`docs/drafts/<short-name>.md` (never straight to `docs/changes/`), and the three rules below (no why
-inline except Intent, mechanism in each task, one concern per task). For an absent draft, create:
+containing the adjudicated plan brief, the exact template path, the target `docs/drafts/<short-name>.md`
+(never straight to `docs/changes/`), and the three rules below (no why inline except Intent, mechanism
+in each task, one concern per task). For an absent draft, create:
 
 ```powershell
 & "$env:USERPROFILE\.claude\skills\apex-code\scripts\codex-dispatch.ps1" -AuthorSpec -Model gpt-6-sol -Task author -Spec <short-name> -Authorized "docs/drafts/<short-name>.md" -Worktree <repo> -BaseSha <HEAD> -Effort high -Prompt $pack

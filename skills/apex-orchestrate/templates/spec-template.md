@@ -82,13 +82,31 @@ Simplicity check: {considered simpler approach? yes/no — if yes, why this vers
 ## Files to Change
 | File | Operation | Notes |
 |------|-----------|-------|
-| {full/path/to/file.ts} | create \| modify \| delete | {what changes} |
+| {path/to/a.ts} | modify | {what changes} |
+| {path/to/b.ts} | create | {what changes} |
+| {path/to/c.ts} | modify | {what changes} |
+| {path/to/d.ts} | delete | {what changes} |
+
+## Execution manifest
+<!-- Include one entry per coder task. HOST/OWNER tasks stay outside the manifest.
+     ## Wave plan remains human-readable, while manifest depends_on dependencies are authoritative to the Engine. -->
+```json apex-manifest
+{
+  "version": 1,
+  "repos": { "app": "{absolute/forward-slash/repo/root}" },
+  "tasks": [
+    { "id": "1", "repo": "app", "files": [{ "path": "{path/to/a.ts}", "op": "modify" }, { "path": "{path/to/b.ts}", "op": "create" }], "depends_on": [] },
+    { "id": "2", "repo": "app", "files": [{ "path": "{path/to/c.ts}", "op": "modify" }], "depends_on": [] },
+    { "id": "3", "repo": "app", "files": [{ "path": "{path/to/d.ts}", "op": "delete" }], "depends_on": ["1", "2"] }
+  ]
+}
+```
 
 ## Tasks
 <!-- Every task names its exact files — never "update the auth flow" (forces the worker to explore = context cost + scope creep; the file list is also the wave grouping + scope lock). -->
-- [ ] Task 1: {description} — files: {full/path/a.ts, full/path/b.ts} — done when: {observable outcome}
-- [ ] Task 2: {description} — files: {full/path/c.ts} — done when: {observable outcome}
-- [ ] Task 3: {description} — files: {full/path/d.ts} — done when: {observable outcome}
+- [ ] **Task 1** — {description} — files: {path/to/a.ts, path/to/b.ts} — done when: {observable outcome}
+- [ ] **Task 2** — {description} — files: {path/to/c.ts} — done when: {observable outcome}
+- [ ] **Task 3** — {description} — files: {path/to/d.ts} — done when: {observable outcome}
 
 ## Wave plan
 <!-- Required for specs with ≥3 tasks. Planning derives this from stated dependencies. The emitted
@@ -160,6 +178,15 @@ docs/audit/ is different and stricter: TIER-1, refused outright on a path match.
 - [ ] {Step 1} → verify: {what to check — specific, observable}
 - [ ] {Step 2} → verify: {what to check — specific, observable}
 - [ ] {Step 3} → verify: {what to check — specific, observable}
+<!-- Scope check — use THIS form, never `git diff --stat`: a newly-created file is UNTRACKED, so it
+     never appears in a diff at all (and `git add` is not available — the coder may not touch the git
+     index), which makes "`git diff --stat` lists exactly N files" unsatisfiable for any spec that
+     creates one. `-uall` is required, or a new directory collapses to `dir/` and the file path never
+     shows. The output cannot separate your writes from the repo's normal dirty state, so assert the
+     LISTED paths — never a total file count. -->
+- [ ] Scope — nothing written outside `## Files to Change` → verify: `git status --porcelain -uall`
+      lists every path in `## Files to Change` (`??` = created, ` M` = modified), and every other
+      path it shows was already dirty before this build (name them in the report).
 <!-- Reachability (readiness-gate item): SPEC-LEVEL, or one line per exposed boundary — never per
      task. Name the wiring, not the mechanism. Typed client/server boundary → ROUND-TRIP test.
      deny-unknown-fields is a per-repo choice, never mandated by this slot. -->

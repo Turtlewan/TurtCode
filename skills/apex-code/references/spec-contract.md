@@ -1,6 +1,6 @@
 # APEX specification validation contract
 
-Contract version: **1.0.0**
+Contract version: **1.1.0**
 
 This reference describes the mechanical contract enforced by `apex-spec-validate.ps1`. It is not a substitute for the planning workflow's judgment checks.
 
@@ -15,16 +15,17 @@ The rationale and consumer split are recorded in [ADR-040](~/apex/docs/technical
 
 ## Fixed checks and findings
 
-The validator runs these four checks in this fixed order. Findings use the labels shown exactly:
+The validator runs these five checks in this fixed order. Findings use the labels shown exactly:
 
 ```text
 1. FAIL FILES-COMPLETENESS
 2. FAIL NO-UNRESOLVED-MARKERS
 3. FAIL TASK-CRITERIA-COVERAGE
 4. FAIL STRUCTURE
+5. FAIL EXEC-MANIFEST
 ```
 
-Fenced code-block content is excluded from all four checks. Prose, tables, and inline-code spans outside fences remain visible to the applicable checks. A fence may use backticks or tildes, but its closer must use the same character, be at least as long as the opener, and have no trailing content other than spaces. An unterminated code fence is itself a `STRUCTURE` failure.
+Fenced code-block content is excluded from the original four checks. `EXEC-MANIFEST` instead reads the single fence in the optional `## Execution manifest` section. Prose, tables, and inline-code spans outside fences remain visible to the applicable checks. A fence may use backticks or tildes, but its closer must use the same character, be at least as long as the opener, and have no trailing content other than spaces. An unterminated code fence is itself a `STRUCTURE` failure.
 
 ## Files completeness
 
@@ -75,6 +76,50 @@ Four sections also have mechanical non-empty rules:
 
 Required headings and qualifying content inside a fence do not count.
 
+## Execution manifest
+
+`## Execution manifest` is optional. If the unfenced heading is absent, `EXEC-MANIFEST` does not run and the spec's validation result is unchanged from the four-check contract. A `json apex-manifest` fence elsewhere does not opt a spec in or count for this section.
+
+When the heading is present, the section must contain exactly one fenced block and its complete, case-sensitive info string must be `json apex-manifest`. The fence body must be valid JSON with this shape:
+
+````text
+```json apex-manifest
+{
+  "version": 1,
+  "repos": {
+    "repo-key": "C:/absolute/canonical/repo-root"
+  },
+  "tasks": [
+    {
+      "id": "1a",
+      "repo": "repo-key",
+      "files": [
+        { "path": "canonical/repo-relative/file.ps1", "op": "modify" }
+      ],
+      "depends_on": [],
+      "effort": "high"
+    }
+  ]
+}
+```
+````
+
+The root must be an object. `version` is required and must be the JSON integer `1`. `repos` is a required, nonempty object whose nonempty keys are case-sensitive and unique. Each repo value is an absolute, canonical, forward-slash path: a drive path such as `C:/repo` or a slash-rooted path, with no backslash, doubled slash, trailing slash (except a filesystem root), empty segment, `.` segment, or `..` segment.
+
+`tasks` is a required JSON array. Every entry must be an object with these fields:
+
+1. `id` is a string matching a recognized Tasks number with an optional single letter suffix (`^[0-9]+[A-Za-z]?$`). IDs are canonicalized to lowercase for matching. Manifest IDs must be unique ignoring case.
+2. `repo` is a nonempty string that exactly names a key in `repos`.
+3. `files` is a nonempty array of objects. Each object has a canonical repo-relative `path` and an `op` equal, with exact lowercase spelling, to `create`, `modify`, or `delete`. A canonical path uses forward slashes, has no leading slash or drive prefix, and has no backslash, doubled or trailing slash, empty segment, `.` segment, or `..` segment. Paths within one task must be unique ignoring case.
+4. `depends_on` is an array of task-ID strings in the same canonical grammar. Dependencies within one task must be unique ignoring case.
+5. `effort` is optional. When present it must be exactly one of `low`, `medium`, `high`, `xhigh`, `max`, or `ultra`. When absent it falls back to frontmatter `coder_effort`, or to `medium` if that key is absent. A frontmatter value used by this fallback must belong to the same set.
+
+The validator classifies each recognized bold Tasks declaration from its title. It is host/owner-run only when that title contains the exact case-sensitive token `(HOST)` or the exact case-sensitive whole word `OWNER`. Thus `OWNER-run` and `(critical, OWNER-run)` qualify, while lowercase `owner`, `HOMEOWNER`, and `(HOSTILE)` do not. Every other recognized declaration is a coder task. Host/owner tasks stay out of the manifest. When a manifest is present, duplicate coder task IDs are rejected ignoring case rather than silently de-duplicated, and the canonical coder-ID set and manifest-ID set must be equal.
+
+For every coder task, the nonempty set of paths after its last `files:` marker must equal that task's manifest `files` set after resolving relative paths through the task's repo root; comparison is by canonical, case-insensitive absolute identity. Every manifest file must appear in Files to Change with the same case-sensitive operation. Every Files-to-Change row must use a canonical absolute or repo-relative path and one of the same three exact lowercase operations, and its file must be owned either by a coder manifest task or exclusively outside the manifest by a host/owner task's `files:` list. An absolute Files-to-Change path is matched directly. A relative row is accepted only when its full repo-relative path identifies exactly one owned path across the declared repo roots; suffix-only matching is never used, and an orphaned or ambiguous row fails.
+
+Each manifest task's repo key must resolve. Every dependency must resolve to a coder task ID, self-dependencies and longer cycles are rejected, and the resulting `depends_on` graph must be acyclic. `depends_on` is the machine dependency source; `## Wave plan` remains human-readable.
+
 ## Changing the contract
 
 The contract version is written in exactly two places:
@@ -87,30 +132,38 @@ The spec template's contract pointer is deliberately version-less, so it never b
 For every contract change, run this procedure in order from the repository root:
 
 1. Bump `$SpecContractVersion` in the validator and update the version line in this reference to the same value.
-2. Regenerate the fixture manifest:
-
-   ```powershell
-   powershell.exe -NoProfile -File skills/apex-code/scripts/spec-validate-test.ps1 -RegenerateExpected
-   ```
-
-3. Diff the regenerated manifest against its previously committed version:
-
-   ```powershell
-   git diff -- skills/apex-code/tests/spec-validator/expected.tsv
-   ```
-
-   Justify **every changed row individually** as an intended behaviour change, and record each justification in the changing spec or its commit message before committing the manifest. An unexplained changed row is a regression to fix, not a new expectation to accept. Wholesale regenerate-and-commit is forbidden precisely because it would launder a semantic break into a green suite.
-
-4. Run the corpus test:
+2. Run the hermetic validator test and ordinary corpus test against the existing live `expected.tsv`:
 
    ```powershell
    powershell.exe -NoProfile -File skills/apex-code/scripts/spec-validate-test.ps1
    ```
 
+3. Run the report-only sweep over the corpus and inspect every per-spec result:
+
+   ```powershell
+   powershell.exe -NoProfile -File skills/apex-code/scripts/spec-contract-sweep.ps1 -Root skills/apex-code/scripts/fixtures/spec-corpus
+   ```
+
+   The sweep only reports results; it does not write the TSV. If an expected outcome truly changed, update only the justified row or rows in `skills/apex-code/scripts/fixtures/spec-corpus/expected.tsv`, then diff the live TSV:
+
+   ```powershell
+   git diff -- skills/apex-code/scripts/fixtures/spec-corpus/expected.tsv
+   ```
+
+   Justify **every changed row individually** as an intended behaviour change, and record each justification in the changing spec or its commit message before committing the manifest. An unexplained changed row is a regression to fix, not a new expectation to accept. Wholesale regenerate-and-commit is forbidden precisely because it would launder a semantic break into a green suite.
+
+4. Re-run the hermetic and corpus test after any justified row edits:
+
+   ```powershell
+   powershell.exe -NoProfile -File skills/apex-code/scripts/spec-validate-test.ps1
+   ```
+
+   For an additive, backward-compatible change such as a new optional section, if the hermetic test and ordinary corpus test both pass against the existing, unmodified `expected.tsv`, no regenerate/diff/justify step is needed for that change.
+
 5. Run the report-only sweep once for each live repository's spec directories, then act on every report before shipping:
 
    ```powershell
-   powershell.exe -NoProfile -File skills/apex-code/scripts/spec-contract-sweep.ps1 -RepoPath C:\path\to\live-repo
+   powershell.exe -NoProfile -File skills/apex-code/scripts/spec-contract-sweep.ps1 -Root C:\path\to\live-repo
    ```
 
    Repeat the command with each live repository root. The sweep must cover that repository's live spec directories and never modifies a spec.

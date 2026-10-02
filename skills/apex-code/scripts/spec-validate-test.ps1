@@ -166,6 +166,63 @@ function Assert-SuiteCase {
     }
 }
 
+function New-ManifestFixture {
+    param(
+        [Parameter(Mandatory = $true)][string]$FilesRows,
+        [Parameter(Mandatory = $true)][string]$TaskRows,
+        [Parameter(Mandatory = $true)][string]$ManifestBody,
+        [Parameter(Mandatory = $true)][string]$AcceptanceRows,
+        [string]$Frontmatter = ''
+    )
+
+    $frontmatterBlock = ''
+    if (-not [string]::IsNullOrWhiteSpace($Frontmatter)) {
+        $frontmatterBlock = "---`n$Frontmatter`n---`n`n"
+    }
+
+    return (@"
+${frontmatterBlock}# Execution manifest validation fixture
+
+## Intent
+Validate one execution manifest contract case.
+
+## Assumptions
+The validator is available.
+
+## Prerequisites
+Windows PowerShell is available.
+
+## Files to Change
+| File | Operation | Notes |
+|---|---|---|
+$FilesRows
+
+## Execution manifest
+$ManifestBody
+
+## Tasks
+$TaskRows
+
+## Wave plan
+Run tasks according to manifest dependencies.
+
+## Permissions
+May modify the listed files.
+
+## Specialist Context
+No specialist context is required.
+
+## Documentation
+No documentation changes are required.
+
+## Acceptance Criteria
+$AcceptanceRows
+
+## Progress
+Not started.
+"@).Replace("`r`n", "`n")
+}
+
 $good = @'
 # Minimal validation fixture
 
@@ -245,10 +302,374 @@ Not started.
 $good = $good.Replace("`r`n", "`n")
 $noNamedFiles = $noNamedFiles.Replace("`r`n", "`n")
 
+$singleRepoManifest = @'
+~~~json apex-manifest
+{
+  "version": 1,
+  "repos": { "alpha": "C:/work/alpha" },
+  "tasks": [
+    { "id": "1", "repo": "alpha", "files": [{ "path": "src/one.ps1", "op": "modify" }], "depends_on": [] }
+  ]
+}
+~~~
+'@.Replace("`r`n", "`n")
+
+$singleRepoFiles = '| `src/one.ps1` | modify | Update the implementation. |'
+$singleRepoTasks = '- **Task 1** - files: `src/one.ps1` - Update the implementation.'
+$singleRepoCriteria = '- [ ] Task 1: `src/one.ps1` is updated.'
+$validSingleRepo = New-ManifestFixture `
+    -FilesRows $singleRepoFiles `
+    -TaskRows $singleRepoTasks `
+    -ManifestBody $singleRepoManifest `
+    -AcceptanceRows $singleRepoCriteria
+
+$twoTaskManifest = @'
+~~~json apex-manifest
+{
+  "version": 1,
+  "repos": { "alpha": "C:/work/alpha" },
+  "tasks": [
+    { "id": "1", "repo": "alpha", "files": [{ "path": "src/one.ps1", "op": "modify" }], "depends_on": [], "effort": "xhigh" },
+    { "id": "2", "repo": "alpha", "files": [{ "path": "src/two.ps1", "op": "create" }], "depends_on": ["1"] }
+  ]
+}
+~~~
+'@.Replace("`r`n", "`n")
+
+$twoTaskFiles = @'
+| `src/one.ps1` | modify | Update the first implementation. |
+| `src/two.ps1` | create | Add the second implementation. |
+'@.Replace("`r`n", "`n").TrimEnd()
+$twoTaskRows = @'
+- **Task 1** - files: `src/one.ps1` - Update the first implementation.
+- **Task 2** - files: `src/two.ps1` - Add the second implementation.
+'@.Replace("`r`n", "`n").TrimEnd()
+$twoTaskCriteria = @'
+- [ ] Task 1: `src/one.ps1` is updated.
+- [ ] Task 2: `src/two.ps1` is created.
+'@.Replace("`r`n", "`n").TrimEnd()
+$validEffortAndDefault = New-ManifestFixture `
+    -FilesRows $twoTaskFiles `
+    -TaskRows $twoTaskRows `
+    -ManifestBody $twoTaskManifest `
+    -AcceptanceRows $twoTaskCriteria `
+    -Frontmatter 'coder_effort: high'
+
+$versionOutput = @(& powershell.exe -NoProfile -ExecutionPolicy Bypass -File $validator -Version 2>&1 |
+    ForEach-Object { $_.ToString() })
+$versionExitCode = $LASTEXITCODE
+$versionMatch = [regex]::Match(($versionOutput -join "`n"), '(?m)^apex-spec-validate contract (?<Version>[^\s]+)$')
+if ($versionExitCode -ne 0 -or -not $versionMatch.Success) {
+    throw ('Unable to derive validator contract version: {0}' -f ($versionOutput -join [Environment]::NewLine))
+}
+$contractVersion = $versionMatch.Groups['Version'].Value
+
 try {
     New-Item -ItemType Directory -Path $fixtureRoot -Force | Out-Null
 
     Assert-Case 'good-minimal' $good 0
+
+    $noManifestBaseline = [string]::Copy($good)
+    Assert-Case 'no-manifest-baseline' $noManifestBaseline 0
+
+    Assert-Case 'manifest-valid-single-repo' $validSingleRepo 0
+
+    $twoRepoManifest = @'
+~~~json apex-manifest
+{
+  "version": 1,
+  "repos": { "alpha": "C:/work/alpha", "beta": "D:/work/beta" },
+  "tasks": [
+    { "id": "1", "repo": "alpha", "files": [{ "path": "src/one.ps1", "op": "modify" }], "depends_on": [] },
+    { "id": "2", "repo": "beta", "files": [{ "path": "src/two.ps1", "op": "create" }], "depends_on": ["1"] }
+  ]
+}
+~~~
+'@.Replace("`r`n", "`n")
+    $twoRepoFiles = @'
+| `C:/work/alpha/src/one.ps1` | modify | Update the first repository. |
+| `D:/work/beta/src/two.ps1` | create | Add to the second repository. |
+'@.Replace("`r`n", "`n").TrimEnd()
+    $twoRepoTasks = @'
+- **Task 1** - files: `C:/work/alpha/src/one.ps1` - Update the first repository.
+- **Task 2** - files: `D:/work/beta/src/two.ps1` - Add to the second repository.
+'@.Replace("`r`n", "`n").TrimEnd()
+    $validTwoRepo = New-ManifestFixture -FilesRows $twoRepoFiles -TaskRows $twoRepoTasks -ManifestBody $twoRepoManifest -AcceptanceRows $twoTaskCriteria
+    Assert-Case 'manifest-valid-two-repo-absolute-files' $validTwoRepo 0
+
+    $hostFiles = $singleRepoFiles + "`n| ``host/status.md`` | modify | HOST-owned bookkeeping. |"
+    $hostTasks = $singleRepoTasks + "`n- **Task 2 (HOST)** - files: ``host/status.md`` - Record bookkeeping."
+    $hostCriteria = $singleRepoCriteria + "`n- [ ] Task 2: ``host/status.md`` is updated."
+    $validHostOnly = New-ManifestFixture -FilesRows $hostFiles -TaskRows $hostTasks -ManifestBody $singleRepoManifest -AcceptanceRows $hostCriteria
+    Assert-Case 'manifest-valid-host-only-file' $validHostOnly 0
+
+    $ownerRunTasks = $singleRepoTasks + "`n- **Task 2 OWNER-run** - files: ``owner/status.md`` - Record bookkeeping."
+    $ownerFiles = $singleRepoFiles + "`n| ``owner/status.md`` | modify | OWNER-owned bookkeeping. |"
+    $ownerCriteria = $singleRepoCriteria + "`n- [ ] Task 2: ``owner/status.md`` is updated."
+    $validOwnerRun = New-ManifestFixture -FilesRows $ownerFiles -TaskRows $ownerRunTasks -ManifestBody $singleRepoManifest -AcceptanceRows $ownerCriteria
+    Assert-Case 'manifest-valid-owner-only-owner-run' $validOwnerRun 0
+
+    $criticalOwnerTasks = $ownerRunTasks.Replace('Task 2 OWNER-run', 'Task 2 (critical, OWNER-run)')
+    $validCriticalOwner = New-ManifestFixture -FilesRows $ownerFiles -TaskRows $criticalOwnerTasks -ManifestBody $singleRepoManifest -AcceptanceRows $ownerCriteria
+    Assert-Case 'manifest-valid-owner-only-critical-owner-run' $validCriticalOwner 0
+
+    $suffixManifest = $singleRepoManifest.Replace('"id": "1"', '"id": "1a"')
+    $suffixTasks = $singleRepoTasks.Replace('Task 1', 'Task 1A')
+    $suffixCriteria = $singleRepoCriteria.Replace('Task 1', 'Task 1A')
+    $validSuffixId = New-ManifestFixture -FilesRows $singleRepoFiles -TaskRows $suffixTasks -ManifestBody $suffixManifest -AcceptanceRows $suffixCriteria
+    Assert-Case 'manifest-valid-case-insensitive-letter-suffix-id' $validSuffixId 0
+
+    Assert-Case 'manifest-valid-effort-plus-default-effort' $validEffortAndDefault 0
+
+    $repoRoot = (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot '..\..\..')).Path
+    $specTemplatePath = Join-Path $repoRoot 'skills\apex-orchestrate\templates\spec-template.md'
+    if (-not (Test-Path -LiteralPath $specTemplatePath -PathType Leaf)) {
+        throw ('Spec template is missing: {0}' -f $specTemplatePath)
+    }
+
+    $specTemplate = [System.IO.File]::ReadAllText($specTemplatePath, $utf8).Replace("`r`n", "`n")
+    $filesSection = [regex]::Match(
+        $specTemplate,
+        '(?ms)^## Files to Change[ \t]*\n(?<Body>.*?)(?=^## |\z)'
+    )
+    if (-not $filesSection.Success) {
+        throw ('Could not extract the ## Files to Change section from {0}' -f $specTemplatePath)
+    }
+
+    $templateFileRows = @(
+        [regex]::Matches($filesSection.Groups['Body'].Value, '(?m)^\|.*\|[ \t]*$') |
+            ForEach-Object { $_.Value }
+    )
+    if ($templateFileRows.Count -lt 3) {
+        throw ('Could not extract example Files to Change table rows from {0}' -f $specTemplatePath)
+    }
+    $templateExampleFiles = ($templateFileRows | Select-Object -Skip 2) -join "`n"
+    if ([string]::IsNullOrWhiteSpace($templateExampleFiles)) {
+        throw ('Could not extract example Files to Change table rows from {0}' -f $specTemplatePath)
+    }
+
+    $manifestSection = [regex]::Match(
+        $specTemplate,
+        '(?ms)^## Execution manifest[ \t]*\n(?<Body>.*?)(?=^## |\z)'
+    )
+    $templateManifestBlocks = @()
+    if ($manifestSection.Success) {
+        $templateManifestBlocks = @(
+            [regex]::Matches(
+                $manifestSection.Groups['Body'].Value,
+                '(?ms)^```json apex-manifest[ \t]*\n.*?^```[ \t]*$'
+            ) | ForEach-Object { $_.Value }
+        )
+    }
+    if ($templateManifestBlocks.Count -ne 1) {
+        throw ('Expected one example apex-manifest block under ## Execution manifest in {0}; found {1}' -f $specTemplatePath, $templateManifestBlocks.Count)
+    }
+    $templateExampleManifest = $templateManifestBlocks[0] + "`n"
+
+    $tasksSection = [regex]::Match(
+        $specTemplate,
+        '(?ms)^## Tasks[ \t]*\n(?<Body>.*?)(?=^## |\z)'
+    )
+    $templateTaskLines = @()
+    if ($tasksSection.Success) {
+        $templateTaskLines = @(
+            [regex]::Matches(
+                $tasksSection.Groups['Body'].Value,
+                '(?m)^-[ \t]+\[ \][ \t]+\*\*Task [0-9]+\*\*.*$'
+            ) | ForEach-Object { $_.Value }
+        )
+    }
+    if ($templateTaskLines.Count -eq 0) {
+        throw ('Could not extract example **Task N** lines under ## Tasks from {0}' -f $specTemplatePath)
+    }
+    $templateExampleTasks = $templateTaskLines -join "`n"
+
+    $templateExampleValues = [ordered]@{
+        '{absolute/forward-slash/repo/root}' = $repoRoot.Replace('\', '/')
+        '{path/to/a.ts, path/to/b.ts}'       = 'src/a.ts, src/b.ts'
+        '{path/to/a.ts}'                     = 'src/a.ts'
+        '{path/to/b.ts}'                     = 'src/b.ts'
+        '{path/to/c.ts}'                     = 'src/c.ts'
+        '{path/to/d.ts}'                     = 'src/d.ts'
+        '{what changes}'                     = 'Apply the template example change.'
+        '{description}'                      = 'Implement the template example'
+        '{observable outcome}'               = 'the template example is complete.'
+    }
+    foreach ($placeholder in $templateExampleValues.Keys) {
+        $replacement = $templateExampleValues[$placeholder]
+        $templateExampleFiles = $templateExampleFiles.Replace($placeholder, $replacement)
+        $templateExampleManifest = $templateExampleManifest.Replace($placeholder, $replacement)
+        $templateExampleTasks = $templateExampleTasks.Replace($placeholder, $replacement)
+    }
+    $templateExampleCriteria = @'
+- [ ] Task 1: `src/a.ts` and `src/b.ts` are ready.
+- [ ] Task 2: `src/c.ts` is updated.
+- [ ] Task 3: `src/d.ts` is removed.
+'@.Replace("`r`n", "`n").TrimEnd()
+    $validTemplateExample = New-ManifestFixture -FilesRows $templateExampleFiles -TaskRows $templateExampleTasks -ManifestBody $templateExampleManifest -AcceptanceRows $templateExampleCriteria
+    Assert-Case 'manifest-valid-template-instantiated-example' $validTemplateExample 0
+
+    $zeroBlocks = $validSingleRepo.Replace($singleRepoManifest, 'No manifest fence is present.')
+    Assert-Case 'manifest-zero-blocks' $zeroBlocks 1 'FAIL EXEC-MANIFEST'
+
+    $multipleBlocks = $validSingleRepo.Replace($singleRepoManifest, ($singleRepoManifest.TrimEnd() + "`n`n" + $singleRepoManifest.TrimEnd()))
+    Assert-Case 'manifest-multiple-blocks' $multipleBlocks 1 'FAIL EXEC-MANIFEST'
+
+    $wrongInfoString = $validSingleRepo.Replace('~~~json apex-manifest', '~~~json')
+    Assert-Case 'manifest-wrong-info-string-inside-section' $wrongInfoString 1 'FAIL EXEC-MANIFEST'
+
+    $strayOutsideSection = $zeroBlocks + "`n## Notes`n" + $singleRepoManifest
+    Assert-Case 'manifest-stray-fence-outside-section' $strayOutsideSection 1 'FAIL EXEC-MANIFEST'
+
+    $malformedJson = $validSingleRepo.Replace('"version": 1,', '"version": 1,,')
+    Assert-Case 'manifest-malformed-json' $malformedJson 1 'FAIL EXEC-MANIFEST'
+
+    $rootWrongType = $validSingleRepo.Replace(($singleRepoManifest.TrimEnd()), "~~~json apex-manifest`n[]`n~~~")
+    Assert-Case 'manifest-root-wrong-type' $rootWrongType 1 'FAIL EXEC-MANIFEST'
+
+    $missingVersion = $validSingleRepo.Replace("  `"version`": 1,`n", '')
+    Assert-Case 'manifest-missing-version' $missingVersion 1 'FAIL EXEC-MANIFEST'
+
+    $nonintegerVersion = $validSingleRepo.Replace('"version": 1', '"version": 1.5')
+    Assert-Case 'manifest-noninteger-version' $nonintegerVersion 1 'FAIL EXEC-MANIFEST'
+
+    $wrongVersion = $validSingleRepo.Replace('"version": 1', '"version": 2')
+    Assert-Case 'manifest-wrong-version' $wrongVersion 1 'FAIL EXEC-MANIFEST'
+
+    $missingRepos = $validSingleRepo.Replace("  `"repos`": { `"alpha`": `"C:/work/alpha`" },`n", '')
+    Assert-Case 'manifest-missing-repos' $missingRepos 1 'FAIL EXEC-MANIFEST'
+
+    $wrongTypeRepos = $validSingleRepo.Replace('"repos": { "alpha": "C:/work/alpha" }', '"repos": []')
+    Assert-Case 'manifest-wrong-type-repos' $wrongTypeRepos 1 'FAIL EXEC-MANIFEST'
+
+    $missingTasks = $validSingleRepo.Replace('"tasks": [', '"not_tasks": [')
+    Assert-Case 'manifest-missing-tasks' $missingTasks 1 'FAIL EXEC-MANIFEST'
+
+    $wrongTypeTasks = $validSingleRepo.Replace("`"tasks`": [`n    { `"id`": `"1`", `"repo`": `"alpha`", `"files`": [{ `"path`": `"src/one.ps1`", `"op`": `"modify`" }], `"depends_on`": [] }`n  ]", '"tasks": {}')
+    Assert-Case 'manifest-wrong-type-tasks' $wrongTypeTasks 1 'FAIL EXEC-MANIFEST'
+
+    $wrongTypeTaskEntry = $validSingleRepo.Replace('{ "id": "1", "repo": "alpha", "files": [{ "path": "src/one.ps1", "op": "modify" }], "depends_on": [] }', '"not-an-object"')
+    Assert-Case 'manifest-wrong-type-task-entry' $wrongTypeTaskEntry 1 'FAIL EXEC-MANIFEST'
+
+    $malformedId = $validSingleRepo.Replace('"id": "1"', '"id": "task-1"')
+    Assert-Case 'manifest-malformed-id' $malformedId 1 'FAIL EXEC-MANIFEST'
+
+    $duplicateManifestId = $validEffortAndDefault.Replace('"id": "2"', '"id": "1"')
+    Assert-Case 'manifest-duplicate-id' $duplicateManifestId 1 'FAIL EXEC-MANIFEST'
+
+    $duplicateCoderRows = $singleRepoTasks + "`n" + $singleRepoTasks
+    $duplicateCoderCriteria = $singleRepoCriteria
+    $duplicateCoderId = New-ManifestFixture -FilesRows $singleRepoFiles -TaskRows $duplicateCoderRows -ManifestBody $singleRepoManifest -AcceptanceRows $duplicateCoderCriteria
+    Assert-Case 'manifest-duplicate-coder-task-id' $duplicateCoderId 1 'FAIL EXEC-MANIFEST'
+
+    $missingCoderEntry = $validEffortAndDefault.Replace("    { `"id`": `"2`", `"repo`": `"alpha`", `"files`": [{ `"path`": `"src/two.ps1`", `"op`": `"create`" }], `"depends_on`": [`"1`"] }`n", '')
+    Assert-Case 'manifest-missing-coder-entry' $missingCoderEntry 1 'FAIL EXEC-MANIFEST'
+
+    $extraCoderEntry = $validSingleRepo.Replace('"id": "1"', '"id": "2"')
+    Assert-Case 'manifest-extra-coder-entry' $extraCoderEntry 1 'FAIL EXEC-MANIFEST'
+
+    $lowercaseHostTasks = $hostTasks.Replace('(HOST)', '(host)')
+    $lowercaseHost = New-ManifestFixture -FilesRows $hostFiles -TaskRows $lowercaseHostTasks -ManifestBody $singleRepoManifest -AcceptanceRows $hostCriteria
+    Assert-Case 'manifest-unmarked-lowercase-host-title' $lowercaseHost 1 'FAIL EXEC-MANIFEST'
+
+    $homeownerTasks = $ownerRunTasks.Replace('OWNER-run', 'HOMEOWNER')
+    $falseHomeowner = New-ManifestFixture -FilesRows $ownerFiles -TaskRows $homeownerTasks -ManifestBody $singleRepoManifest -AcceptanceRows $ownerCriteria
+    Assert-Case 'manifest-false-owner-marker-homeowner' $falseHomeowner 1 'FAIL EXEC-MANIFEST'
+
+    $hostileTasks = $hostTasks.Replace('(HOST)', '(HOSTILE)')
+    $falseHostile = New-ManifestFixture -FilesRows $hostFiles -TaskRows $hostileTasks -ManifestBody $singleRepoManifest -AcceptanceRows $hostCriteria
+    Assert-Case 'manifest-false-host-marker-hostile' $falseHostile 1 'FAIL EXEC-MANIFEST'
+
+    $missingRepoField = $validSingleRepo.Replace('"id": "1", "repo": "alpha",', '"id": "1",')
+    Assert-Case 'manifest-missing-task-repo' $missingRepoField 1 'FAIL EXEC-MANIFEST'
+
+    $wrongTypeRepoField = $validSingleRepo.Replace('"repo": "alpha"', '"repo": 1')
+    Assert-Case 'manifest-wrong-type-task-repo' $wrongTypeRepoField 1 'FAIL EXEC-MANIFEST'
+
+    $emptyTaskFiles = $validSingleRepo.Replace('"files": [{ "path": "src/one.ps1", "op": "modify" }]', '"files": []')
+    Assert-Case 'manifest-empty-task-files' $emptyTaskFiles 1 'FAIL EXEC-MANIFEST'
+
+    $wrongTypeTaskFiles = $validSingleRepo.Replace('"files": [{ "path": "src/one.ps1", "op": "modify" }]', '"files": {}')
+    Assert-Case 'manifest-wrong-type-task-files' $wrongTypeTaskFiles 1 'FAIL EXEC-MANIFEST'
+
+    $wrongTypeFileEntry = $validSingleRepo.Replace('{ "path": "src/one.ps1", "op": "modify" }', '"src/one.ps1"')
+    Assert-Case 'manifest-wrong-type-file-entry' $wrongTypeFileEntry 1 'FAIL EXEC-MANIFEST'
+
+    $missingTaskPath = $validSingleRepo.Replace('"path": "src/one.ps1", ', '')
+    Assert-Case 'manifest-missing-task-path-field' $missingTaskPath 1 'FAIL EXEC-MANIFEST'
+
+    $missingTaskOp = $validSingleRepo.Replace(', "op": "modify"', '')
+    Assert-Case 'manifest-missing-task-op-field' $missingTaskOp 1 'FAIL EXEC-MANIFEST'
+
+    $wrongTypeDependsOn = $validSingleRepo.Replace('"depends_on": []', '"depends_on": {}')
+    Assert-Case 'manifest-wrong-type-depends-on' $wrongTypeDependsOn 1 'FAIL EXEC-MANIFEST'
+
+    $missingDependsOn = $validSingleRepo.Replace(', "depends_on": []', '')
+    Assert-Case 'manifest-missing-depends-on' $missingDependsOn 1 'FAIL EXEC-MANIFEST'
+
+    $unequalTaskRows = $singleRepoTasks.Replace('`src/one.ps1`', '`src/one.ps1`, `src/two.ps1`')
+    $unequalTaskFiles = New-ManifestFixture -FilesRows $twoTaskFiles -TaskRows $unequalTaskRows -ManifestBody $singleRepoManifest -AcceptanceRows $singleRepoCriteria
+    Assert-Case 'manifest-unequal-task-files' $unequalTaskFiles 1 'FAIL EXEC-MANIFEST'
+
+    $missingFilesToChangePath = $validSingleRepo.Replace($singleRepoFiles, '| | modify | Missing path. |')
+    Assert-Case 'manifest-missing-files-to-change-path' $missingFilesToChangePath 1 'FAIL EXEC-MANIFEST'
+
+    $operationMismatch = $validSingleRepo.Replace('| `src/one.ps1` | modify |', '| `src/one.ps1` | create |')
+    Assert-Case 'manifest-operation-mismatch' $operationMismatch 1 'FAIL EXEC-MANIFEST'
+
+    $invalidOperation = $validSingleRepo.Replace('| `src/one.ps1` | modify |', '| `src/one.ps1` | update |')
+    Assert-Case 'manifest-invalid-files-to-change-operation' $invalidOperation 1 'FAIL EXEC-MANIFEST'
+
+    $invalidManifestOperation = $validSingleRepo.Replace('"op": "modify"', '"op": "update"')
+    Assert-Case 'manifest-invalid-task-operation' $invalidManifestOperation 1 'FAIL EXEC-MANIFEST'
+
+    $orphanFiles = $singleRepoFiles + "`n| ``src/orphan.ps1`` | create | Not owned by any task. |"
+    $orphanRelativePath = New-ManifestFixture -FilesRows $orphanFiles -TaskRows $singleRepoTasks -ManifestBody $singleRepoManifest -AcceptanceRows $singleRepoCriteria
+    Assert-Case 'manifest-orphan-relative-files-to-change-path' $orphanRelativePath 1 'FAIL EXEC-MANIFEST'
+
+    $ambiguousManifest = @'
+~~~json apex-manifest
+{
+  "version": 1,
+  "repos": { "alpha": "C:/work/alpha", "beta": "D:/work/beta" },
+  "tasks": [
+    { "id": "1", "repo": "alpha", "files": [{ "path": "src/shared.ps1", "op": "modify" }], "depends_on": [] },
+    { "id": "2", "repo": "beta", "files": [{ "path": "src/shared.ps1", "op": "modify" }], "depends_on": [] }
+  ]
+}
+~~~
+'@.Replace("`r`n", "`n")
+    $ambiguousTasks = @'
+- **Task 1** - files: `C:/work/alpha/src/shared.ps1` - Update alpha.
+- **Task 2** - files: `D:/work/beta/src/shared.ps1` - Update beta.
+'@.Replace("`r`n", "`n").TrimEnd()
+    $ambiguousFiles = '| `src/shared.ps1` | modify | Ambiguous between repositories. |'
+    $ambiguousRelativePath = New-ManifestFixture -FilesRows $ambiguousFiles -TaskRows $ambiguousTasks -ManifestBody $ambiguousManifest -AcceptanceRows $twoTaskCriteria
+    Assert-Case 'manifest-ambiguous-relative-files-to-change-path' $ambiguousRelativePath 1 'FAIL EXEC-MANIFEST'
+
+    $unknownRepo = $validSingleRepo.Replace('"repo": "alpha"', '"repo": "missing"')
+    Assert-Case 'manifest-unknown-repo' $unknownRepo 1 'FAIL EXEC-MANIFEST'
+
+    $unknownDependency = $validSingleRepo.Replace('"depends_on": []', '"depends_on": ["9"]')
+    Assert-Case 'manifest-unknown-dependency' $unknownDependency 1 'FAIL EXEC-MANIFEST'
+
+    $selfCycle = $validSingleRepo.Replace('"depends_on": []', '"depends_on": ["1"]')
+    Assert-Case 'manifest-self-cycle' $selfCycle 1 'FAIL EXEC-MANIFEST'
+
+    $longerCycle = $validEffortAndDefault.Replace('"depends_on": [], "effort": "xhigh"', '"depends_on": ["2"], "effort": "xhigh"')
+    Assert-Case 'manifest-longer-cycle' $longerCycle 1 'FAIL EXEC-MANIFEST'
+
+    $invalidEffort = $validSingleRepo.Replace('"depends_on": []', '"depends_on": [], "effort": "extreme"')
+    Assert-Case 'manifest-invalid-effort' $invalidEffort 1 'FAIL EXEC-MANIFEST'
+
+    $invalidDefaultEffort = New-ManifestFixture -FilesRows $singleRepoFiles -TaskRows $singleRepoTasks -ManifestBody $singleRepoManifest -AcceptanceRows $singleRepoCriteria -Frontmatter 'coder_effort: extreme'
+    Assert-Case 'manifest-invalid-default-effort' $invalidDefaultEffort 1 'FAIL EXEC-MANIFEST'
+
+    $noncanonicalRepoRoot = $validSingleRepo.Replace('C:/work/alpha', 'C:/work/../alpha')
+    Assert-Case 'manifest-noncanonical-repo-root' $noncanonicalRepoRoot 1 'FAIL EXEC-MANIFEST'
+
+    $noncanonicalTaskPath = $validSingleRepo.Replace('"path": "src/one.ps1"', '"path": "src/../one.ps1"')
+    Assert-Case 'manifest-noncanonical-task-path' $noncanonicalTaskPath 1 'FAIL EXEC-MANIFEST'
 
     $missingByPath = $good.Replace('Task 1: `src/good.ps1` exists.', 'Task 1: src/missing.ps1 exists.')
     Assert-Case 'missing-file-by-path' $missingByPath 1 'FAIL FILES-COMPLETENESS'
@@ -361,8 +782,8 @@ try {
             break
         }
     }
-    $expectedSummary = 'SWEEP contract 1.0.0 - {0} specs, {1} pass, {2} fail, 0 error' -f `
-        $manifestRows.Count, $expectedPassCount, $expectedFailCount
+    $expectedSummary = 'SWEEP contract {0} - {1} specs, {2} pass, {3} fail, 0 error' -f `
+        $contractVersion, $manifestRows.Count, $expectedPassCount, $expectedFailCount
     $hashesAfter = @{}
     foreach ($corpusFile in [System.IO.Directory]::GetFiles($corpusRoot, '*', [System.IO.SearchOption]::AllDirectories)) {
         $hashesAfter[$corpusFile] = (Get-FileHash -LiteralPath $corpusFile -Algorithm SHA256).Hash
@@ -402,8 +823,8 @@ try {
     $excludedSweepResult = Invoke-Sweep -Root $corpusRoot -Exclude $excludedFixtureName
     $normalizedExcludedPath = $excludedRow.RelativePath.Replace('\', '/')
     $expectedSkip = 'SKIP {0} (excluded)' -f $normalizedExcludedPath
-    $expectedExcludedSummary = 'SWEEP contract 1.0.0 - {0} specs, {1} pass, {2} fail, 0 error' -f `
-        $manifestRows.Count, $excludedPassCount, $excludedFailCount
+    $expectedExcludedSummary = 'SWEEP contract {0} - {1} specs, {2} pass, {3} fail, 0 error' -f `
+        $contractVersion, $manifestRows.Count, $excludedPassCount, $excludedFailCount
     $excludedSweepPassed = (
         ($excludedSweepResult.ExitCode -eq 0) -and
         ($excludedSweepResult.Output -contains $expectedSkip) -and
