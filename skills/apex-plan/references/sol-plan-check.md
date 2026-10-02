@@ -1,12 +1,14 @@
 # Sol plan-check gate + cross-model deliberation (ADR-032)
 
-Runs after the readiness gate, before a Deep Details spec moves to `docs/changes/`. One
-independent, fresh, stateless read per spec; skip only trivial single-domain specs (same economy
-rule as dispatched domain review). Light / Bug Fix modes skip entirely. For a gpt-6-sol-authored
-spec (ADR-048), the Claude `apex-spec-reviewer` is the cross-family check; this gpt-5.6-sol cold
-read is an independent same-family read.
+Runs after the readiness gate, before an applicable Deep Details spec moves to `docs/changes/`.
+For a gpt-6-sol-authored spec (ADR-048), the Claude `apex-critic` in spec mode is the cross-family
+check; this gpt-5.6-sol cold read is an independent same-family read.
 
 ## The cold read (the gate)
+
+**Trigger:** Low and doc-only specs skip this read; Medium and High retain one independent, fresh,
+stateless read per spec. An explicit `risk: high` overrides doc-only, and an unresolved High BLOCK
+remains blocking.
 
 ```powershell
 # Raw `codex exec` is guard-blocked (W2, 2026-07-17) — dispatch through the wrapper:
@@ -37,10 +39,9 @@ the spec, do not rewrite it. Do not open docs/drafts/*.review.log."*
   UPWARD to `max` for a known-hard spec — that remains legal; never below `xhigh`.
 - Every plan-check dispatch appends its own digest-bound row (Round token `sol-N`) to
   `docs/drafts/<short-name>.review.log` (apex-plan § Convergence control). Plan-check rows are
-  EXEMPT from the 3-round reviewer-family cap — the plan-check is mandatory and must stay available
-  after the cap — but the `SPEC-DIGEST` header line is still mandatory, and a verdict whose digest
-  no longer matches at adjudication is VOID. Plan-check repair cycling is bounded by the announced
-  pass-or-park rule, not by that cap.
+  separate from the Critic spec-mode 3-round cap, but the `SPEC-DIGEST` header line is still
+  mandatory, and a verdict whose digest no longer matches at adjudication is VOID. Plan-check
+  repair cycling is bounded by the announced pass-or-park rule, not by that cap.
 
 ## Disposition
 
@@ -86,10 +87,12 @@ agreements + disputes for the user's final call. The host never suggests Tier 2 
 
 ## Pre-draft architecture pass (ADR-032 §1b)
 
-Runs BEFORE the spec author is dispatched, on EVERY Deep Details spec — additional to the cold read
-above, never a replacement. Same wrapper, same read-only Sol; different input, different lens: it
-judges the PLAN, and no spec exists yet. **The cold read's skip-trivial economy rule does NOT apply
-here:** this pass has no exemption, while that rule stays unchanged for the cold read itself.
+Runs BEFORE the spec author is dispatched.
+
+**Trigger:** Low and doc-only specs skip this pass; Medium and High retain it in addition to the
+cold read above, never as a replacement. An explicit `risk: high` overrides doc-only, and an
+unresolved High BLOCK remains blocking. Same wrapper, same read-only Sol; different input,
+different lens: it judges the PLAN, and no spec exists yet.
 
 ```powershell
 # $planBrief = a REQUIRED `risk:` field (host-assigned at plan time) + problem statement +
@@ -124,15 +127,15 @@ each with file/line + rationale. Judge the plan, do not write it."*
   author. Sol never writes the plan and never edits the spec.
 - **The cold read stays cold.** Never pass this pass's findings, the host's answers to them, or the
   fact that it ran into the post-readiness dispatch above — evaluator independence. The pre-draft
-  pass is mandatory for every Deep Details spec; the post-readiness read runs per §1's existing rule
-  (mandatory except its trivial-single-domain economy skip). Neither substitutes for the other.
+  pass and post-readiness read use the same tier trigger: Low and doc-only skip both; Medium and
+  High retain both. Neither substitutes for the other.
 - **The cold-read prompt excludes the sidecar — discovery, not just delivery.** The prompt shape in
   § The cold read above now ends with `Do not open docs/drafts/*.review.log.` The sidecar carries
   prior findings, this pass's among them, so a cold reader that opens it is no longer cold.
-- **Round record — ALWAYS.** Plan-check FAMILY. Every arch-check dispatch creates (only when absent) or appends to
+- **Round record — ALWAYS WHEN DISPATCHED.** Every arch-check dispatch creates (only when absent) or appends to
   `docs/drafts/<short-name>.review.log` (short-name fixed at plan time) with a normal `arch-N` row on
-  apex-plan § Convergence control's terms — EXEMPT from the 3-round reviewer-family cap, bounded by
-  pass-or-park. `Spec digest` = the literal `— (pre-draft)` when no draft exists yet, or the real
+  apex-plan § Convergence control's terms — separate from the Critic spec-mode 3-round cap and
+  bounded by pass-or-park. `Spec digest` = the literal `— (pre-draft)` when no draft exists yet, or the real
   `git hash-object` digest when re-planning against a live draft: a value convention inside the
   existing row schema, not a schema change, and no counting rule moves. **While the cell holds the
   `— (pre-draft)` sentinel the digest-mismatch/VOID check is a DEFINED NO-OP** — no file exists to

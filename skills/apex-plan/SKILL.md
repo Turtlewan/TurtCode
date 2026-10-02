@@ -1,7 +1,7 @@
 ---
 skill: apex-plan
-version: 2.5.0
-last_updated: 2026-10-01
+version: 2.6.0
+last_updated: 2026-10-02
 sources:
   - docs/technical/adr/ADR-010-multi-pass-review.md
   - docs/technical/adr/ADR-011-instinct-loop-no-engine.md
@@ -104,13 +104,14 @@ ask-first aesthetic gate, the cheap-mockup loop, the visual review gate).
 
 ## Writing the spec
 
-**FIRST, before you dispatch the author (Deep Details only): the pre-draft Sol architecture pass** â€”
-a cold `gpt-5.6-sol` read of the PLAN BRIEF (problem statement, proposed structure, file map), not
-of a spec. ADR-032 Â§1b; recipe in `references/sol-plan-check.md` Â§ Pre-draft architecture pass.
-Advisory by default; for `risk: high` it is an **approval gate** â€” an unresolved BLOCK means you
-print the **apex-governance Â§ Approval gate** banner and get the explicit `Approve? [y / n / edit]`
-answer BEFORE any spec-author dispatch. Adjudicate its findings into the plan before drafting. It
-never replaces the post-readiness cold read below, and that read never sees its output.
+**FIRST, before you dispatch the author (Deep Details, Medium/High only): the pre-draft Sol
+architecture pass** â€” a cold `gpt-5.6-sol` read of the PLAN BRIEF (problem statement, proposed
+structure, file map), not of a spec. ADR-032 Â§1b; recipe in `references/sol-plan-check.md` Â§
+Pre-draft architecture pass. Low and doc-only specs skip this pass. It is advisory for Medium; for
+High it is an **approval gate** â€” an unresolved BLOCK means you print the **apex-governance Â§
+Approval gate** banner and get the explicit `Approve? [y / n / edit]` answer BEFORE any spec-author
+dispatch. Adjudicate its findings into the plan before drafting. It never replaces the
+post-readiness cold read below, and that read never sees its output.
 
 Template: `~/.claude/skills/apex-orchestrate/templates/spec-template.md`.
 **You do not draft it yourself (ADR-045, ADR-048).** Resolve the open decisions, then dispatch the
@@ -129,7 +130,7 @@ review its draft against the rules below and the readiness gate. The rest of thi
 contract you hand the author and grade against.
 
 **Every later write to an existing draft is a new author dispatch** -- reviewer fixes, readiness
-fixes, cold-read amendments, the post-cap fresh draft, and owner-directed fixes alike. Each is a
+fixes, cold-read amendments, and owner-directed fixes alike. Each is a
 fresh, stateless gpt-6-sol `-AuthorSpec` call with the same arguments plus
 `-ExpectedDigest (git -C <repo> hash-object "docs/drafts/<short-name>.md")` and a prompt containing
 the requested changes. The host never edits the draft itself. Author dispatches into one repo run
@@ -172,9 +173,9 @@ launch boundary are `not-launched`, even when exit 69 left a ledger row. An owne
 Agent dispatch uses Reviewer = `author:sonnet:<create|revise>`, Verdict = `agent`, and Disposition
 = `launched` only after its child process starts. Review rows follow.
 
-**Split rule:** >3 files or >2 logical phases â†’ split. When you split (or write alongside other
-pending specs), make the specs **file-disjoint**, with any real dependency as a `## Prerequisites`
-edge â€” so a session drains the whole set as parallel waves (ADR-029).
+**Split rule:** >3 files or >2 logical phases â†’ split, except doc-only specs. When you split (or
+write alongside other pending specs), make the specs **file-disjoint**, with any real dependency
+as a `## Prerequisites` edge â€” so a session drains the whole set as parallel waves (ADR-029).
 
 ### Spec one WAVE ahead â€” never the whole roadmap (the default)
 
@@ -207,12 +208,19 @@ fails that, it is also too far ahead to write.
 1. **No *why* inline.** Litmus: does it change what gets built? **No** â†’ cut it (home = an ADR).
    **Yes** â†’ don't add the why, make the *what* explicit. One exception: the template's `## Intent`
    block (intent / invariants / non-goals, â‰¤10 lines) â€” it travels to the coder in the dispatch pack
-   (ADR-031).
+   (ADR-031). Under the definition in Intent, declare `risk: low|medium|high`; absent = medium. A
+   doc-only spec is Low unless it explicitly declares `risk: high`, which always wins. Doc-only
+   means every Files-to-Change path is documentation prose under `docs/`, an ADR, README, or
+   CHANGELOG, and none is a skill (`SKILL.md`, `references/**`, `templates/**`), agent, hook,
+   settings, script, or other config/instruction file.
 2. **Tasks state the *mechanism*, not just the outcome.** A "reuse/extend X" task cannot achieve a
    behaviour X structurally lacks. Name the concrete producing step â€” the wiring that *emits* the
    behaviour. This is the highest-yield spec defect and it hides behind plausible prose.
 3. **One concern layer per task** (API / DB / UI / test). Never manufacture thin tasks to raise
    worker count â€” spawn overhead exceeds the saving.
+
+For doc-only work, write acceptance criteria as presence/absence, version/date, cap, pointer, and
+verify-fence checks. Exact-line manifests and whole-tree hashes are reserved for High specs.
 
 **`## Wave plan`** (specs with â‰¥3 tasks): derive a **PROPOSED** wave plan from the *stated*
 dependencies â€” `Wave 1: [1, 2] | Wave 2: [3]`. The **dependencies are binding**; the **grouping is advisory**.
@@ -227,29 +235,27 @@ Full rubric â†’ `references/model-routing.md`.
 
 ## Dispatched spec review
 
-Before the readiness gate, dispatch a **fresh-context** adversarial review. You cannot stress-test
-your own reasoning; that is the point. **Evaluator-independence, not a rulebook** â€” there is no
-domain skill to review against (ADR-036), and the value never came from one: the Sol plan-check
-proving run returned three real BLOCKs (the launcher pinned the model, ExecutionPolicy, a routing
-gap) and not one came from a domain rule.
+Before the readiness gate, dispatch `apex-critic` through the Agent tool with `mode: spec`. On
+**every dispatch**, pass Agent tool `model: sonnet` for Low, Medium, and doc-only specs, and
+`model: opus` for High. The Agent tool's `model:` parameter takes precedence over the agent file's
+default frontmatter `model: sonnet`.
 
-Dispatch `apex-spec-reviewer` (Agent tool). Pass `spec` (draft path or text) and optionally a
-`lens` â€” "security", "migration safety", "does this mechanism actually produce the behaviour".
-It reads the spec plus the files the spec names, sandboxed from planning docs, and returns
-BLOCK / FLAG / note, each cited to **evidence** (file:line, quoted clause, failing scenario).
+Every Critic prompt contains the author prompt pack's adjudicated plan brief and the current full
+draft under review, so intent fidelity is reviewable. Before dispatching, the host runs
+`git hash-object <draft>`, writes the value into the round's sidecar row, and passes it as the
+**FIRST line** of the prompt: `SPEC-DIGEST: <sha>`. Round 1 is a full fresh review. After an author
+revise dispatch, rounds 2â€“3 are fix checks: also pass the immediately prior
+`docs/drafts/<short-name>.round-<N-1>.findings.json` plus the current full draft; the Critic checks
+the prior findings and reports any regressions or new blocking evidence under its shared contract.
 
-**Before dispatching, the host runs `git hash-object <draft>`, writes the value into the round's
-sidecar row, and passes it as the FIRST line of the reviewer prompt: `SPEC-DIGEST: <sha>`.** At
-adjudication the host re-runs `git hash-object <draft>`; if it no longer matches the recorded row,
-the verdict is VOID and its findings are discarded unread (Â§ Convergence control).
+The host saves each round's returned JSON verbatim as
+`docs/drafts/<short-name>.round-<N>.findings.json` beside the sidecar. At adjudication it re-runs
+`git hash-object <draft>`; a mismatch makes the verdict VOID and the findings are discarded unread.
+For a non-clean round 1 or 2, adjudicate the findings, send the accepted fixes through an author
+revise dispatch, wait for completion, then run the next fix check. A clean round proceeds to the
+readiness gate.
 
-- **Always**, with 2â€“3 **different lenses** in parallel: security, auth, data/migrations, anything
-  hard to reverse. Diverse lenses catch what redundancy can't.
-- **One reviewer** for an ordinary multi-file spec. **Skip** a trivial single-file spec.
-
-Every BLOCK resolved in the spec; every FLAG resolved or explicitly accepted with reasoning.
-
-### Convergence control â€” 3 rounds, per SPEC LIFETIME
+### Convergence control â€” 3 rounds per SPEC LIFETIME, plus one owner-approved cycle
 
 Every reviewed spec gets a **review-round record**: a sidecar `docs/drafts/<short-name>.review.log`
 (deliberately not `.md` â€” spec tooling must never pick it up), created by the HOST at whichever comes first (the pre-draft arch-check row or the first author dispatch), never
@@ -257,9 +263,8 @@ by the author or the reviewer, deleted when the spec promotes to `docs/changes/`
 
 | Round | Dispatched (UTC) | Reviewer | Spec digest | Verdict | Disposition |
 
-**One ROUND = one review PASS**, however many lenses that pass dispatches in parallel: a 3-lens
-apex-spec-reviewer fan-out is ONE row, and the `Reviewer` cell carries the comma-joined lens list
-(`security, migration safety, mechanism`). The Sol plan-check is its own pass and gets its own row.
+**One ROUND = one `apex-critic` spec-mode dispatch.** Its `Reviewer` cell is
+`apex-critic:spec:<sonnet|opus>`. The Sol plan-check is its own pass and gets its own row.
 
 **Round-column tokens:** `arch-N` = pre-draft architecture pass; `N` (an integer) = reviewer-family
 round; `sol-N` = Sol cold read; `delib-N` = Sol deliberation; `author` = author dispatch; `owner` =
@@ -267,43 +272,37 @@ an owner decision. Author rows never count toward the reviewer-family round cap 
 count.
 
 **Row lifecycle â€” TWO PHASES. This is the single definition; every rule below refers to it.**
-1. **At DISPATCH** the host APPENDS the row with `Round`, `Dispatched (UTC)`, `Reviewer` (the lens
-   list), and `Spec digest` filled, and `Verdict` / `Disposition` both set to `pending`.
-2. **At ADJUDICATION**, and only after ALL lenses of that pass have returned, the host COMPLETES the
-   same row: `Verdict` = worst-of, `Disposition` = the outcome.
+1. **At DISPATCH** the host APPENDS the row with `Round`, `Dispatched (UTC)`, `Reviewer`, and
+   `Spec digest` filled, and `Verdict` / `Disposition` both set to `pending`.
+2. **At ADJUDICATION**, after the Critic returns, the host COMPLETES the same row: `Verdict` = the
+   returned JSON `status`, `Disposition` = the outcome.
 
 **Cap semantics, in the same breath:** a `pending` row COUNTS toward the <3 precondition â€” so a
 second dispatch launched while the first is still out cannot slip past the cap â€” and a COMPLETED row
 with `Disposition = VOID` does not count (a completed VOID row does NOT consume the cap). Everything
 else counts. "Non-VOID rows" below means exactly this: every row except a completed VOID one.
 
-**Multi-lens aggregation** (phase 2 of the lifecycle): adjudication waits for ALL lenses of the pass,
-then writes `Verdict` = WORST-OF its lenses (BLOCK > FLAG > CLEAN). If ANY lens returns against a
-digest that no longer matches, the WHOLE row completes as VOID â€” no partial adjudication, no
-cherry-picking a clean lens â€” and, being a completed VOID row, it does not count.
-
-- **Cap: 3 rounds per spec LIFETIME â€” apex-spec-reviewer FAMILY only.** The counter is the sidecar's
-  count of non-VOID reviewer-family rows as defined by the lifecycle above (`pending` counts, a
-  completed VOID does not); it lives outside the draft, so a re-draft does not reset it. Reviewer-family rounds 4+ are not dispatched. The Sol plan-check appends its
-  own digest-bound row and is EXEMPT from this count (it is mandatory at the gate and must stay
-  available after the cap); its own cycling is bounded by the announced pass-or-park rule.
-- **Host precondition â€” read before you dispatch.** Before ANY reviewer-family dispatch, the host
-  READS `docs/drafts/<short-name>.review.log` and counts its non-VOID reviewer-family rows per the
-  lifecycle definition (`pending` rows included). **At â‰¥3 the dispatch is REFUSED** â€” no reviewer is
-  launched â€” and the spec routes to the post-cap path below. Zero non-VOID integer reviewer-family rows means round 1: append
-  the phase-1 row, then dispatch.
-- **The post-cap path is not a dead end.** A fresh `-AuthorSpec` revise dispatch against the same draft path and the closed fix-list â†’ readiness gate
-  â†’ Sol cold read (still mandatory, still dispatched) â†’ promotion. An exhausted reviewer-family cap
-  never blocks that path; it only stops further apex-spec-reviewer passes.
-- **Same-path constraint.** A post-cap fresh draft MUST target the identical
-  `docs/drafts/<short-name>.md`. Renaming a spec while it is under review is PROHIBITED, because the
-  sidecar is keyed by the name and a rename silently resets the counter. If a rename is truly
-  required, it is a manual carry-over step: MOVE the sidecar alongside the spec, keeping its rows â€”
-  never recreate it, never start a new one.
-- **At the cap**, stop reviewing and send a fresh `-AuthorSpec` revise dispatch, against the same
-  draft path, a **CLOSED fix-list**: the exact unresolved findings as of round 3, frozen. No new
-  lenses, no additions after handoff. The next draft is graded against that list and the readiness
-  gate only.
+- **Reviewer family and cap.** Reviewer-family rows are exactly the integer-numbered Critic
+  spec-mode rows. At every tier, the cap is three non-VOID rows per spec lifetime unless the OWNER
+  records approval for exactly one further fix-and-review cycle. The counter lives outside the
+  draft, so a re-draft does not reset it. Sol, author, and owner rows are not reviewer-family rows.
+- **Host precondition â€” read before you dispatch.** Before any Critic spec-mode dispatch, read the
+  sidecar and count non-VOID reviewer-family rows (`pending` counts; completed VOID does not). With
+  three, refuse dispatch unless an `owner` row explicitly approves the one extra cycle; that
+  approval permits only one further non-VOID Critic row. Zero means round 1: append its phase-1 row,
+  then dispatch.
+- **Round-3 escalation.** If round 3 `status` is not `clean`, send the Critic analysis to the OWNER
+  and stop reviewer dispatch. The OWNER chooses: (a) accept the open findings and promote the spec,
+  (b) approve exactly one further fix-and-review cycle, or (c) park or kill the spec. Append an
+  `owner` row recording the choice before proceeding. Choice (b) runs one author revise followed
+  by round 4, using round 3's findings file and the current full draft under the same model, digest,
+  lifecycle, VOID, and write-barrier rules. If the extra review is not `clean`, return to the OWNER
+  for only (a) accept and promote or (c) park or kill, and record that choice in another `owner` row
+  before proceeding.
+- **Same-path constraint.** Every review-driven revise targets the identical
+  `docs/drafts/<short-name>.md`. Renaming a spec under review is prohibited because the sidecar is
+  keyed by name. If a rename is truly required, manually move the sidecar and all round findings
+  files alongside the spec, keeping their rows and numbering; never recreate or reset them.
 - **Write barrier â€” an explicit gate precondition.** A round is dispatched only AFTER the
   completion notification for the last edit to the draft has arrived. Never dispatch while an
   author or editor worker on that draft is in flight; a mid-edit read is the known VOID-round cause.
@@ -347,21 +346,21 @@ As the deterministic backstop to the prose Files-to-Change / Coverage / structur
                     `Grep evidence:` line under the table records each pattern run and its hit
                     count, for consumers of every changed file and for every path listed. Prose
                     assurance ("checked the tree", "verified paths") FAILS this line â€” the check is
-                    for the evidence, not the claim. LLM-judged, like the line above.
+                    for the evidence, not the claim. LLM-judged, like the line above. Doc-only
+                    criteria use presence/absence, version/date, cap, pointer, and verify-fence
+                    checks; exact-line manifests and whole-tree hashes are High-only.
 [ ] Review rounds â€” the spec's review-round sidecar shows FEWER THAN 3 non-VOID reviewer-family
                     rows (`pending` rows count; completed Disposition=VOID rows do not â€” Â§ Row
-                    lifecycle) before any further apex-spec-reviewer dispatch. At 3
-                    that dispatch is refused and the spec routes to the closed-fix-list fresh-draft
-                    path (Â§ Dispatched spec review â†’ Convergence control), which also owns the
-                    same-path/no-rename constraint. The mandatory Sol plan-check is EXEMPT from this
-                    count and still runs on the post-cap path.
+                    lifecycle) before any further Critic spec-mode dispatch, unless an `owner` row
+                    approves exactly one further fix-and-review cycle. Round-3 non-clean and any
+                    non-clean extra review follow the OWNER choices in Convergence control.
 [ ] Batch-joinableâ€” ## Files to Change disjoint from sibling pending specs; or each shared file
                     (types / barrel re-export / schema / route registry) owned by ONE spec, the
                     others declaring it in ## Prerequisites (ADR-029).
 [ ] Wave plan     â€” present for â‰¥3 tasks; waves derived only from STATED dependencies.
 [ ] Permissions   â€” every file, command, git op, and env var the build touches is listed.
                     New packages verified: exact name (typosquat), actively maintained.
-[ ] Review        â€” all BLOCK findings resolved; all FLAGs resolved or accepted with reasoning.
+[ ] Review        â€” Critic status is clean, or an `owner` row accepts the open findings.
 [ ] Questions     â€” Risks/Open Questions section DELETED, not emptied. No [NEEDS CLARIFICATION].
 [ ] ADR coverage  â€” every architectural decision this session has a written ADR file. "Noted
                     inline" fails.
@@ -371,12 +370,13 @@ As the deterministic backstop to the prose Files-to-Change / Coverage / structur
                     whenever a spec changes layout, conventions, or the verify commands (ADR-031/037).
 ```
 
-**Then the Sol plan-check** (ADR-032): a cold `gpt-5.6-sol` read, read-only, schema'd, effort xhigh â€”
-`references/sol-plan-check.md`. Advisory by default, **blocking for `risk: high`**. Sol never edits
-the spec. Skip only trivial specs. For high-risk work you may *offer* (never auto-run) the â‰¤2-round
+**Then the Sol plan-check, for Medium/High only** (ADR-032): a cold `gpt-5.6-sol` read, read-only,
+schema'd, effort xhigh â€” `references/sol-plan-check.md`. Low and doc-only specs skip this pass.
+It is advisory for Medium and **blocking for High**: an unresolved High BLOCK still gates
+promotion. Sol never edits the spec. For High work you may *offer* (never auto-run) the â‰¤2-round
 cross-model deliberation in that reference.
 
-Only move to `docs/changes/` when the gate and the plan-check are both resolved.
+Only move to `docs/changes/` when the gate and every required pass are resolved.
 
 ## Confirmation digest
 
@@ -398,7 +398,8 @@ Deep Details â†’ digest + offer the file. Light â†’ digest only. Bug F
 - **Deep Details / Light:** in order: (1) append one row to
   `C:\users\user\apex\docs\research\spec-author-trial.md` from the spec's sidecar (next bullet);
   (2) move the spec `docs/drafts/` -> `docs/changes/`; (3) delete the spec's `<short-name>.review.log`
-  sidecar (host's pen -- the round record dies with the promotion); (4) rewrite the
+  sidecar and every `<short-name>.round-<N>.findings.json` (the round record dies with promotion);
+  (4) rewrite the
   `<!-- PLANNING -->` block of `docs/status.md` â€” Pending Specs (scan `docs/changes/`, not `done/`)
   and Open Questions (carry unresolved, add new, **delete resolved**). Update `_Last updated:_`.
 - **Trial log row** (ADR-048), appended before the sidecar is deleted. Columns exactly:
@@ -407,7 +408,7 @@ Deep Details â†’ digest + offer the file. Light â†’ digest only. Bug F
   Disposition = `launched` and Reviewer = `author:<model>:<create|revise>`: list launched create rows
   in order, counting repeated models, then revise rows in order with counts, for example
   `gpt-6-sol create x2; revise gpt-6-sol x1`. Reviewer-family rounds = non-VOID integer `N` rows (one
-  row per multi-lens pass). Sol rounds = non-VOID `sol-N` and `delib-N` rows; `arch-N` rows are
+  row per Critic spec-mode dispatch). Sol rounds = non-VOID `sol-N` and `delib-N` rows; `arch-N` rows are
   excluded. A legacy spec promoted with no sidecar logs author models = `unknown (no sidecar)` and
   zero round counts. Intent drift = `y` only when the owner flags a mismatch at the confirmation
   digest, otherwise `n`. A re-promotion of the same repo/spec appends a new row with `re-promote` in

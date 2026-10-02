@@ -2,10 +2,11 @@
 spec: {short-name}
 status: draft
 autonomy_level: L2
+# risk: medium               # optional — enum {low|medium|high}. Absent = medium, except a doc-only spec is Low unless it explicitly declares risk: high, which always wins.
 # cross_model_review: true   # optional — high-stakes builds (auth / security / data). Runs an
 #                              independent 2nd review by a DIFFERENT model family than the builder
 #                              (family-aware: Codex-built → Claude reviews; Claude-fallback-built (Sonnet 5) → Codex reviews).
-#                              Cross-family (ADR-032/034): the Claude side is an `apex-reviewer`
+#                              Cross-family (ADR-032/034): the Claude side is `apex-critic` code mode
 #                              subagent; the Codex side is headless `codex exec`. Findings are
 #                              advisory, but a Codex BLOCK verdict routes exit 67 — a hard stop.
 # coder_model: codex         # optional — pin this WHOLE spec to one coder. Enum {codex|sonnet}, full
@@ -41,13 +42,18 @@ autonomy_level: L2
      - List files per task — every task names its exact files (see ## Tasks). Never "update the auth flow."
      - Cross-cutting conventions live in the relevant skill's impl.md, never copied into the spec. -->
 
-<!-- Split rule: if this spec touches >3 files OR has >2 logical phases, split it into separate specs. -->
+<!-- Split rule: if this spec touches >3 files OR has >2 logical phases, split it into separate specs,
+     unless it is doc-only as defined in Intent. Explicit `risk: high` overrides this exemption. -->
 
 ## Intent
 <!-- Optional for single-task specs, recommended otherwise. ≤10 lines, what-bearing — the ONE
      sanctioned home for load-bearing intent; it travels to the coder in the dispatch pack
      (ADR-031) so mismatches resolve against stated invariants instead of guesses.
-     Never an ADR essay — rationale lives in the ADR. -->
+     Never an ADR essay — rationale lives in the ADR.
+     Doc-only means every Files-to-Change path is documentation prose under `docs/`, an ADR,
+     README, or CHANGELOG, and none is a skill (`SKILL.md`, `references/**`, `templates/**`), agent,
+     hook, settings, script, or other config/instruction file. Explicit `risk: high` always overrides
+     doc-only. -->
 - **Intent:** {1-2 lines — the outcome this spec exists to produce}
 - **Invariants:** {properties that must hold when done — behavioural/structural, testable where possible}
 - **Non-goals:** {adjacent work this spec deliberately does NOT do}
@@ -147,7 +153,10 @@ docs/audit/ is different and stricter: TIER-1, refused outright on a path match.
 | ADR | docs/technical/adr/ADR-{NNN}-{title}.md | Write (if architectural decision) |
 
 ## Acceptance Criteria
-<!-- Use step→verify format. "Done" must be observable, not vague. -->
+<!-- Use step→verify format. "Done" must be observable, not vague.
+     For doc-only specs, use presence/absence greps, version/date checks, caps, pointers, and the
+     exact commands in the repo AGENTS.md `## Verify commands` fence. Reserve exact-line manifests
+     and whole-tree content hashes for High risk. -->
 - [ ] {Step 1} → verify: {what to check — specific, observable}
 - [ ] {Step 2} → verify: {what to check — specific, observable}
 - [ ] {Step 3} → verify: {what to check — specific, observable}

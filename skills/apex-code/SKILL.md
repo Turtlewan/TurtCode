@@ -1,7 +1,7 @@
 ---
 skill: apex-code
-version: 2.18.1
-last_updated: 2026-10-01
+version: 2.19.0
+last_updated: 2026-10-02
 sources:
   - docs/technical/adr/ADR-027-codex-primary-opus-fallback-deepseek-archived.md
   - docs/technical/adr/ADR-028-parallel-codex-dispatch.md
@@ -203,7 +203,7 @@ Never bound a dispatch with your own timeout — the wrapper's `-NoOutputTimeout
 bounds it, and it distinguishes *quiet* from *dead*, which a wall-clock ceiling cannot.
 
 **Carry the coder's concerns forward.** The wrapper prints `unresolved` / `deviations` / `blocker`
-and writes them to `<final>.concerns.md`. Paste that into the reviewer's prompt **verbatim**. The
+and writes them to `<final>.concerns.md`. Paste that into the Critic prompt **verbatim**. The
 coder's own account of what it could not finish is the highest-value input the review will get —
 and on `cap-deps-1b` it evaporated into a status word, leaving the reviewer to re-derive the coder's
 doubts from scratch. It guessed. It happened to guess right.
@@ -335,7 +335,7 @@ exists.
 **Wrapper-dispatched read-only gates pin themselves** (`-Phase review` or `-Sandbox read-only`):
 the dispatcher pins before launch, verifies on return, and **exits 69 with the verdict VOID** if the
 tree moved. You don't have to remember. For a gate the wrapper doesn't run — a Claude-side
-`apex-reviewer`, a manual verify, the commit itself — pin it yourself:
+`apex-critic`, a manual verify, the commit itself — pin it yourself:
 
 ```powershell
 scripts/tree-pin.ps1 -Pin    -Worktree <repo> -Label <spec>   # before the gate opens
@@ -353,28 +353,38 @@ mechanism: the reviewer reads, the tree moves, the reviewer returns **CLEAN**, a
 code nobody ever looked at. The pin covers **content, not just filenames** — that day the filename
 never changed, only what was inside it, so a `git status` check would have seen nothing.
 
-1. **Serialized — the reviewer first:**
-   - `apex-reviewer` — spec_path, files_changed, **and `<final>.concerns.md` verbatim** if the coder
-     raised any. **Always runs.** It is the evaluator-independence gate; skipping it to save tokens
-     trades away the one thing that sees what the coder cannot.
-   - `apex-docs-product-agent` — files_changed, spec_path, date. `apex-docs-product-agent` writes inline documentation into source files, so running it alongside an open review moves the tree under the reviewer and VOIDS the verdict (§ Pin the tree before you open a gate). Dispatch it only after the reviewer has returned.
-2. **Cross-family review** (`cross_model_review: true`; auto for auth/security/data/`risk: high`).
-   Use the other model family when both are available: **Codex built -> Claude reviews** (`model:
-   opus` for the high-risk set); **Claude-fallback built (Sonnet 5) -> Codex reviews** (`references/codex-review.md`).
-   Give it the spec + diff only -- **never the other reviewer's findings**. A finding both raise ->
-   resolve before "complete"; only one -> decisions table, human adjudication. If Codex is still
-   unavailable after Claude-fallback builds, a diff-bound attended human review substitutes for the
-   unavailable cross-family review (ADR-042); a same-family Claude review remains advisory.
-   `apex-family-gate.ps1` enforces this substitution at completion, not prose alone. The wrapper's
-   `-Model` parameter admits only OpenAI models (`gpt-5.6-sol`, the default, and `gpt-6-sol`), so every
-   wrapper-dispatched build, review or `-AuthorSpec` run is family `openai`; ledger family fields
-   describe what it launched, not a caller's claim.
-3. **AFK only:** the standing end-of-run **Opus** adversarial pass over `run_base_sha..HEAD` —
-   read-only, advisory (`references/afk-endgate.md`). Opus, not Sol: Sol is the coder, and the one
-   review that runs with nobody watching must not be self-review. Lenses →
-   `references/silent-regression-lenses.md`.
+1. **Run one risk-routed Critic cadence before either docs agent.** Dispatch `apex-critic` through
+   the Agent tool with `mode: code` and `model: sonnet` for Low, Medium, and doc-only work, or
+   `model: opus` for High, on every dispatch. The Agent tool's `model:` parameter takes precedence
+   over the agent file's default frontmatter `model: sonnet`. After each integrated High-risk wave,
+   review only that wave's changed files and criteria. Otherwise review once after the whole build.
+   Include the applicable spec criteria, full diff for the scope, and `<final>.concerns.md` verbatim.
+   Apply all four silent-regression lenses in `references/silent-regression-lenses.md`.
+
+   Each wave or whole-build scope has a three-round cap. Round 1 is a full adversarial review. After
+   fixes and re-running verification, rounds 2–3 are fix checks; each receives the prior findings
+   file and the current full diff under review. The host saves every returned JSON verbatim as
+   `<APEX state dir>/critic/<spec>-<scope>-round-<N>.json`. Pin before each dispatch and verify the
+   pin before acting; a moved tree makes the verdict VOID and the same round must be re-run.
+
+   If round 3 is not `clean`, send the Critic analysis to the OWNER. Before proceeding, record the
+   OWNER's choice as an `owner` row in the decisions table: (a) accept the open findings and complete
+   the task, (b) authorize exactly one further fix-and-review cycle, or (c) park or kill the task.
+   If that extra review is not `clean`, return to the OWNER for only (a) or (c). Only after the
+   Critic returns may `apex-docs-product-agent` run; it writes inline documentation and would move
+   the tree under an open review, voiding the verdict.
+2. **Family routing.** For Codex-built work, the Claude Critic is the cross-family review; do not
+   dispatch an additional Sol review. For Claude-fallback Sonnet builds, retain the independent
+   Codex review in `references/codex-review.md` and the family gate. If Codex remains unavailable,
+   a diff-bound attended human review substitutes under ADR-042; a same-family Claude review is
+   advisory only. The wrapper's `-Model` parameter admits only OpenAI models (`gpt-5.6-sol`, the
+   default, and `gpt-6-sol`), so ledger family fields describe what it launched, not a caller's claim.
+3. **AFK whole-build scope.** The end-of-run Opus Critic pass through the Agent tool with
+   `model: opus` over `run_base_sha..HEAD` is round 1 of the whole-build code review
+   (`references/afk-endgate.md`); it replaces the normal whole-build dispatch, so do not dispatch a
+   second whole-build review. If it causes fixes, use the same rounds 2–3 fix-check contract and cap.
 4. **Annotate in-session work.** At completion of every in-session worker (Claude fallback build or
-   in-session Claude reviewer), append one compact JSON row with a terminal status to the wrapper's
+   in-session Claude Critic), append one compact JSON row with a terminal status to the wrapper's
    ledger. Human review uses the same row shape. Resolve the ledger as
    `%APEX_STATE_DIR%\progress\codex-run-ledger.jsonl`, falling back to
    `%LOCALAPPDATA%\apex\progress\codex-run-ledger.jsonl`, then
@@ -389,10 +399,11 @@ never changed, only what was inside it, so a `git status` check would have seen 
      `reviewed_run_id`. At build close, the host computes `end_tree_digest` with
      `scripts/tree-pin.ps1 -Digest -Worktree <repo>` on that worktree and records the result, or
      `unverifiable` when it cannot be computed.
-   - In-session **REVIEW** (Claude): `phase:"review"`, `reviewer_family:"anthropic"` for Sonnet or
-     Opus, and `reviewed_run_id` equal to the reviewed build's wrapper or in-session `run_id`. At
-     pin-verify time, the host computes `reviewed_tree_digest` with
-     `scripts/tree-pin.ps1 -Digest -Worktree <repo>` on the reviewed worktree and records the result.
+   - In-session **REVIEW** (Claude Critic): append one `phase:"review"` row per task build, even when
+     the Critic reviewed the integrated wave or whole-build tree. Set `reviewed_run_id` to that task's
+     wrapper run and `reviewed_tree_digest` to the digest of that task's worktree, computed at
+     pin-verify with `scripts/tree-pin.ps1 -Digest -Worktree <task-worktree>`; use
+     `reviewer_family:"anthropic"`.
    - Human review: `phase:"human-review"`, `attended:true`, and `reviewed_run_id` equal to the
      selected build's `run_id`; record `reviewed_tree_digest` by the same pin-verify procedure.
 
@@ -415,15 +426,15 @@ never changed, only what was inside it, so a `git status` check would have seen 
    `codex-dispatch.ps1`.) For a cross-family Codex review dispatched through the wrapper, pass
    `-ReviewedRunId <build run_id>` to `codex-dispatch.ps1`; the wrapper records the binding.
 
-   **Known limit — digest binding.** The wrapper-ledger digest binding that `apex-family-gate.ps1` enforces covers **wrapper-launched reviews of a task worktree as the coder left it**. How that binding should extend to integrated-tree reviews and to reviews after the documentation writes is **UNRESOLVED**, and is owned by the queued retro spec set (`~/apex/docs/research/artemis-retro-2026-07-29.md`, items P1–P7). Do not infer a rule for those cases from this one.
 5. **Completion gate -- run it; do not eyeball the ledger:**
 
    ```powershell
    powershell.exe -NoProfile -File "$env:USERPROFILE\.claude\skills\apex-code\scripts\apex-family-gate.ps1" -Spec <s> -Task <t> -WorktreeKey <k>
    ```
 
-   Run before marking a task or spec complete. There is no base-SHA argument: the gate selects the
-   build and its identity from the ledger, so a caller cannot point it at the wrong diff. Exit 0 --
+   Run per task before marking it complete, unchanged from today's invocation. There is no base-SHA
+   argument: the gate selects the build and its identity from the ledger, so a caller cannot point
+   it at the wrong diff. Exit 0 --
    mark complete. Non-zero (12 = same-family refusal; 13 = unverifiable) -- **REFUSE completion**
    until a cross-family review or build-bound attended human review exists. AFK -- park instead of
    blocking forever. A same-family automated review is advisory only and cannot satisfy this gate.

@@ -9,7 +9,7 @@ exit 67, which is a HARD STOP on the pipeline (do not commit, do not build a dep
 the user only when the call needs human judgment. It is not auto-dismissable and not merely a suggestion.
 `FLAG` → exit 68, carried into the review. Note: the Claude fallback builds only via the three fallback triggers
 (see model-routing), so this Codex review usually can't run either → apex-code degrades to
-single-model + human flag.
+single-model + human flag. Codex-built work receives no additional Sol cross-family pass.
 
 ## Invocation — through the WRAPPER, always
 
@@ -77,5 +77,5 @@ Also apply the four silent-regression lenses (`references/silent-regression-lens
 ## Output contract
 Schema returns `{ findings: [{severity, file, line?, criterion?, rationale}], verdict }`. apex-code
 surfaces BLOCK/FLAG findings in the build report as **advisory cross-model findings** and combines them
-with apex-reviewer (apex-code § Post-build) (both-raise → high-confidence; one-raises → human-adjudicate).
-Never feed apex-reviewer's findings into this prompt — the reviewer must stay independent.
+with `apex-critic` in `mode: code` (apex-code § Post-build) (both-raise → high-confidence; one-raises → human-adjudicate).
+Never feed `apex-critic` code findings into this prompt — the reviewer must stay independent.

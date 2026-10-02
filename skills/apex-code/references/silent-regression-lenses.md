@@ -12,4 +12,4 @@ A2 is a fixed checklist applied at every Codex-diff integration/review, independ
 
 ## How this is applied
 
-At integration time, when apex-reviewer or the Codex cross-model review examines a diff, explicitly check these four patterns in addition to the rest of the review; flag every match as a finding.
+At integration time, when `apex-critic` in code mode or the Codex fallback review examines a diff, explicitly check these four patterns in addition to the rest of the review; flag every match as a finding.
