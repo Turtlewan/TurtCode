@@ -1,0 +1,269 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://apex.local/schemas/engine-state-1.json",
+  "title": "APEX Engine durable run state",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version", "run_id", "status", "created_at", "updated_at", "engine_owner", "state_path",
+    "worktree_root", "wrapper_path", "codex_executable", "codex_executable_argument_prefix",
+    "spec", "repo", "base_sha", "integration", "max_parallel", "plan", "tasks",
+    "counters", "concerns", "diagnosis", "handoff", "teardown", "transitions"
+  ],
+  "properties": {
+    "schema_version": { "const": 1 },
+    "run_id": { "type": "string", "pattern": "^[0-9a-f]{32}$" },
+    "status": { "enum": ["running", "complete", "partial", "refused", "parked", "paused"] },
+    "created_at": { "type": "string" },
+    "updated_at": { "type": "string" },
+    "engine_owner": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["pid", "start_time", "acquired_at"],
+      "properties": {
+        "pid": { "type": "integer", "minimum": 1 },
+        "start_time": { "type": "string" },
+        "acquired_at": { "type": "string" }
+      }
+    },
+    "state_path": { "type": "string" },
+    "worktree_root": { "type": "string" },
+    "wrapper_path": { "type": "string" },
+    "codex_executable": { "type": ["string", "null"] },
+    "codex_executable_argument_prefix": { "type": "array", "items": { "type": "string" } },
+    "spec": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "original_path", "original_digest", "snapshot_path", "snapshot_digest"],
+      "properties": {
+        "name": { "type": "string" },
+        "original_path": { "type": "string" },
+        "original_digest": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+        "snapshot_path": { "type": ["string", "null"] },
+        "snapshot_digest": { "type": "string", "pattern": "^[0-9a-f]{64}$" }
+      }
+    },
+    "repo": { "type": "string" },
+    "base_sha": { "type": "string", "pattern": "^[0-9a-f]{40,64}$" },
+    "integration": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["worktree", "branch", "tip"],
+      "properties": {
+        "worktree": { "type": ["string", "null"] },
+        "branch": { "type": ["string", "null"] },
+        "tip": { "type": ["string", "null"] }
+      }
+    },
+    "max_parallel": { "type": "integer", "minimum": 1 },
+    "plan": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["allowed", "refusal", "spec", "waves"],
+      "properties": {
+        "allowed": { "type": "boolean" },
+        "refusal": { "type": ["string", "null"] },
+        "spec": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["name", "path", "digest", "risk", "coder_model", "coder_effort", "max_parallel_codex", "intent", "assumptions", "specialist_context"],
+          "properties": {
+            "name": {},
+            "path": {},
+            "digest": {},
+            "risk": {},
+            "coder_model": {},
+            "coder_effort": {},
+            "max_parallel_codex": {},
+            "intent": {},
+            "assumptions": {},
+            "specialist_context": {}
+          }
+        },
+        "waves": { "type": "array" }
+      },
+      "oneOf": [
+        {
+          "properties": {
+            "allowed": { "const": true },
+            "refusal": { "type": "null" },
+            "spec": {
+              "properties": {
+                "name": { "type": "string" },
+                "path": { "type": "string" },
+                "digest": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+                "risk": { "enum": ["low", "medium"] },
+                "coder_model": { "enum": ["gpt-5.6-sol", "gpt-6-sol"] },
+                "coder_effort": { "enum": ["low", "medium", "high", "xhigh", "max", "ultra"] },
+                "max_parallel_codex": { "type": ["integer", "null"] },
+                "intent": { "type": "string" },
+                "assumptions": { "type": "string" },
+                "specialist_context": { "type": "array", "items": { "type": "string" } }
+              }
+            },
+            "waves": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["number", "tasks"],
+                "properties": {
+                  "number": { "type": "integer", "minimum": 1 },
+                  "tasks": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "required": ["id", "repo", "files", "depends_on", "effort", "coder_model", "text", "done_when", "acceptance", "prompt_digest"],
+                      "properties": {
+                        "id": { "type": "string" },
+                        "repo": { "type": "string" },
+                        "files": {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "additionalProperties": false,
+                            "required": ["path", "op"],
+                            "properties": {
+                              "path": { "type": "string" },
+                              "op": { "enum": ["create", "modify", "delete"] }
+                            }
+                          }
+                        },
+                        "depends_on": { "type": "array", "items": { "type": "string" } },
+                        "effort": { "enum": ["low", "medium", "high", "xhigh", "max", "ultra"] },
+                        "coder_model": { "enum": ["gpt-5.6-sol", "gpt-6-sol"] },
+                        "text": { "type": "string" },
+                        "done_when": { "type": "string" },
+                        "acceptance": { "type": "array", "items": { "type": "string" } },
+                        "prompt": { "type": "string" },
+                        "prompt_path": { "type": "string" },
+                        "prompt_digest": { "type": "string", "pattern": "^[0-9a-f]{64}$" }
+                      },
+                      "anyOf": [
+                        { "required": ["prompt"] },
+                        { "required": ["prompt_path"] }
+                      ]
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        {
+          "properties": {
+            "allowed": { "const": false },
+            "refusal": { "type": "string" }
+          }
+        }
+      ]
+    },
+    "tasks": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "status", "diagnosis", "concerns", "attempts"],
+        "properties": {
+          "id": { "type": "string" },
+          "status": { "enum": ["pending", "running", "integrated", "failed", "parked"] },
+          "diagnosis": { "type": ["string", "null"] },
+          "concerns": { "type": "array", "items": { "type": "string" } },
+          "attempts": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "number", "status", "effort", "model", "worktree", "branch", "child_pid", "child_start_time",
+                "wrapper_run_id", "exit_code", "event_path", "args_path", "child_output_path",
+                "end_tree_digest", "diagnosis", "capacity_retries", "process_retries"
+              ],
+              "properties": {
+                "number": { "type": "integer", "minimum": 1 },
+                "status": { "enum": ["prepared", "running", "succeeded", "failed", "parked"] },
+                "effort": { "enum": ["low", "medium", "high", "xhigh", "max", "ultra"] },
+                "model": { "enum": ["gpt-5.6-sol", "gpt-6-sol"] },
+                "worktree": { "type": "string" },
+                "branch": { "type": "string" },
+                "child_pid": { "type": ["integer", "null"] },
+                "child_start_time": { "type": ["string", "null"] },
+                "wrapper_run_id": { "type": ["string", "null"], "pattern": "^[0-9a-f]{32}$" },
+                "exit_code": { "type": ["integer", "null"] },
+                "event_path": { "type": ["string", "null"] },
+                "args_path": { "type": "string" },
+                "child_output_path": { "type": "string" },
+                "end_tree_digest": { "type": ["string", "null"] },
+                "diagnosis": { "type": ["string", "null"] },
+                "capacity_retries": { "type": "integer", "minimum": 0 },
+                "process_retries": { "type": "integer", "minimum": 0 }
+              }
+            }
+          }
+        }
+      }
+    },
+    "counters": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["dispatches", "retries", "capacity_retries", "concerns"],
+      "properties": {
+        "dispatches": { "type": "integer", "minimum": 0 },
+        "retries": { "type": "integer", "minimum": 0 },
+        "capacity_retries": { "type": "integer", "minimum": 0 },
+        "concerns": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "concerns": { "type": "array", "items": { "type": "string" } },
+    "diagnosis": { "type": ["string", "null"] },
+    "handoff": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status", "started_at", "completed_at", "journaled_paths", "mismatch_path", "recovery_patch"],
+      "properties": {
+        "status": { "enum": ["pending", "running", "complete", "partial"] },
+        "started_at": { "type": ["string", "null"] },
+        "completed_at": { "type": ["string", "null"] },
+        "journaled_paths": { "type": "array", "items": { "type": "string" } },
+        "mismatch_path": { "type": ["string", "null"] },
+        "recovery_patch": { "type": ["string", "null"] }
+      }
+    },
+    "teardown": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status", "discard", "items"],
+      "properties": {
+        "status": { "enum": ["pending", "running", "complete", "failed"] },
+        "discard": { "type": "boolean" },
+        "items": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["kind", "value", "removed_at"],
+            "properties": {
+              "kind": { "enum": ["worktree", "branch"] },
+              "value": { "type": "string" },
+              "removed_at": { "type": "string" }
+            }
+          }
+        }
+      }
+    },
+    "transitions": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["at", "kind", "detail"],
+        "properties": {
+          "at": { "type": "string" },
+          "kind": { "type": "string" },
+          "detail": { "type": ["string", "null"] }
+        }
+      }
+    }
+  }
+}
