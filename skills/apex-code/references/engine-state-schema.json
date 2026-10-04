@@ -56,6 +56,39 @@
       }
     },
     "max_parallel": { "type": "integer", "minimum": 1 },
+    "capacity": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["cli", "spec_ceiling", "machine_ceiling", "effective"],
+      "properties": {
+        "cli": { "type": ["integer", "null"], "minimum": 1 },
+        "spec_ceiling": { "type": "integer", "minimum": 1 },
+        "machine_ceiling": { "type": "integer", "minimum": 1 },
+        "effective": { "type": "integer", "minimum": 1 }
+      }
+    },
+    "wave_runtime": {
+      "type": "object",
+      "additionalProperties": false,
+      "patternProperties": {
+        "^[0-9]+$": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "residue_inventory": { "type": "array", "items": { "type": "string" } },
+            "commit_intent": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["base", "expected_tree"],
+              "properties": {
+                "base": { "type": "string" },
+                "expected_tree": { "type": "string" }
+              }
+            }
+          }
+        }
+      }
+    },
     "plan": {
       "type": "object",
       "additionalProperties": false,

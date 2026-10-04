@@ -3,11 +3,13 @@ param()
 
 $ErrorActionPreference = 'Stop'
 $testRoot = Join-Path $env:TEMP ('engine-test-' + [Guid]::NewGuid().ToString('N'))
+$machineLocalRoot = Join-Path $env:TEMP ('engine-test-machine-' + [Guid]::NewGuid().ToString('N'))
 $engine = Join-Path $PSScriptRoot 'apex-engine.ps1'
 $schemaPath = Join-Path (Split-Path $PSScriptRoot -Parent) 'references\engine-state-schema.json'
 $utf8 = New-Object Text.UTF8Encoding($false)
 $failures = 0
 $oldState = $env:APEX_STATE_DIR
+$oldLocalAppData = $env:LOCALAPPDATA
 $oldRetry = $env:APEX_ENGINE_TEST_RETRY_DELAY_SECONDS
 $oldGlobal = $env:GIT_CONFIG_GLOBAL
 $oldTestMode = $env:APEX_ENGINE_TEST_MODE
@@ -21,6 +23,7 @@ $oldIgnoreLedger = $env:APEX_ENGINE_TEST_IGNORE_RESUME_LEDGER
 $oldCommitCrash = $env:APEX_ENGINE_TEST_CRASH_AFTER_WAVE_COMMIT
 $oldLadderCrash = $env:APEX_ENGINE_TEST_CRASH_AFTER_VERIFICATION_FAILURE
 $oldHandoffCrash = $env:APEX_ENGINE_TEST_FAIL_BEFORE_HANDOFF_JOURNAL
+$oldIdentityFailure = $env:APEX_ENGINE_TEST_FAIL_INDEX_IDENTITY
 
 function Write-TestText {
     param([string]$Path, [string]$Text)
@@ -78,7 +81,7 @@ function New-TestRepo {
     [void][IO.Directory]::CreateDirectory($repo)
     [void](Invoke-TestGit $repo @('init', '-q'))
     [void](Invoke-TestGit $repo @('config', 'core.autocrlf', 'true'))
-    Write-TestText (Join-Path $repo '.gitignore') "*`n"
+    Write-TestText (Join-Path $repo '.gitignore') "*`n!residue-untracked.txt`n"
     Write-TestText (Join-Path $repo '.gitattributes') "*.py text`n"
     Write-TestText (Join-Path $repo 'src\a.py') "base-a`n"
     Write-TestText (Join-Path $repo 'verify.ps1') @'
@@ -193,6 +196,96 @@ $secondAcceptance
     Write-TestText $Path $text
 }
 
+function New-TestRoutingSpec {
+    param(
+        [string]$Repo, [string]$Path, [int]$TaskCount,
+        [AllowNull()][object]$SpecCeiling = $null,
+        [ValidateSet('low', 'medium', 'high', 'xhigh', 'max', 'ultra')][string]$Effort = 'medium'
+    )
+    $emDash = [string][char]0x2014
+    $manifestTasks = @()
+    $fileRows = @()
+    $taskRows = @()
+    $acceptanceRows = @()
+    for ($index = 1; $index -le $TaskCount; $index++) {
+        $relative = "src/task-$index.py"
+        $manifestTasks += [pscustomobject][ordered]@{
+            id = [string]$index; repo = 'main'
+            files = @([pscustomobject][ordered]@{ path = $relative; op = 'create' })
+            depends_on = @(); effort = $Effort
+        }
+        $fileRows += "| $relative | create | routing fixture |"
+        $taskRows += "- [ ] **Task $index** - Create routing fixture $index. $emDash files: $relative $emDash done when: the file exists."
+        $acceptanceRows += "- [ ] Task $index - routing fixture exists -> verify: inspect the file."
+    }
+    $manifest = [ordered]@{
+        version = 1; repos = [ordered]@{ main = (Convert-TestPath $Repo) }; tasks = $manifestTasks
+    } | ConvertTo-Json -Depth 12 -Compress
+    $ceilingLine = if ($null -ne $SpecCeiling) { "max_parallel_codex: $SpecCeiling`n" } else { '' }
+    $name = [IO.Path]::GetFileNameWithoutExtension($Path)
+    $text = @"
+---
+spec: $name
+status: approved
+autonomy_level: L2
+risk: medium
+coder_model: gpt-5.6-sol
+coder_effort: $Effort
+${ceilingLine}---
+
+# Spec: Engine routing fixture
+
+**Identity:** Exercise Engine capacity routing.
+
+## Intent
+- **Intent:** Plan independent routing fixtures.
+- **Invariants:** Keep writes within manifest paths.
+- **Non-goals:** No external access.
+
+## Assumptions
+- Windows PowerShell and Git are available.
+
+## Prerequisites
+- The fixture repository is initialized.
+
+## Files to Change
+| File | Operation | Notes |
+|---|---|---|
+$($fileRows -join "`n")
+
+## Execution manifest
+``````json apex-manifest
+$manifest
+``````
+
+## Tasks
+$($taskRows -join "`n")
+
+## Wave plan
+- Independent tasks are split only by the effective slot cap.
+
+## Permissions
+- The manifest paths may be changed.
+
+## Specialist Context
+### Security
+Keep fixture writes scoped.
+
+### Accessibility
+(none)
+
+## Documentation
+- No documentation changes.
+
+## Acceptance Criteria
+$($acceptanceRows -join "`n")
+
+## Progress
+- Test fixture.
+"@
+    Write-TestText $Path $text
+}
+
 function New-TestFakeCodex {
     param([string]$Path)
     Write-TestText $Path @'
@@ -210,7 +303,14 @@ $task = if ($leaf -match '-(?<task>\d+)-a\d+$') { $Matches.task } else { $null }
 $joined = $raw -join ' '
 $effort = if ($joined -match 'model_reasoning_effort[^a-z]+(?<effort>low|medium|high|xhigh|max|ultra)') { $Matches.effort } else { 'medium' }
 $scenario = if ($env:ENGINE_TEST_FAKE_SCENARIO) { $env:ENGINE_TEST_FAKE_SCENARIO } else { 'done' }
-if ($scenario -ceq 'quota') {
+if ($scenario -ceq 'rate_limit_429') {
+    [Console]::Out.WriteLine("{`"type`":`"thread.started`",`"thread_id`":`"019f7719-db8a-7710-8bda-11f65acd0899`"}")
+    [Console]::Out.WriteLine("{`"type`":`"turn.started`"}")
+    [Console]::Out.WriteLine("{`"type`":`"error`",`"message`":`"429 Too Many Requests: retry later`"}")
+    [Console]::Out.WriteLine("{`"type`":`"turn.failed`",`"error`":{`"message`":`"request failed with status: 429`"}}")
+    exit 1
+}
+if ($scenario -ceq 'usage_limit_jsonl') {
     [Console]::Out.WriteLine("{`"type`":`"thread.started`",`"thread_id`":`"019f7719-db8a-7710-8bda-11f65acd0899`"}")
     [Console]::Out.WriteLine("{`"type`":`"turn.started`"}")
     [Console]::Out.WriteLine("{`"type`":`"error`",`"message`":`"You've hit your usage limit. Visit https://chatgpt.com/codex/settings/usage to purchase more credits or try again at Jul 25th, 2026 11:24 AM.`"}")
@@ -219,6 +319,11 @@ if ($scenario -ceq 'quota') {
 }
 if ($scenario -ceq 'agent_message_quota_quote') {
     [Console]::Out.WriteLine("{`"type`":`"item.completed`",`"item`":{`"type`":`"agent_message`",`"text`":`"The captured diagnostic says: You've hit your usage limit. Visit settings for details.`"}}")
+    exit 1
+}
+if ($scenario -ceq 'agent_message_command_429') {
+    [Console]::Out.WriteLine("{`"type`":`"item.completed`",`"item`":{`"type`":`"agent_message`",`"text`":`"quoted 429 Too Many Requests`"}}")
+    [Console]::Out.WriteLine("{`"type`":`"item.completed`",`"item`":{`"type`":`"command_execution`",`"aggregated_output`":`"status: 429`"}}")
     exit 1
 }
 if ($scenario -ceq 'process_failure') { [Console]::Error.WriteLine('ERROR: transport disconnected'); exit 1 }
@@ -405,14 +510,15 @@ function Test-Structure {
     param($Value, $Schema, [string]$At = '$')
     if ($Schema.PSObject.Properties['type']) {
         $types = @($Schema.type)
-        $matches = $false
-        foreach ($type in $types) { if (Test-JsonKind $Value ([string]$type)) { $matches = $true } }
-        if (-not $matches) { throw "$At has the wrong JSON type" }
+        $typeMatched = $false
+        foreach ($type in $types) { if (Test-JsonKind $Value ([string]$type)) { $typeMatched = $true } }
+        if (-not $typeMatched) { throw "$At has the wrong JSON type" }
     }
     if ($Schema.PSObject.Properties['enum'] -and $null -ne $Value -and @($Schema.enum) -cnotcontains $Value) { throw "$At is outside its enum" }
     if ($null -ne $Schema.PSObject.Properties['const'] -and $Value -ne $Schema.const) { throw "$At does not match const" }
     if ($Schema.PSObject.Properties['pattern'] -and $Value -is [string] -and $Value -cnotmatch [string]$Schema.pattern) { throw "$At does not match its pattern" }
-    if ($Schema.PSObject.Properties['minimum'] -and [long]$Value -lt [long]$Schema.minimum) { throw "$At is below its minimum" }
+    if ($null -ne $Value -and $Schema.PSObject.Properties['minimum'] -and
+            [long]$Value -lt [long]$Schema.minimum) { throw "$At is below its minimum" }
     if ($Schema.PSObject.Properties['anyOf']) {
         $anyMatched = $false
         foreach ($candidate in @($Schema.anyOf)) {
@@ -436,6 +542,11 @@ function Test-Structure {
         if ($Schema.PSObject.Properties['properties']) {
             foreach ($property in $Value.PSObject.Properties) {
                 $child = $Schema.properties.PSObject.Properties[$property.Name]
+                if ($null -eq $child -and $Schema.PSObject.Properties['patternProperties']) {
+                    foreach ($patternProperty in $Schema.patternProperties.PSObject.Properties) {
+                        if ($property.Name -cmatch [string]$patternProperty.Name) { $child = $patternProperty; break }
+                    }
+                }
                 if ($null -ne $child) { Test-Structure $property.Value $child.Value "$At.$($property.Name)" }
                 elseif ($null -ne $Schema.PSObject.Properties['additionalProperties'] -and
                         $Schema.additionalProperties -eq $false) { throw "$At has unexpected key $($property.Name)" }
@@ -446,8 +557,29 @@ function Test-Structure {
     }
 }
 
+function Test-TestValueContainsRoot {
+    param([AllowNull()][object]$Value, [string]$Root)
+    if ($null -eq $Value) { return $false }
+    if ($Value -is [string]) {
+        $normalizedValue = ([string]$Value).Replace('\', '/')
+        $normalizedRoot = $Root.Replace('\', '/')
+        return ($normalizedValue.IndexOf($normalizedRoot, [StringComparison]::OrdinalIgnoreCase) -ge 0)
+    }
+    if ($Value -is [System.Array]) {
+        foreach ($item in @($Value)) { if (Test-TestValueContainsRoot $item $Root) { return $true } }
+        return $false
+    }
+    if ($Value -is [pscustomobject]) {
+        foreach ($property in $Value.PSObject.Properties) {
+            if (Test-TestValueContainsRoot $property.Value $Root) { return $true }
+        }
+    }
+    return $false
+}
+
 try {
     [void][IO.Directory]::CreateDirectory($testRoot)
+    $env:LOCALAPPDATA = $machineLocalRoot
     $env:GIT_CONFIG_GLOBAL = Join-Path $testRoot 'empty.gitconfig'
     Write-TestText $env:GIT_CONFIG_GLOBAL "[user]`nname = Engine Test`nemail = engine@example.invalid`n"
     $env:APEX_ENGINE_TEST_MODE = '1'
@@ -460,8 +592,10 @@ try {
     $stateRoot = Join-Path $testRoot 'state'
     $worktreeRoot = Join-Path $testRoot 'worktrees'
     $env:APEX_STATE_DIR = $stateRoot
-    $machineLedger = if ($env:LOCALAPPDATA) { Join-Path $env:LOCALAPPDATA 'apex\progress\codex-run-ledger.jsonl' } else { $null }
-    $machineBefore = if ($machineLedger -and (Test-Path -LiteralPath $machineLedger)) { [IO.File]::ReadAllBytes($machineLedger) } else { $null }
+    $machineLedger = Join-Path $env:LOCALAPPDATA 'apex\progress\codex-run-ledger.jsonl'
+    Write-TestText $machineLedger (([ordered]@{
+        run_id = 'ffffffffffffffffffffffffffffffff'; status = 'done'; worktree = 'C:\foreign\worktree'
+    } | ConvertTo-Json -Compress) + "`nnot-json`n")
 
     $repo = New-TestRepo 'repo'
     $spec = Join-Path $testRoot 'engine-fixture.md'
@@ -497,6 +631,69 @@ try {
     $schemaOk = $true; $schemaError = ''
     try { Test-Structure $state (Get-Content $schemaPath -Raw | ConvertFrom-Json) } catch { $schemaOk = $false; $schemaError = $_.Exception.Message }
     Assert-Test 'PowerShell 5.1 structural state schema required keys/types/enums' $schemaOk $schemaError
+    $v1Compatible = $true; $v1CompatibilityError = ''
+    try {
+        $v1State = ($state | ConvertTo-Json -Depth 100) | ConvertFrom-Json
+        if ($v1State.PSObject.Properties['wave_runtime']) { $v1State.PSObject.Properties.Remove('wave_runtime') }
+        if ($v1State.PSObject.Properties['capacity']) { $v1State.PSObject.Properties.Remove('capacity') }
+        Test-Structure $v1State (Get-Content $schemaPath -Raw | ConvertFrom-Json)
+    } catch { $v1Compatible = $false; $v1CompatibilityError = $_.Exception.Message }
+    Assert-Test 'v1 schema compatibility' $v1Compatible $v1CompatibilityError
+
+    $capacityGate = Join-Path $testRoot 'capacity-critical-refusal.ps1'
+    Write-TestText $capacityGate "param([switch]`$Test, [string[]]`$Paths, [string]`$Root)`nWrite-Host 'capacity plan captured'`nexit 11`n"
+    $capacityCases = @()
+    foreach ($capacityDefinition in @(
+        [pscustomobject]@{ name = 'cli2-spec1-ultra'; cli = 2; spec = 1; effort = 'ultra'; tasks = 1 },
+        [pscustomobject]@{ name = 'cli3-default'; cli = 3; spec = $null; effort = 'medium'; tasks = 5 },
+        [pscustomobject]@{ name = 'spec6-machine4'; cli = $null; spec = 6; effort = 'medium'; tasks = 5 },
+        [pscustomobject]@{ name = 'cli1-spec3'; cli = 1; spec = 3; effort = 'medium'; tasks = 5 }
+    )) {
+        $capacityRepoPath = New-TestRepo ("capacity-$($capacityDefinition.name)-repo")
+        $capacitySpecPath = Join-Path $testRoot ("capacity-$($capacityDefinition.name).md")
+        New-TestRoutingSpec $capacityRepoPath $capacitySpecPath $capacityDefinition.tasks $capacityDefinition.spec $capacityDefinition.effort
+        $capacityRoot = Join-Path $testRoot ("capacity-$($capacityDefinition.name)-state")
+        $capacityParameters = @{
+            SpecPath = $capacitySpecPath; Repo = $capacityRepoPath; StateRoot = $capacityRoot
+            WorktreeRoot = (Join-Path $testRoot ("capacity-$($capacityDefinition.name)-worktrees"))
+            CodexExecutable = 'powershell.exe'; CodexExecutableArgumentPrefix = $prefix
+        }
+        if ($null -ne $capacityDefinition.cli) { $capacityParameters.MaxParallel = [int]$capacityDefinition.cli }
+        $env:APEX_ENGINE_TEST_CRITICAL_PATH = $capacityGate
+        try { $capacityRun = Invoke-TestEngineSplat $capacityParameters ("capacity-$($capacityDefinition.name)") }
+        finally { Remove-Item Env:APEX_ENGINE_TEST_CRITICAL_PATH -ErrorAction SilentlyContinue }
+        $capacityCases += [pscustomobject]@{
+            definition = $capacityDefinition; result = $capacityRun; state = (Get-TestOnlyState $capacityRoot)
+        }
+    }
+    $ultraCapacity = $capacityCases[0]
+    $defaultCapacity = $capacityCases[1]
+    $machineCapacity = $capacityCases[2]
+    $cliOneCapacity = $capacityCases[3]
+    $dispatchHasMachineCeiling = $false
+    foreach ($attempt in @($state.tasks | ForEach-Object { @($_.attempts) })) {
+        $dispatchDocument = Get-Content -LiteralPath $attempt.args_path -Raw | ConvertFrom-Json
+        if ($dispatchDocument.PSObject.Properties['MachineCeiling']) { $dispatchHasMachineCeiling = $true }
+    }
+    $maxParallelOk = (
+        $ultraCapacity.result.code -ne 0 -and $ultraCapacity.state.status -ceq 'refused' -and
+        $ultraCapacity.state.diagnosis -match 'weight exceeds MaxParallel' -and
+        $ultraCapacity.state.counters.dispatches -eq 0 -and
+        $ultraCapacity.state.max_parallel -eq 1 -and $ultraCapacity.state.capacity.cli -eq 2 -and
+        $ultraCapacity.state.capacity.spec_ceiling -eq 1 -and $ultraCapacity.state.capacity.machine_ceiling -eq 4 -and
+        $defaultCapacity.state.max_parallel -eq 2 -and $defaultCapacity.state.capacity.cli -eq 3 -and
+        $defaultCapacity.state.capacity.spec_ceiling -eq 2 -and
+        (@($defaultCapacity.state.plan.waves | ForEach-Object { @($_.tasks).Count }) -join ',') -ceq '2,2,1' -and
+        $machineCapacity.state.max_parallel -eq 4 -and $null -eq $machineCapacity.state.capacity.cli -and
+        $machineCapacity.state.capacity.spec_ceiling -eq 6 -and
+        (@($machineCapacity.state.plan.waves | ForEach-Object { @($_.tasks).Count }) -join ',') -ceq '4,1' -and
+        $cliOneCapacity.state.max_parallel -eq 1 -and $cliOneCapacity.state.capacity.cli -eq 1 -and
+        $cliOneCapacity.state.capacity.spec_ceiling -eq 3 -and
+        (@($cliOneCapacity.state.plan.waves | ForEach-Object { @($_.tasks).Count }) -join ',') -ceq '1,1,1,1,1' -and
+        -not $dispatchHasMachineCeiling)
+    Assert-Test 'MaxParallel' $maxParallelOk (($capacityCases | ForEach-Object {
+        "$($_.definition.name):$($_.result.code):$($_.state.max_parallel):$(@($_.state.plan.waves | ForEach-Object { @($_.tasks).Count }) -join ',')"
+    }) -join '; ')
     $missingPlanFieldRejected = $false
     try {
         $badState = ($state | ConvertTo-Json -Depth 100) | ConvertFrom-Json
@@ -604,6 +801,38 @@ try {
     function Confirm-RunnerBuildDigest { param($Attempt, $TaskState) return $true }
     function Invoke-EngineAdopt { param($WrapperPath, $RunId, $Spec, $Task, $Worktree, $StateRoot, $ChildOutputPath) return $script:TestAdoptResult }
 
+    $exit69Cases = [ordered]@{
+        failed = 'tree moved between pre-flight and launch (exit 69)'
+        'adopted-void' = 'adopted tree moved; verdict void (exit 69)'
+        done = 'task tree moved during build (exit 69)'
+        done_with_concerns = 'task tree moved during build (exit 69)'
+    }
+    $exit69Ok = $true
+    foreach ($exit69Status in @($exit69Cases.Keys)) {
+        $exit69Context = New-TestRouteContext
+        $exit69Event = New-TestDispatchResultEvent -ExitCode 69 -Status $exit69Status
+        $exit69Event.tree_moved = $true
+        $exit69Route = Route-RunnerResult $exit69Context.plan $exit69Context.task $exit69Context.attempt (New-TestResult 69 $exit69Event)
+        if ($exit69Route -cne 'park' -or $exit69Context.task.diagnosis -cne $exit69Cases[$exit69Status]) { $exit69Ok = $false }
+    }
+    $exit69Fallback = New-TestRouteContext
+    $exit69FallbackEvent = New-TestDispatchResultEvent -ExitCode 73 -Status failed
+    $exit69FallbackEvent | Add-Member -MemberType NoteProperty -Name error -Value 'fixture error'
+    [void](Route-RunnerResult $exit69Fallback.plan $exit69Fallback.task $exit69Fallback.attempt (New-TestResult 73 $exit69FallbackEvent))
+    Assert-Test 'exit-69 diagnosis' `
+        ($exit69Ok -and $exit69Fallback.task.diagnosis -ceq 'wrapper exit 73 (status failed; error fixture error)') `
+        $exit69Fallback.task.diagnosis
+
+    $exit69Invalid = New-TestRouteContext
+    $exit69InvalidEvent = New-TestDispatchResultEvent -ExitCode 69 -Status failed
+    $exit69InvalidEvent.tree_moved = $true
+    $exit69InvalidDiagnosis = 'exit/status correlation failed for exit 69'
+    $exit69InvalidRoute = Route-RunnerResult $exit69Invalid.plan $exit69Invalid.task $exit69Invalid.attempt `
+        (New-TestResult 69 $exit69InvalidEvent $exit69InvalidDiagnosis)
+    Assert-Test 'exit-69 unvalidated event preserves validation diagnosis' `
+        ($exit69InvalidRoute -ceq 'park' -and $exit69Invalid.task.diagnosis -ceq $exit69InvalidDiagnosis -and
+            $exit69Invalid.task.diagnosis -cnotmatch 'tree moved') $exit69Invalid.task.diagnosis
+
     $blockedContext = New-TestRouteContext
     $blockedFinal = [pscustomobject]@{ status = 'blocked'; changed_files = @(); commands_run = @(); deviations = @(); unresolved = @(); blocker = 'spec defect' }
     $blockedEvent = New-TestDispatchResultEvent -ExitCode 1 -Status failed -Final $blockedFinal
@@ -611,18 +840,42 @@ try {
     Assert-Test 'exit-1 blocked final parks as spec defect' `
         ($blockedRoute -ceq 'park' -and $blockedContext.task.diagnosis -ceq 'spec defect: final blocked') $blockedContext.task.diagnosis
 
-    $quotaLog = Join-Path $testRoot 'quota-child.log'
-    Write-TestText $quotaLog @'
-stdout-chunk{"type":"thread.started","thread_id":"019f7719-db8a-7710-8bda-11f65acd0899"}
-{"type":"turn.started"}
-stderr-chunk{"type":"error","message":"You've hit your usage limit. Visit https://chatgpt.com/codex/settings/usage to purchase more credits or try again at Jul 25th, 2026 11:24 AM."}
-{"type":"turn.failed","error":{"message":"You've hit your usage limit. Visit https://chatgpt.com/codex/settings/usage to purchase more credits or try again at Jul 25th, 2026 11:24 AM."}}
-'@
-    $quotaContext = New-TestRouteContext
-    $quotaEvent = New-TestDispatchResultEvent -ExitCode 1 -Status failed -LogPath $quotaLog
-    $quotaRoute = Route-RunnerResult $quotaContext.plan $quotaContext.task $quotaContext.attempt (New-TestResult 1 $quotaEvent)
-    Assert-Test 'mid-line Codex JSONL quota event pauses run' `
-        ($quotaRoute -ceq 'park' -and $script:EngineState.status -ceq 'paused') "route=$quotaRoute status=$($script:EngineState.status)"
+    $quotaPositive = $true
+    $quotaDetails = @()
+    $plainQuotaLines = @(
+        'prefix{"type":"turn.started"}}ERROR: You''ve hit your usage limit; retry later',
+        'ERROR: You''ve hit your usage limit soon{"type":"turn.started"}'
+    )
+    for ($quotaIndex = 0; $quotaIndex -lt $plainQuotaLines.Count; $quotaIndex++) {
+        $plainQuotaLog = Join-Path $testRoot "plain-quota-$quotaIndex.log"
+        Write-TestText $plainQuotaLog $plainQuotaLines[$quotaIndex]
+        $plainQuotaContext = New-TestRouteContext
+        $plainQuotaEvent = New-TestDispatchResultEvent -ExitCode 1 -Status failed -LogPath $plainQuotaLog
+        $plainQuotaRoute = Route-RunnerResult $plainQuotaContext.plan $plainQuotaContext.task $plainQuotaContext.attempt `
+            (New-TestResult 1 $plainQuotaEvent)
+        $plainQuotaOk = ($plainQuotaRoute -ceq 'park' -and $script:EngineState.status -ceq 'paused' -and
+            $plainQuotaContext.task.status -ceq 'parked' -and $plainQuotaContext.task.diagnosis -ceq 'quota or rate limit')
+        if (-not $plainQuotaOk) { $quotaPositive = $false }
+        $quotaDetails += "plain-$quotaIndex=$plainQuotaRoute/$($script:EngineState.status)"
+    }
+    $jsonQuotaLines = @(
+        'chunk-prefix{"type":"error","message":"You''ve hit your usage limit. Visit settings."}',
+        '{"type":"turn.started"}interleaved chunk prefix{"type":"turn.failed","error":{"message":"You''ve hit your usage limit. Try later."}}',
+        '{"type":"error","message":"429 Too Many Requests: slow down"}',
+        '{"type":"turn.failed","error":{"message":"request failed; status: 429"}}'
+    )
+    for ($quotaIndex = 0; $quotaIndex -lt $jsonQuotaLines.Count; $quotaIndex++) {
+        $jsonQuotaLog = Join-Path $testRoot "json-quota-$quotaIndex.log"
+        Write-TestText $jsonQuotaLog $jsonQuotaLines[$quotaIndex]
+        $jsonQuotaContext = New-TestRouteContext
+        $jsonQuotaEvent = New-TestDispatchResultEvent -ExitCode 1 -Status failed -LogPath $jsonQuotaLog
+        $jsonQuotaRoute = Route-RunnerResult $jsonQuotaContext.plan $jsonQuotaContext.task $jsonQuotaContext.attempt `
+            (New-TestResult 1 $jsonQuotaEvent)
+        $jsonQuotaOk = ($jsonQuotaRoute -ceq 'park' -and $script:EngineState.status -ceq 'paused' -and
+            $jsonQuotaContext.task.diagnosis -ceq 'quota or rate limit')
+        if (-not $jsonQuotaOk) { $quotaPositive = $false }
+        $quotaDetails += "json-$quotaIndex=$jsonQuotaRoute/$($script:EngineState.status)"
+    }
 
     $agentMessageLog = Join-Path $testRoot 'agent-message-child.log'
     Write-TestText $agentMessageLog '{"type":"item.completed","item":{"type":"agent_message","text":"The captured diagnostic says: You''ve hit your usage limit. Visit settings for details."}}'
@@ -632,6 +885,29 @@ stderr-chunk{"type":"error","message":"You've hit your usage limit. Visit https:
     Assert-Test 'agent_message text quoting usage-limit sentence is not quota' `
         ($agentMessageRoute -ceq 'fresh-same-effort' -and $script:EngineState.status -ceq 'running') `
         "route=$agentMessageRoute status=$($script:EngineState.status)"
+
+    $nonService429Log = Join-Path $testRoot 'agent-message-command-429.log'
+    Write-TestText $nonService429Log @'
+{"type":"item.completed","item":{"type":"agent_message","text":"quoted 429 Too Many Requests"}}
+{"type":"item.completed","item":{"type":"command_execution","aggregated_output":"status: 429"}}
+'@
+    $nonService429Context = New-TestRouteContext
+    $nonService429Event = New-TestDispatchResultEvent -ExitCode 1 -Status failed -LogPath $nonService429Log
+    $nonService429Route = Route-RunnerResult $nonService429Context.plan $nonService429Context.task `
+        $nonService429Context.attempt (New-TestResult 1 $nonService429Event)
+
+    $selectedCapacityLog = Join-Path $testRoot 'selected-model-capacity.log'
+    Write-TestText $selectedCapacityLog '{"type":"error","message":"Selected model is at capacity. Please try a different model."}'
+    $selectedCapacityContext = New-TestRouteContext
+    $selectedCapacityEvent = New-TestDispatchResultEvent -ExitCode 1 -Status failed -LogPath $selectedCapacityLog
+    $selectedCapacityRoute = Route-RunnerResult $selectedCapacityContext.plan $selectedCapacityContext.task `
+        $selectedCapacityContext.attempt (New-TestResult 1 $selectedCapacityEvent)
+    $quotaNegative = ($agentMessageRoute -ceq 'fresh-same-effort' -and
+        $nonService429Route -ceq 'fresh-same-effort' -and
+        $selectedCapacityRoute -ceq 'fresh-same-effort' -and
+        $selectedCapacityContext.attempt.diagnosis -ceq 'process failure')
+    Assert-Test 'quota and 429' ($quotaPositive -and $quotaNegative) `
+        (($quotaDetails + @("agent=$agentMessageRoute", "item429=$nonService429Route", "selected=$selectedCapacityRoute")) -join '; ')
 
     $mentionLog = Join-Path $testRoot 'ordinary-child.log'; Write-TestText $mentionLog "ordinary progress`n"
     $mentionContext = New-TestRouteContext
@@ -719,6 +995,41 @@ stderr-chunk{"type":"error","message":"You've hit your usage limit. Visit https:
         ((Test-RunnerPidLive $PID $pidStamp) -and -not (Test-RunnerPidLive $PID ([DateTime]::UtcNow.AddDays(-1).ToString('o'))) -and
             -not (Test-RunnerPidLive 0 $null)) 'PID/start-time identity check accepted a recycled or unknown PID'
 
+    $startTimeContext = New-TestRouteContext
+    $startTimeContext.plan.files = @([pscustomobject]@{ path = 'src/a.py' })
+    $startTimeContext.attempt.worktree = $repo
+    $startTimeContext.attempt.args_path = Join-Path $testRoot 'start-time-dispatch-args.json'
+    $startTimeContext.attempt.child_output_path = Join-Path $testRoot 'start-time-child.out'
+    $script:EngineState.spec | Add-Member -NotePropertyName snapshot_path -NotePropertyValue $spec -Force
+    $script:EngineState | Add-Member -NotePropertyName plan -NotePropertyValue ([pscustomobject]@{
+        spec = [pscustomobject]@{ coder_model = 'gpt-5.6-sol' }
+    }) -Force
+    $script:EngineStatePath = Join-Path $testRoot 'start-time-state\engine-state.json'
+    $suppliedStartTime = '2001-02-03T04:05:06.0000000Z'
+    $script:StartStampProbeCount = 0
+    $originalCriticalGate = ${function:Test-RunnerCriticalGate}
+    $originalStartDispatch = ${function:Start-EngineDispatch}
+    $originalStampProbe = ${function:Get-RunnerProcessStamp}
+    $originalSaveRunnerState = ${function:Save-RunnerState}
+    function Test-RunnerCriticalGate { param($TaskPlan, $TaskState) return $true }
+    function Start-EngineDispatch {
+        param($WrapperPath, $ArgsPath, $ChildOutputPath, $StateRoot)
+        return [pscustomobject]@{ pid = $PID; start_time = $suppliedStartTime }
+    }
+    function Get-RunnerProcessStamp { param($ProcessId) $script:StartStampProbeCount++; return 'fallback-stamp' }
+    function Save-RunnerState { return }
+    try { $startTimeChild = Start-RunnerAttempt $startTimeContext.plan $startTimeContext.task $startTimeContext.attempt }
+    finally {
+        Set-Item -LiteralPath Function:Test-RunnerCriticalGate -Value $originalCriticalGate
+        Set-Item -LiteralPath Function:Start-EngineDispatch -Value $originalStartDispatch
+        Set-Item -LiteralPath Function:Get-RunnerProcessStamp -Value $originalStampProbe
+        Set-Item -LiteralPath Function:Save-RunnerState -Value $originalSaveRunnerState
+    }
+    Assert-Test 'start_time' `
+        ($null -ne $startTimeChild -and $startTimeContext.attempt.child_start_time -ceq $suppliedStartTime -and
+            $script:StartStampProbeCount -eq 0) `
+        "saved=$($startTimeContext.attempt.child_start_time); probes=$($script:StartStampProbeCount)"
+
     $gatePin = Join-Path $testRoot 'fake-tree-pin.ps1'
     $gateBaseline = Join-Path $testRoot 'fake-baseline.ps1'
     Write-TestText $gatePin @'
@@ -746,7 +1057,8 @@ exit ([int]$env:ENGINE_TEST_BASELINE_EXIT)
     function Stage-EngineWave { param($IntegrationWorktree, $Files) [pscustomobject]@{ ok = $script:TestStageOk; failures = @() } }
     $script:EngineTreePinScript = $gatePin; $script:EngineBaselineScript = $gateBaseline; $script:TestStageOk = $true
     $gateContext = New-TestRouteContext
-    $script:EngineState.integration = [pscustomobject]@{ worktree = $testRoot }
+    $gateRepo = New-TestRepo 'gate-unit-repo'
+    $script:EngineState.integration = [pscustomobject]@{ worktree = $gateRepo }
     $script:EngineState.run_id = '33333333333333333333333333333333'
     $script:EngineStatePath = Join-Path $testRoot 'gate-state\engine-state.json'
     [void][IO.Directory]::CreateDirectory((Split-Path $script:EngineStatePath -Parent))
@@ -779,8 +1091,9 @@ exit ([int]$env:ENGINE_TEST_BASELINE_EXIT)
     $env:ENGINE_TEST_GATE_COUNTER = $repinCounter; $env:ENGINE_TEST_VERIFY_SEQUENCE = '69,0'
     $repin = Invoke-RunnerGate @() 1
     $repinCounts = @((Get-Content (Join-Path $repinCounter 'pin.txt') -Raw), (Get-Content (Join-Path $repinCounter 'verify.txt') -Raw), (Get-Content (Join-Path $repinCounter 'baseline.txt') -Raw))
-    Assert-Test 'verify exit 69 takes exactly one re-pin and re-baseline path' `
-        ($repin.code -eq 0 -and $repinCounts[0] -eq '2' -and $repinCounts[1] -eq '2' -and $repinCounts[2] -eq '2') ($repinCounts -join ',')
+    Assert-Test 'single-pass gate' `
+        ($repin.gate -ceq 'verify' -and $repin.code -eq 69 -and
+            $repinCounts[0] -eq '1' -and $repinCounts[1] -eq '1' -and $repinCounts[2] -eq '1') ($repinCounts -join ',')
 
     $twiceCounter = Join-Path $testRoot 'gate-moved-twice'; [void][IO.Directory]::CreateDirectory($twiceCounter)
     $env:ENGINE_TEST_GATE_COUNTER = $twiceCounter; $env:ENGINE_TEST_VERIFY_SEQUENCE = '69,69'
@@ -788,10 +1101,27 @@ exit ([int]$env:ENGINE_TEST_BASELINE_EXIT)
     $otherCounter = Join-Path $testRoot 'gate-verify-other'; [void][IO.Directory]::CreateDirectory($otherCounter)
     $env:ENGINE_TEST_GATE_COUNTER = $otherCounter; $env:ENGINE_TEST_VERIFY_SEQUENCE = '24'
     $verifyOther = Invoke-RunnerGate @() 1
-    Assert-Test 'second moved verify and other verify failures park with their exact codes' `
+    Assert-Test 'single-pass moved and other verify failures park with their exact codes' `
         ($twice.gate -ceq 'verify' -and $twice.code -eq 69 -and $verifyOther.gate -ceq 'verify' -and $verifyOther.code -eq 24) `
         "twice=$($twice.code) other=$($verifyOther.code)"
+
+    $env:APEX_ENGINE_TEST_FAIL_INDEX_IDENTITY = '1'
+    try { $identityFailure = Invoke-RunnerGate @() 1 }
+    finally { Remove-Item Env:APEX_ENGINE_TEST_FAIL_INDEX_IDENTITY -ErrorAction SilentlyContinue }
+    Assert-Test 'git index identity failure returns verify park diagnosis instead of throwing' `
+        ($identityFailure.gate -ceq 'verify' -and $identityFailure.code -eq 1 -and
+            $identityFailure.diagnosis -match 'git index identity read before pin failed' -and
+            $identityFailure.diagnosis -match 'git ls-files') ($identityFailure | ConvertTo-Json -Compress)
     Remove-Item Env:ENGINE_TEST_GATE_COUNTER, Env:ENGINE_TEST_BASELINE_EXIT, Env:ENGINE_TEST_VERIFY_SEQUENCE -ErrorAction SilentlyContinue
+
+    $env:APEX_ENGINE_TEST_FAIL_INDEX_IDENTITY = '1'
+    try { $identityFailureCase = Invoke-TestScenario -Name 'git-identity-failure' -Scenario 'done' -Single }
+    finally { Remove-Item Env:APEX_ENGINE_TEST_FAIL_INDEX_IDENTITY -ErrorAction SilentlyContinue }
+    Assert-Test 'git index identity failure parks Engine with the failed operation diagnosis' `
+        ($identityFailureCase.result.code -ne 0 -and $identityFailureCase.state.status -ceq 'parked' -and
+            $identityFailureCase.state.diagnosis -match '^verify gate exit 1: git index identity read before pin failed:' -and
+            $identityFailureCase.state.diagnosis -match 'git ls-files' -and
+            @($identityFailureCase.state.tasks[0].attempts).Count -eq 1) $identityFailureCase.result.output
 
     $concernsCase = Invoke-TestScenario -Name 'concerns-route' -Scenario 'concerns' -Single
     Assert-Test 'real wrapper final done_with_concerns integrates and records concern' `
@@ -804,10 +1134,18 @@ exit ([int]$env:ENGINE_TEST_BASELINE_EXIT)
             @($blockedCase.state.tasks[0].attempts).Count -eq 1 -and $blockedCase.state.tasks[0].attempts[0].exit_code -eq 67) `
         $blockedCase.result.output
 
-    $quotaCase = Invoke-TestScenario -Name 'quota-route' -Scenario 'quota' -Single
-    Assert-Test 'real wrapper pauses on captured Codex JSONL quota stdout without redispatch' `
+    $quotaCase = Invoke-TestScenario -Name 'rate-limit-429-route' -Scenario 'rate_limit_429' -Single
+    Assert-Test 'real wrapper rate_limit_429 pauses on captured Codex JSONL without redispatch' `
         ($quotaCase.result.code -ne 0 -and $quotaCase.state.status -ceq 'paused' -and
             @($quotaCase.state.tasks[0].attempts).Count -eq 1) $quotaCase.result.output
+
+    $usageLimitCase = Invoke-TestScenario -Name 'usage-limit-jsonl-route' -Scenario 'usage_limit_jsonl' -Single
+    Assert-Test 'real wrapper usage-limit JSONL sample pauses and parks after exactly one attempt' `
+        ($usageLimitCase.result.code -ne 0 -and $usageLimitCase.state.status -ceq 'paused' -and
+            $usageLimitCase.state.diagnosis -ceq 'quota or rate limit' -and
+            $usageLimitCase.state.tasks[0].status -ceq 'parked' -and
+            $usageLimitCase.state.tasks[0].diagnosis -ceq 'quota or rate limit' -and
+            @($usageLimitCase.state.tasks[0].attempts).Count -eq 1) $usageLimitCase.result.output
 
     $agentMessageCase = Invoke-TestScenario -Name 'agent-message-route' -Scenario 'agent_message_quota_quote' -Single
     Assert-Test 'real wrapper does not treat agent_message usage-limit quotation as quota' `
@@ -868,6 +1206,8 @@ if ($Verify -and $env:ENGINE_TEST_STAGE_VERIFY_COUNT) {
         Write-Host "stage-aware verify failure $($sequence[$count - 1])"; exit ([int]$sequence[$count - 1])
     }
 }
+if ($Pin) { & $env:ENGINE_TEST_REAL_TREE_PIN -Pin -Worktree $Worktree -Label $Label -PinDirectory $PinDirectory; exit $LASTEXITCODE }
+if ($Verify) { & $env:ENGINE_TEST_REAL_TREE_PIN -Verify -Worktree $Worktree -Label $Label -PinDirectory $PinDirectory; exit $LASTEXITCODE }
 Write-Host 'stage-aware pin ok'; exit 0
 '@
     $env:ENGINE_TEST_REAL_TREE_PIN = Join-Path $PSScriptRoot 'tree-pin.ps1'
@@ -900,36 +1240,148 @@ Write-Host 'stage-aware pin ok'; exit 0
     $env:ENGINE_TEST_STAGE_VERIFY_COUNT = Join-Path $testRoot 'repin-live-verify.count'
     $env:ENGINE_TEST_STAGE_VERIFY_SEQUENCE = '69,0'
     $repinLiveCase = Invoke-TestScenario -Name 'repin-live' -Scenario 'done' -Single -TreePinPath $stageAwarePin
-    Assert-Test 'runner performs one live re-pin after verify 69 then commits' `
-        ($repinLiveCase.result.code -eq 0 -and (Get-Content $env:ENGINE_TEST_STAGE_PIN_COUNT -Raw) -eq '2' -and
-            (Get-Content $env:ENGINE_TEST_STAGE_VERIFY_COUNT -Raw) -eq '2') $repinLiveCase.result.output
+    $repinLiveHead = (Invoke-TestGit ([string]$repinLiveCase.state.integration.worktree) @('rev-parse', 'HEAD'))[-1]
+    Assert-Test 'runner parks first verify 69 after one pin baseline verify and zero integration commits' `
+        ($repinLiveCase.result.code -ne 0 -and $repinLiveCase.state.status -ceq 'parked' -and
+            (Get-Content $env:ENGINE_TEST_STAGE_PIN_COUNT -Raw) -eq '1' -and
+            (Get-Content $env:ENGINE_TEST_STAGE_VERIFY_COUNT -Raw) -eq '1' -and
+            $repinLiveHead -ceq [string]$repinLiveCase.state.integration.tip) $repinLiveCase.result.output
 
     $env:ENGINE_TEST_STAGE_MARKER = Join-Path $testRoot 'repin-exhaust.marker'
     $env:ENGINE_TEST_STAGE_PIN_COUNT = Join-Path $testRoot 'repin-exhaust-pin.count'
     $env:ENGINE_TEST_STAGE_VERIFY_COUNT = Join-Path $testRoot 'repin-exhaust-verify.count'
     $env:ENGINE_TEST_STAGE_VERIFY_SEQUENCE = '69,69'
     $repinExhaustCase = Invoke-TestScenario -Name 'repin-exhaust' -Scenario 'done' -Single -TreePinPath $stageAwarePin
-    Assert-Test 'runner parks after exactly one re-pin when verify moves twice' `
+    $repinExhaustHead = (Invoke-TestGit ([string]$repinExhaustCase.state.integration.worktree) @('rev-parse', 'HEAD'))[-1]
+    Assert-Test 'runner second verify mutation case also parks after one pass with zero integration commits' `
         ($repinExhaustCase.result.code -ne 0 -and $repinExhaustCase.state.status -ceq 'parked' -and
-            (Get-Content $env:ENGINE_TEST_STAGE_PIN_COUNT -Raw) -eq '2' -and
-            (Get-Content $env:ENGINE_TEST_STAGE_VERIFY_COUNT -Raw) -eq '2') $repinExhaustCase.result.output
+            (Get-Content $env:ENGINE_TEST_STAGE_PIN_COUNT -Raw) -eq '1' -and
+            (Get-Content $env:ENGINE_TEST_STAGE_VERIFY_COUNT -Raw) -eq '1' -and
+            $repinExhaustHead -ceq [string]$repinExhaustCase.state.integration.tip) $repinExhaustCase.result.output
+
+    $mutationBaseline = Join-Path $testRoot 'mutation-baseline.ps1'
+    Write-TestText $mutationBaseline @'
+param([switch]$Full, [string]$Worktree)
+$path = Join-Path $Worktree 'src\a.py'
+switch -CaseSensitive ($env:ENGINE_TEST_GATE_MUTATION) {
+    'working' { [IO.File]::AppendAllText($path, "working mutation`n") }
+    'index' {
+        [IO.File]::WriteAllText((Join-Path $Worktree 'off-manifest.txt'), "index mutation`n")
+        & git -C $Worktree add -f -- off-manifest.txt
+        if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+    }
+}
+Write-Host 'mutation baseline complete'
+exit 0
+'@
+    $mutationCases = @{}
+    foreach ($mutationKind in @('working', 'index')) {
+        $env:ENGINE_TEST_GATE_MUTATION = $mutationKind
+        Remove-Item Env:ENGINE_TEST_STAGE_VERIFY_SEQUENCE, Env:ENGINE_TEST_STAGE_PIN_COUNT, Env:ENGINE_TEST_STAGE_VERIFY_COUNT -ErrorAction SilentlyContinue
+        $mutationCases[$mutationKind] = Invoke-TestScenario -Name "verify-$mutationKind-mutation" -Scenario 'done' -Single `
+            -TreePinPath $stageAwarePin -BaselinePath $mutationBaseline
+    }
+    Remove-Item Env:ENGINE_TEST_GATE_MUTATION -ErrorAction SilentlyContinue
+    $workingMutationHead = (Invoke-TestGit ([string]$mutationCases['working'].state.integration.worktree) @('rev-parse', 'HEAD'))[-1]
+    $indexMutationHead = (Invoke-TestGit ([string]$mutationCases['index'].state.integration.worktree) @('rev-parse', 'HEAD'))[-1]
+    Assert-Test 'verify working-copy and index mutations park without changing integration.tip' `
+        ($mutationCases['working'].state.diagnosis -match '^verify gate exit 69: integration verify changed the working tree:' -and
+            $workingMutationHead -ceq [string]$mutationCases['working'].state.integration.tip -and
+            $mutationCases['index'].state.diagnosis -ceq 'verify gate exit 69: integration verify changed the index' -and
+            $indexMutationHead -ceq [string]$mutationCases['index'].state.integration.tip) `
+        "working=$($mutationCases['working'].state.diagnosis); index=$($mutationCases['index'].state.diagnosis)"
+    $headGateRepo = New-TestRepo 'head-gate-unit-repo'
+    $headGateTip = (Invoke-TestGit $headGateRepo @('rev-parse', 'HEAD'))[-1]
+    $script:EngineState.integration = [pscustomobject]@{ worktree = $headGateRepo; tip = $headGateTip }
+    $script:EngineState.run_id = '44444444444444444444444444444444'
+    $script:EngineState | Add-Member -MemberType NoteProperty -Name wave_runtime `
+        -Value ([pscustomobject]@{ '1' = [pscustomobject]@{ residue_inventory = @() } }) -Force
+    $originalInvokeRunnerScript = ${function:Invoke-RunnerScript}
+    function Invoke-RunnerScript {
+        param([string]$Path, [string[]]$Arguments)
+        if ($Path -ceq $script:EngineBaselineScript) {
+            Write-TestText (Join-Path $script:EngineState.integration.worktree 'src\a.py') "verify committed mutation`n"
+            $parent = (Invoke-TestGit ([string]$script:EngineState.integration.worktree) @('rev-parse', 'HEAD'))[-1]
+            [void](Set-TestCommit ([string]$script:EngineState.integration.worktree) @('src/a.py') $parent)
+            return [pscustomobject]@{ exit_code = 0; output = 'baseline committed mutation' }
+        }
+        return [pscustomobject]@{ exit_code = 0; output = 'pin fixture ok' }
+    }
+    try { $headGate = Invoke-RunnerGate @() 1 }
+    finally { Set-Item -LiteralPath Function:Invoke-RunnerScript -Value $originalInvokeRunnerScript }
+    Assert-Test 'verify HEAD commit mutation parks without changing integration.tip' `
+        ($headGate.gate -ceq 'verify' -and $headGate.diagnosis -ceq 'integration verify moved HEAD' -and
+            $script:EngineState.integration.tip -ceq $headGateTip) ($headGate | ConvertTo-Json -Compress)
+
+    $noIntentIntegration = [string]$mutationCases['working'].state.integration.worktree
+    $noIntentParent = (Invoke-TestGit $noIntentIntegration @('rev-parse', 'HEAD'))[-1]
+    [void](Set-TestCommit $noIntentIntegration @('src/a.py') $noIntentParent)
+    $noIntentResume = Invoke-TestEngine @('-Resume', $mutationCases['working'].state.run_id, '-StateRoot', $mutationCases['working'].state_root)
+    $noIntentAfter = Get-TestOnlyState $mutationCases['working'].state_root
+    Assert-Test 'verify-created HEAD commit parks and is not adopted without commit intent' `
+        ($noIntentResume.code -ne 0 -and $noIntentAfter.diagnosis -ceq 'integration branch tip mismatch' -and
+            @($noIntentAfter.transitions | Where-Object { $_.kind -ceq 'wave-commit-adopted' }).Count -eq 0) `
+        $noIntentResume.output
+
+    $residueIntegration = [string]$repinExhaustCase.state.integration.worktree
+    $residueInventoryBefore = [string[]]@($repinExhaustCase.state.wave_runtime.'1'.residue_inventory)
+    Write-TestText (Join-Path $residueIntegration 'residue-untracked.txt') "untracked residue`n"
+    Write-TestText (Join-Path $residueIntegration 'residue-ignored.tmp') "ignored residue`n"
+    $env:APEX_ENGINE_TEST_TREE_PIN_PATH = $stageAwarePin
+    $env:APEX_ENGINE_TEST_BASELINE_PATH = $gateBaseline
+    $env:ENGINE_TEST_BASELINE_EXIT = '0'
+    Remove-Item Env:ENGINE_TEST_STAGE_VERIFY_SEQUENCE, Env:ENGINE_TEST_STAGE_PIN_COUNT, Env:ENGINE_TEST_STAGE_VERIFY_COUNT -ErrorAction SilentlyContinue
+    $residueResumePark = Invoke-TestEngine @('-Resume', $repinExhaustCase.state.run_id, '-StateRoot', $repinExhaustCase.state_root)
+    $residueParked = Get-TestOnlyState $repinExhaustCase.state_root
+    $residueParkedHead = (Invoke-TestGit $residueIntegration @('rev-parse', 'HEAD'))[-1]
+    Remove-Item -LiteralPath (Join-Path $residueIntegration 'residue-untracked.txt'), (Join-Path $residueIntegration 'residue-ignored.tmp') -Force
+    $residueResumeDone = Invoke-TestEngine @('-Resume', $repinExhaustCase.state.run_id, '-StateRoot', $repinExhaustCase.state_root)
+    $residueDone = Get-TestOnlyState $repinExhaustCase.state_root
+    $residueInventoryAfter = [string[]]@($residueDone.wave_runtime.'1'.residue_inventory)
+    Assert-Test 'residue inventory' `
+        ($residueResumePark.code -ne 0 -and
+            $residueParked.diagnosis -match 'integration tree has untracked/ignored residue outside wave manifest:.*residue-ignored.tmp.*residue-untracked.txt' -and
+            $residueParkedHead -ceq [string]$residueParked.integration.tip -and
+            ($residueInventoryBefore -join "`n") -ceq ($residueInventoryAfter -join "`n") -and
+            $residueResumeDone.code -eq 0 -and $residueDone.status -ceq 'complete') `
+        "park=$($residueResumePark.output); done=$($residueResumeDone.output)"
+
+    $offManifestIntegration = [string]$repinLiveCase.state.integration.worktree
+    Write-TestText (Join-Path $offManifestIntegration 'off-manifest.txt') "staged outside manifest`n"
+    [void](Invoke-TestGit $offManifestIntegration @('add', '-f', '--', 'off-manifest.txt'))
+    $offManifestResume = Invoke-TestEngine @('-Resume', $repinLiveCase.state.run_id, '-StateRoot', $repinLiveCase.state_root)
+    $offManifestAfter = Get-TestOnlyState $repinLiveCase.state_root
+    $offManifestHead = (Invoke-TestGit $offManifestIntegration @('rev-parse', 'HEAD'))[-1]
+    Assert-Test 'off-manifest git add on Resume is refused before integration commit' `
+        ($offManifestResume.code -ne 0 -and
+            $offManifestAfter.diagnosis -match 'integration index contains paths outside wave manifest: off-manifest.txt' -and
+            $offManifestHead -ceq [string]$offManifestAfter.integration.tip) $offManifestResume.output
+    $mainIntent = $state.wave_runtime.'1'.commit_intent
+    $mainCommitTree = (Invoke-TestGit ([string]$state.integration.worktree) @('rev-parse', "$($state.integration.tip)^{tree}"))[-1]
+    $mainCommitBase = (Invoke-TestGit ([string]$state.integration.worktree) @('rev-parse', "$($state.integration.tip)^"))[-1]
+    Assert-Test 'commit intent and exact allowlist' `
+        ($mainIntent.base -ceq $mainCommitBase -and $mainIntent.expected_tree -ceq $mainCommitTree -and
+            $offManifestResume.code -ne 0 -and $offManifestAfter.diagnosis -match 'integration index contains paths outside wave manifest') `
+        "intent=$($mainIntent | ConvertTo-Json -Compress); refusal=$($offManifestAfter.diagnosis)"
+    Remove-Item Env:APEX_ENGINE_TEST_TREE_PIN_PATH, Env:APEX_ENGINE_TEST_BASELINE_PATH, Env:ENGINE_TEST_BASELINE_EXIT -ErrorAction SilentlyContinue
     Remove-Item Env:ENGINE_TEST_REAL_TREE_PIN, Env:ENGINE_TEST_STAGE_MARKER -ErrorAction SilentlyContinue
     Remove-Item Env:ENGINE_TEST_STAGE_PIN_COUNT, Env:ENGINE_TEST_STAGE_VERIFY_COUNT, Env:ENGINE_TEST_STAGE_VERIFY_SEQUENCE -ErrorAction SilentlyContinue
 
-    $env:APEX_ENGINE_TEST_CRASH_AFTER_VERIFICATION_FAILURE = '1'
-    $ladderCrashCase = Invoke-TestScenario -Name 'ladder-crash-next-rung' -Scenario 'always_verify_fail' -Single -Effort high
+    $env:APEX_ENGINE_TEST_CRASH_AFTER_VERIFICATION_FAILURE = 'high'
+    $ladderCrashCase = Invoke-TestScenario -Name 'ladder-crash-next-rung' -Scenario 'always_verify_fail' -Single -Effort low
     Remove-Item Env:APEX_ENGINE_TEST_CRASH_AFTER_VERIFICATION_FAILURE -ErrorAction SilentlyContinue
     $ladderCrashBefore = $ladderCrashCase.state
     $env:ENGINE_TEST_FAKE_SCENARIO = 'done'
     $ladderCrashResume = Invoke-TestEngine @('-Resume', $ladderCrashBefore.run_id, '-StateRoot', $ladderCrashCase.state_root)
     Remove-Item Env:ENGINE_TEST_FAKE_SCENARIO -ErrorAction SilentlyContinue
     $ladderCrashAfter = Get-TestOnlyState $ladderCrashCase.state_root
-    Assert-Test 'resume after saved high verification failure dispatches next xhigh rung' `
-        ($ladderCrashCase.result.code -ne 0 -and @($ladderCrashBefore.tasks[0].attempts).Count -eq 1 -and
-            $ladderCrashBefore.tasks[0].attempts[0].status -ceq 'failed' -and
-            $ladderCrashBefore.tasks[0].attempts[0].diagnosis -ceq 'verification failure' -and
+    Assert-Test 'low-to-xhigh crash-window ladder' `
+        ($ladderCrashCase.result.code -ne 0 -and @($ladderCrashBefore.tasks[0].attempts).Count -eq 3 -and
+            (@($ladderCrashBefore.tasks[0].attempts | ForEach-Object { [string]$_.effort }) -join ',') -ceq 'low,medium,high' -and
+            $ladderCrashBefore.tasks[0].attempts[2].status -ceq 'failed' -and
+            $ladderCrashBefore.tasks[0].attempts[2].diagnosis -ceq 'verification failure' -and
             $ladderCrashResume.code -eq 0 -and $ladderCrashAfter.status -ceq 'complete' -and
-            (@($ladderCrashAfter.tasks[0].attempts | ForEach-Object { [string]$_.effort }) -join ',') -ceq 'high,xhigh') `
+            (@($ladderCrashAfter.tasks[0].attempts | ForEach-Object { [string]$_.effort }) -join ',') -ceq 'low,medium,high,xhigh') `
         "before=$($ladderCrashCase.result.output); resume=$($ladderCrashResume.output)"
 
     $ladderCase = Invoke-TestScenario -Name 'ladder-low' -Scenario 'always_verify_fail' -Single -Effort low
@@ -1199,11 +1651,49 @@ exit $code
             $discardResult.code -eq 0 -and $discardState.teardown.status -ceq 'complete') `
         $discardResult.output
 
-    $machineAfter = if ($machineLedger -and (Test-Path -LiteralPath $machineLedger)) { [IO.File]::ReadAllBytes($machineLedger) } else { $null }
-    $machineSame = ($null -eq $machineBefore -and $null -eq $machineAfter) -or
-        ($null -ne $machineBefore -and $null -ne $machineAfter -and
-            [Convert]::ToBase64String($machineBefore) -ceq [Convert]::ToBase64String($machineAfter))
-    Assert-Test 'machine-ledger byte-identical or absent isolation' $machineSame 'default machine ledger changed'
+    $testRunIds = New-Object 'System.Collections.Generic.HashSet[string]' ([StringComparer]::Ordinal)
+    foreach ($engineStateFile in @(Get-ChildItem -LiteralPath $testRoot -Filter engine-state.json -Recurse -File -ErrorAction SilentlyContinue)) {
+        try { $engineStateDocument = Get-Content -LiteralPath $engineStateFile.FullName -Raw | ConvertFrom-Json }
+        catch { continue }
+        if ($engineStateDocument.PSObject.Properties['run_id'] -and $engineStateDocument.run_id) {
+            [void]$testRunIds.Add([string]$engineStateDocument.run_id)
+        }
+        if ($engineStateDocument.PSObject.Properties['tasks']) {
+            foreach ($engineTask in @($engineStateDocument.tasks)) {
+                if (-not $engineTask.PSObject.Properties['attempts']) { continue }
+                foreach ($engineAttempt in @($engineTask.attempts)) {
+                    if ($engineAttempt.PSObject.Properties['wrapper_run_id'] -and $engineAttempt.wrapper_run_id) {
+                        [void]$testRunIds.Add([string]$engineAttempt.wrapper_run_id)
+                    }
+                }
+            }
+        }
+    }
+    foreach ($testLedger in @(Get-ChildItem -LiteralPath $testRoot -Filter codex-run-ledger.jsonl -Recurse -File -ErrorAction SilentlyContinue)) {
+        foreach ($testLedgerLine in @([IO.File]::ReadAllLines($testLedger.FullName))) {
+            try { $testLedgerRow = $testLedgerLine | ConvertFrom-Json }
+            catch { continue }
+            foreach ($identityName in @('run_id', 'wrapper_run_id')) {
+                if ($testLedgerRow.PSObject.Properties[$identityName] -and $testLedgerRow.$identityName) {
+                    [void]$testRunIds.Add([string]$testLedgerRow.$identityName)
+                }
+            }
+        }
+    }
+    $machineViolations = @()
+    if (Test-Path -LiteralPath $machineLedger -PathType Leaf) {
+        foreach ($machineLine in @([IO.File]::ReadAllLines($machineLedger))) {
+            try { $machineRow = $machineLine | ConvertFrom-Json }
+            catch { continue }
+            $machineRunId = $null
+            if ($machineRow.PSObject.Properties['run_id']) { $machineRunId = [string]$machineRow.run_id }
+            if (($machineRunId -and $testRunIds.Contains($machineRunId)) -or
+                    (Test-TestValueContainsRoot $machineRow $testRoot)) {
+                $machineViolations += $machineLine
+            }
+        }
+    }
+    Assert-Test 'machine-ledger isolation' ($machineViolations.Count -eq 0) ($machineViolations -join "`n")
 } catch {
     $failures++
     Write-Host "FAIL: unexpected exception -- $($_.Exception.Message)" -ForegroundColor Red
@@ -1216,6 +1706,7 @@ exit $code
         -ErrorAction SilentlyContinue
     Remove-Item Env:APEX_ENGINE_TEST_CRASH_AFTER_VERIFICATION_FAILURE -ErrorAction SilentlyContinue
     $env:APEX_STATE_DIR = $oldState
+    $env:LOCALAPPDATA = $oldLocalAppData
     $env:APEX_ENGINE_TEST_RETRY_DELAY_SECONDS = $oldRetry
     $env:GIT_CONFIG_GLOBAL = $oldGlobal
     $env:APEX_ENGINE_TEST_MODE = $oldTestMode
@@ -1229,7 +1720,9 @@ exit $code
     $env:APEX_ENGINE_TEST_CRASH_AFTER_WAVE_COMMIT = $oldCommitCrash
     $env:APEX_ENGINE_TEST_CRASH_AFTER_VERIFICATION_FAILURE = $oldLadderCrash
     $env:APEX_ENGINE_TEST_FAIL_BEFORE_HANDOFF_JOURNAL = $oldHandoffCrash
+    $env:APEX_ENGINE_TEST_FAIL_INDEX_IDENTITY = $oldIdentityFailure
     if (Test-Path -LiteralPath $testRoot) { Remove-Item -LiteralPath $testRoot -Recurse -Force -ErrorAction SilentlyContinue }
+    if (Test-Path -LiteralPath $machineLocalRoot) { Remove-Item -LiteralPath $machineLocalRoot -Recurse -Force -ErrorAction SilentlyContinue }
 }
 
 if ($failures -gt 0) { Write-Host "engine-test: $failures failure(s)" -ForegroundColor Red; exit 1 }

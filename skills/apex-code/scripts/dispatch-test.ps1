@@ -398,6 +398,10 @@ function Invoke-AdoptCase {
         [Parameter(Mandatory)][string]$RunId
     )
 
+    $eventFilesBefore = if (Test-Path -LiteralPath $eventsRoot -PathType Container) {
+        @([System.IO.Directory]::EnumerateFiles($eventsRoot, '*.event.json'))
+    }
+    else { @() }
     Write-Host "`n===== CASE: $CaseName =====" -ForegroundColor Cyan
     $parameters = @{
         Adopt = $true
@@ -413,11 +417,16 @@ function Invoke-AdoptCase {
     $outputText = @($captured | ForEach-Object { $_.ToString() }) -join [Environment]::NewLine
     if (-not [string]::IsNullOrWhiteSpace($outputText)) { Write-Host $outputText.TrimEnd() }
     Write-Host ("----- {0}: exit {1} -----" -f $CaseName, $exitCode) -ForegroundColor DarkCyan
+    $eventFilesAfter = if (Test-Path -LiteralPath $eventsRoot -PathType Container) {
+        @([System.IO.Directory]::EnumerateFiles($eventsRoot, '*.event.json'))
+    }
+    else { @() }
 
     return [pscustomobject]@{
         ExitCode = $exitCode
         Row = Get-LedgerRowByRunId -RunId $RunId
         Output = $outputText
+        EventFiles = @($eventFilesAfter | Where-Object { $eventFilesBefore -cnotcontains $_ })
     }
 }
 
@@ -687,6 +696,26 @@ exit 0
         -Authorized $anyPhaseRow.authorized -StateDirectory (Join-Path $stateRoot 'gates') | Out-Null
     if ($LASTEXITCODE -ne 0) { throw "RunId-only adopt fixture scope snapshot failed: $LASTEXITCODE" }
     Add-TestLedgerRow -Row $anyPhaseRow
+    $anyPhaseBeforePrefix = Get-LedgerRowByRunId -RunId $anyPhaseRunId | ConvertTo-Json -Compress -Depth 8
+    $prefixRunId = $anyPhaseRunId.Substring(0, 8)
+    $prefixAdopt = Invoke-AdoptCase -CaseName 'RunId prefix caller-contract refusal' `
+        -RunId $prefixRunId
+    $prefixEvent = if ($prefixAdopt.EventFiles.Count -eq 1) {
+        Get-Content -Raw -LiteralPath $prefixAdopt.EventFiles[0] | ConvertFrom-Json
+    }
+    else { $null }
+    $anyPhaseAfterPrefix = Get-LedgerRowByRunId -RunId $anyPhaseRunId | ConvertTo-Json -Compress -Depth 8
+    $prefixDetail = "[adopt] REFUSED (exit 74): -RunId must be the full 32-character lowercase-hex run_id (got '$prefixRunId'); candidates: $anyPhaseRunId"
+    Assert-Case -Label 'adopt-prefix-refused-74-with-null-event-id-and-unchanged-row' `
+        -Condition ($prefixAdopt.ExitCode -eq 74 -and
+            $null -ne $prefixEvent -and $null -eq $prefixEvent.run_id -and
+            [string]$prefixEvent.detail -ceq $prefixDetail -and
+            $anyPhaseAfterPrefix -ceq $anyPhaseBeforePrefix) `
+        -Detail ("exit={0}, files={1}, event_run_id='{2}', detail='{3}', unchanged={4}" -f
+            $prefixAdopt.ExitCode, $prefixAdopt.EventFiles.Count,
+            $(if ($null -ne $prefixEvent) { $prefixEvent.run_id } else { '<none>' }),
+            $(if ($null -ne $prefixEvent) { $prefixEvent.detail } else { '<none>' }),
+            ($anyPhaseAfterPrefix -ceq $anyPhaseBeforePrefix))
     $anyPhaseAdopt = Invoke-AdoptCase -CaseName 'RunId-only historical phase adoption' `
         -RunId $anyPhaseRunId
     $olderAnyPhaseAfter = @(Get-LedgerRowsForSpec -Spec 'adopt-runid-older') |
@@ -705,6 +734,25 @@ exit 0
             $anyPhaseAdopt.Row.scope_exit, (-not [string]::IsNullOrWhiteSpace([string]$anyPhaseAdopt.Row.ended)),
             $olderAnyPhaseAfter.status, $anyPhaseAdopt.Output.Contains($runIdFixture.Path),
             $anyPhaseAdopt.Output.Contains($olderRunIdFixture.Path))
+
+    $terminalBefore = Get-LedgerRowByRunId -RunId $anyPhaseRunId | ConvertTo-Json -Compress -Depth 8
+    $terminalAdopt = Invoke-AdoptCase -CaseName 'terminal full RunId refusal' -RunId $anyPhaseRunId
+    $terminalAfter = Get-LedgerRowByRunId -RunId $anyPhaseRunId | ConvertTo-Json -Compress -Depth 8
+    $terminalDetail = "[adopt] REFUSED (exit 75): run_id '$anyPhaseRunId' is already terminal (status 'adopted-done'); nothing to adopt."
+    $terminalEvent = if ($terminalAdopt.EventFiles.Count -eq 1) {
+        Get-Content -Raw -LiteralPath $terminalAdopt.EventFiles[0] | ConvertFrom-Json
+    }
+    else { $null }
+    Assert-Case -Label 'adopt-terminal-refused-75-with-full-id-and-unchanged-row' `
+        -Condition ($terminalAdopt.ExitCode -eq 75 -and
+            $null -ne $terminalEvent -and [string]$terminalEvent.run_id -ceq $anyPhaseRunId -and
+            [string]$terminalEvent.detail -ceq $terminalDetail -and
+            $terminalAfter -ceq $terminalBefore) `
+        -Detail ("exit={0}, files={1}, event_run_id='{2}', detail='{3}', unchanged={4}" -f
+            $terminalAdopt.ExitCode, $terminalAdopt.EventFiles.Count,
+            $(if ($null -ne $terminalEvent) { $terminalEvent.run_id } else { '<none>' }),
+            $(if ($null -ne $terminalEvent) { $terminalEvent.detail } else { '<none>' }),
+            ($terminalAfter -ceq $terminalBefore))
 
     $wrongSpecFixture = New-FixtureRepo -Name 'adopt-runid-wrong-spec'
     $wrongSpecRunId = '55555555555555555555555555555552'
@@ -951,7 +999,7 @@ exit 0
     $boundedAdoptLines = @(1..60 | ForEach-Object { 'adopt bounded line {0:D3}' -f $_ })
     Write-Utf8NoBom -Path (Join-Path $legacyFixture.Path 'src\a.py') `
         -Content ("orig`n{0}`n" -f ($boundedAdoptLines -join "`n"))
-    $legacyRunId = 'task6-legacy-no-telemetry'
+    $legacyRunId = '55555555555555555555555555555557'
     Add-TestLedgerRow -Row @{
         run_id = $legacyRunId; row_kind = 'dispatch'; status = 'orphaned'
         pid = $null; launcher_pid = $null; worktree = $legacyFixture.Path

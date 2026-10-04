@@ -2042,6 +2042,43 @@ function Invoke-PostHocGates {
 
 function Invoke-Adopt {
     $adoptByRunId = -not [string]::IsNullOrWhiteSpace($RunId)
+    if ($adoptByRunId -and $RunId -cnotmatch '^[0-9a-f]{32}$') {
+        $candidateRunIds = @()
+        $candidateScanUnavailable = $false
+        try {
+            if (Test-Path -LiteralPath $ledgerPath -PathType Leaf) {
+                foreach ($line in [System.IO.File]::ReadAllLines($ledgerPath)) {
+                    if ([string]::IsNullOrWhiteSpace($line)) { continue }
+                    try {
+                        $candidateRow = $line | ConvertFrom-Json
+                    }
+                    catch {
+                        continue
+                    }
+                    if ($null -eq $candidateRow.PSObject.Properties['run_id']) { continue }
+                    $candidateRunId = [string]$candidateRow.run_id
+                    if ($candidateRunId -cmatch '^[0-9a-f]{32}$' -and
+                            $candidateRunId.StartsWith($RunId, [System.StringComparison]::Ordinal)) {
+                        $candidateRunIds = @($candidateRunIds + $candidateRunId | Select-Object -Unique -First 3)
+                    }
+                }
+            }
+        } catch [System.IO.IOException] {
+            $candidateScanUnavailable = $true
+        }
+        $candidateText = if ($candidateScanUnavailable) {
+            '(unavailable)'
+        } elseif (@($candidateRunIds).Count -gt 0) {
+            @($candidateRunIds) -join ', '
+        }
+        else {
+            '(none)'
+        }
+        Write-DispatchRefusalLine -Message (
+            "[adopt] REFUSED (exit 74): -RunId must be the full 32-character lowercase-hex run_id (got '$RunId'); candidates: $candidateText"
+        )
+        Exit-Dispatch 74
+    }
     # Without a run id, adoption still needs the full legacy selector. With one, these values are
     # cross-checks only: the selected dispatch row supplies every downstream identity field.
     if (-not $adoptByRunId) {
@@ -2058,12 +2095,13 @@ function Invoke-Adopt {
 
     $script:adoptLiveMatch = $null
     $script:adoptAbandonedMatch = $null
+    $script:adoptTerminalMatch = $null
     $script:adoptRunIdSeen = $false
     $script:adoptDispatchMatchSeen = $false
     $script:adoptMismatch = $null
     $match = Invoke-WithLedgerLock {
         $adoptKey = if ($Worktree) { Get-WorktreeKey $Worktree } else { $null }
-        $matches = [System.Collections.Generic.List[object]]::new()
+        $candidateRows = [System.Collections.Generic.List[object]]::new()
         foreach ($line in [System.IO.File]::ReadAllLines($ledgerPath)) {
             if ([string]::IsNullOrWhiteSpace($line)) { continue }
             $row = $line | ConvertFrom-Json
@@ -2094,15 +2132,15 @@ function Invoke-Adopt {
             # row from worktree B got adopted when worktree A was explicitly requested.
             $rowKey = if ($row.worktree_key) { [string]$row.worktree_key } elseif ($row.worktree) { Get-WorktreeKey ([string]$row.worktree) } else { '' }
             if (-not $adoptByRunId -and $rowKey -ne $adoptKey) { continue }
-            [void]$matches.Add($row)
+            [void]$candidateRows.Add($row)
         }
         $selected = if ($adoptByRunId) {
             # Ledger order is append order. A run id can occur on several bookkeeping rows and, in
             # a re-dispatch history, several dispatch rows; only the newest dispatch row is current.
-            @($matches) | Select-Object -Last 1
+            @($candidateRows) | Select-Object -Last 1
         }
         else {
-            @($matches) | Where-Object {
+            @($candidateRows) | Where-Object {
                 $_.status -in @('running', 'stalled', 'adopting', 'orphaned')
             } | Sort-Object { [datetime]$_.started } -Descending | Select-Object -First 1
         }
@@ -2148,6 +2186,9 @@ function Invoke-Adopt {
                 if ([string]$selected.status -ceq 'abandoned-unadopted') {
                     $script:adoptAbandonedMatch = $selected
                 }
+                else {
+                    $script:adoptTerminalMatch = $selected
+                }
                 return $null
             }
         }
@@ -2191,6 +2232,12 @@ function Invoke-Adopt {
         if ($script:adoptAbandonedMatch) {
             Write-DispatchRefusalLine -Message (
                 "[adopt] REFUSED (exit 75): run_id '$RunId' has already been abandoned-unadopted."
+            ) -ForegroundColor Yellow
+            Exit-Dispatch 75
+        }
+        if ($script:adoptTerminalMatch) {
+            Write-DispatchRefusalLine -Message (
+                "[adopt] REFUSED (exit 75): run_id '$RunId' is already terminal (status '$([string]$script:adoptTerminalMatch.status)'); nothing to adopt."
             ) -ForegroundColor Yellow
             Exit-Dispatch 75
         }
@@ -3177,7 +3224,11 @@ if ($script:capacityRefusal) {
         }
         else {
             $preflightBaselineScript = Join-Path $PSScriptRoot 'apex-baseline-check.ps1'
-            $preflightTreePinScript = Join-Path $PSScriptRoot 'tree-pin.ps1'
+            $preflightTreePinScript = if ($TreePinScript) {
+                $TreePinScript
+            } else {
+                Join-Path $PSScriptRoot 'tree-pin.ps1'
+            }
             $preflightSpecValidateScript = Join-Path $PSScriptRoot 'apex-spec-validate.ps1'
 
             foreach ($helper in @($preflightBaselineScript, $preflightTreePinScript, $preflightSpecValidateScript)) {

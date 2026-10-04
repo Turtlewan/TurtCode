@@ -106,6 +106,62 @@ function Wait-TestRow {
     return $null
 }
 
+function Invoke-TestWrapperEvent {
+    param(
+        [Parameter(Mandatory)][string]$WrapperPath,
+        [Parameter(Mandatory)][string]$StateRoot,
+        [Parameter(Mandatory)][string]$FakeCodexPath,
+        [Parameter(Mandatory)][string]$Repo,
+        [Parameter(Mandatory)][string]$BaseSha,
+        [Parameter(Mandatory)][string]$Spec,
+        [Parameter(Mandatory)][string]$CaseName,
+        [Parameter(Mandatory)][string[]]$Authorized,
+        [hashtable]$Environment = @{},
+        [string]$TreePinScript,
+        [switch]$RunPreflight
+    )
+    foreach ($name in @('FAKE_CODEX_INSCOPE_ONLY', 'FAKE_CODEX_EXTRA_WRITE', 'FAKE_CODEX_STATUS')) {
+        Remove-Item "Env:$name" -ErrorAction SilentlyContinue
+    }
+    foreach ($entry in $Environment.GetEnumerator()) {
+        Set-Item -Path "Env:$($entry.Key)" -Value ([string]$entry.Value)
+    }
+    $env:FAKE_CODEX_REPO = $Repo
+    $eventsRoot = Join-Path $StateRoot 'events'
+    $before = @()
+    if (Test-Path -LiteralPath $eventsRoot -PathType Container) {
+        $before = @([System.IO.Directory]::EnumerateFiles($eventsRoot, '*.event.json'))
+    }
+    $parameters = @{
+        Phase = 'build'; Spec = $Spec; Task = '1'; Worktree = $Repo; BaseSha = $BaseSha
+        Authorized = [string[]]@($Authorized); Effort = 'medium'; Model = 'gpt-5.6-sol'
+        Prompt = "Engine adapter real-wrapper fixture: $CaseName"
+        ScratchDirectory = (Join-Path $StateRoot 'scratch')
+        CodexExecutable = 'powershell.exe'
+        CodexExecutableArgumentPrefix = [string[]]@('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $FakeCodexPath)
+    }
+    if (-not $RunPreflight) { $parameters.SkipBaselineCheck = $true }
+    if ($TreePinScript) { $parameters.TreePinScript = $TreePinScript }
+    $oldPreference = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
+    Set-StrictMode -Off
+    try {
+        $captured = @(& $WrapperPath @parameters 2>&1)
+        $code = $LASTEXITCODE
+    } finally {
+        Set-StrictMode -Version 2.0
+        $ErrorActionPreference = $oldPreference
+    }
+    $after = @([System.IO.Directory]::EnumerateFiles($eventsRoot, '*.event.json'))
+    $newEvents = @($after | Where-Object { $before -cnotcontains $_ })
+    $eventPath = if ($newEvents.Count -eq 1) { $newEvents[0] } else { $null }
+    $event = if ($eventPath) { Get-Content -LiteralPath $eventPath -Raw | ConvertFrom-Json } else { $null }
+    return [pscustomobject]@{
+        exit_code = [int]$code; event_path = $eventPath; event = $event
+        output = ([string[]]@($captured | ForEach-Object { $_.ToString() }) -join [Environment]::NewLine)
+    }
+}
+
 $testRoot = Join-Path $env:TEMP ("engine-dispatch-test-" + [guid]::NewGuid().ToString('N'))
 $stateRoot = Join-Path $testRoot 'state'
 $ledgerPath = Join-Path $stateRoot 'progress\codex-run-ledger.jsonl'
@@ -114,6 +170,9 @@ $repo2 = Join-Path $testRoot 'repo-two'
 $repo3 = Join-Path $testRoot 'repo-live'
 $repo4 = Join-Path $testRoot 'repo-dead'
 $repo5 = Join-Path $testRoot 'repo-prelaunch'
+$repo6 = Join-Path $testRoot 'repo-scope65'
+$repo7 = Join-Path $testRoot 'repo-scope66'
+$repo8 = Join-Path $testRoot 'repo-pin-move'
 $spec = 'dispatch-fixture'
 $testMarker = Split-Path $testRoot -Leaf
 $oldState = $env:APEX_STATE_DIR
@@ -135,6 +194,9 @@ try {
     $base3 = New-TestRepo -Path $repo3 -Spec $spec
     $base4 = New-TestRepo -Path $repo4 -Spec $spec
     $base5 = New-TestRepo -Path $repo5 -Spec $spec
+    $base6 = New-TestRepo -Path $repo6 -Spec $spec
+    $base7 = New-TestRepo -Path $repo7 -Spec $spec
+    $base8 = New-TestRepo -Path $repo8 -Spec $spec
     $snapshot = Join-Path $stateRoot "$spec.md"
     Write-TestText $snapshot (New-TestSpecText $spec)
     $prefix = [string[]]@('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $fakeCodex)
@@ -174,6 +236,8 @@ param(
     Write-EngineDispatchArgs $defaultArgs $defaultParameters | Out-Null
     $defaultJson = Get-Content $defaultArgs -Raw | ConvertFrom-Json
     $defaultChild = Start-EngineDispatch $captureWrapper $defaultArgs $defaultOutput $stateRoot
+    $defaultInvocation = Get-Content "$defaultOutput.invocation.json" -Raw | ConvertFrom-Json
+    $defaultStampMatched = Test-EngineProcessIs $defaultChild.pid ([string]$defaultChild.start_time)
     $defaultHandle = $script:EngineDispatchProcesses[$defaultChild.pid]
     $defaultCompleted = $defaultHandle.WaitForExit(10000)
     if ($defaultCompleted) { $script:EngineDispatchProcesses.Remove($defaultChild.pid) }
@@ -185,6 +249,11 @@ param(
             -not $defaultCapture.has_executable -and -not $defaultCapture.has_prefix -and
             $defaultCapture.executable -ceq 'codex' -and @($defaultCapture.prefix).Count -eq 0) `
         'optional executable overrides were serialized or bound instead of using wrapper defaults'
+    Assert-EngineCase 'dispatch start stamp is atomically persisted and returned' `
+        ($null -ne $defaultInvocation.PSObject.Properties['start_time'] -and
+            [string]$defaultInvocation.start_time -ceq [string]$defaultChild.start_time -and
+            $defaultStampMatched) `
+        "returned=$($defaultChild.start_time); persisted=$($defaultInvocation.start_time)"
 
     $typedCaptureArgs = Join-Path $stateRoot 'args\typed-capture.json'
     $typedCaptureOutput = Join-Path $stateRoot 'children\typed-capture.out'
@@ -230,6 +299,19 @@ Start-Sleep -Seconds $SleepSeconds
     if ($null -ne $sleepHandle -and -not $sleepHandle.HasExited) { $sleepHandle.Kill(); $sleepHandle.WaitForExit() }
     $script:EngineDispatchProcesses.Remove($sleepChild.pid)
 
+    $mismatchOutput = Join-Path $stateRoot 'children\pid-start-mismatch.out'
+    Write-TestText "$mismatchOutput.invocation.json" (([ordered]@{
+        adopt = $false; args_path = $sleepArgs; start_time = '2000-01-01T00:00:00.0000000Z'
+    } | ConvertTo-Json -Compress))
+    $mismatchClock = [System.Diagnostics.Stopwatch]::StartNew()
+    $mismatchResult = Wait-EngineDispatch -ChildPid $PID -ChildOutputPath $mismatchOutput `
+        -LedgerPath $ledgerPath -MaxWaitSeconds 5
+    $mismatchClock.Stop()
+    Assert-EngineCase 'resumed wait rejects a live PID with a mismatched start stamp' `
+        ($mismatchResult.exit_code -eq -1 -and $mismatchClock.Elapsed.TotalSeconds -lt 2 -and
+            $mismatchResult.diagnosis -match 'could not be recovered') `
+        "elapsed=$($mismatchClock.Elapsed.TotalSeconds); diagnosis=$($mismatchResult.diagnosis)"
+
     $adoptSleepWrapper = Join-Path $testRoot 'adopt-sleep-wrapper.ps1'
     Write-TestText $adoptSleepWrapper @'
 [CmdletBinding()]
@@ -237,23 +319,118 @@ param(
     [switch]$Adopt, [string]$RunId, [string]$Spec, [string]$Task,
     [string]$Worktree, [string]$Phase
 )
-[System.IO.File]::WriteAllText((Join-Path $Worktree 'adopt-child.pid'), [string]$PID)
+$root = $env:APEX_STATE_DIR
+$countPath = Join-Path $root 'adopt-launch-count.txt'
+$count = if (Test-Path -LiteralPath $countPath) { [int](Get-Content -LiteralPath $countPath -Raw) } else { 0 }
+[System.IO.File]::WriteAllText($countPath, [string]($count + 1), [System.Text.UTF8Encoding]::new($false))
+$childIdentity = [ordered]@{
+    pid = $PID
+    start_time = (Get-Process -Id $PID).StartTime.ToUniversalTime().ToString('o')
+}
+[System.IO.File]::WriteAllText((Join-Path $root 'adopt-child.json'),
+    ($childIdentity | ConvertTo-Json -Compress), [System.Text.UTF8Encoding]::new($false))
+$grandScript = @"
+`$identityPath = Join-Path `$env:APEX_STATE_DIR 'adopt-grandchild.json'
+`$identity = [ordered]@{
+    pid = `$PID
+    start_time = (Get-Process -Id `$PID).StartTime.ToUniversalTime().ToString('o')
+}
+[System.IO.File]::WriteAllText(`$identityPath, (`$identity | ConvertTo-Json -Compress),
+    [System.Text.UTF8Encoding]::new(`$false))
+`$stopPath = Join-Path `$env:APEX_STATE_DIR 'adopt-grandchild.stop'
+`$deadline = (Get-Date).AddSeconds(120)
+while (-not (Test-Path -LiteralPath `$stopPath) -and (Get-Date) -lt `$deadline) {
+    Start-Sleep -Milliseconds 100
+}
+"@
+$encoded = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($grandScript))
+$startInfo = [System.Diagnostics.ProcessStartInfo]::new()
+$startInfo.FileName = 'powershell.exe'
+$startInfo.Arguments = "-NoProfile -NonInteractive -EncodedCommand $encoded"
+$startInfo.UseShellExecute = $false
+$startInfo.CreateNoWindow = $true
+$grand = [System.Diagnostics.Process]::new()
+$grand.StartInfo = $startInfo
+if (-not $grand.Start()) { throw 'grandchild did not start' }
 Start-Sleep -Seconds 20
 '@
-    $adoptPidPath = Join-Path $repo5 'adopt-child.pid'
-    $adoptTimedOut = Invoke-EngineAdopt -WrapperPath $adoptSleepWrapper `
-        -RunId 'dddddddddddddddddddddddddddddddd' -Spec $spec -Task '1' -Worktree $repo5 `
-        -StateRoot $stateRoot -ChildOutputPath (Join-Path $stateRoot 'children\adopt-timeout.out') `
-        -AdoptWaitSeconds 1
-    $adoptPid = if (Test-Path -LiteralPath $adoptPidPath) { [int](Get-Content $adoptPidPath -Raw) } else { 0 }
-    Assert-EngineCase 'adopt wait has its own timeout and kills its child' `
-        ($adoptTimedOut.exit_code -eq -1 -and
-            $adoptTimedOut.diagnosis -match '1-second adopt cap' -and
-            $adoptTimedOut.diagnosis -match 'was killed' -and
-            $adoptPid -gt 0 -and
-            $null -eq (Get-Process -Id $adoptPid -ErrorAction SilentlyContinue) -and
-            -not $script:EngineDispatchProcesses.ContainsKey($adoptPid)) `
-        "pid=$adoptPid; exit=$($adoptTimedOut.exit_code); diagnosis=$($adoptTimedOut.diagnosis)"
+    $adoptRunId = 'dddddddddddddddddddddddddddddddd'
+    $adoptIdentityPath = Join-Path $stateRoot 'adopt-child.json'
+    $adoptGrandIdentityPath = Join-Path $stateRoot 'adopt-grandchild.json'
+    $adoptCountPath = Join-Path $stateRoot 'adopt-launch-count.txt'
+    $adoptPid = 0; $adoptStart = $null
+    $adoptGrandPid = 0; $adoptGrandStart = $null
+    try {
+        $adoptTimedOut = Invoke-EngineAdopt -WrapperPath $adoptSleepWrapper `
+            -RunId $adoptRunId -Spec $spec -Task '1' -Worktree $repo5 `
+            -StateRoot $stateRoot -ChildOutputPath (Join-Path $stateRoot 'children\adopt-timeout.out') `
+            -AdoptWaitSeconds 1
+        $adoptIdentity = if (Test-Path -LiteralPath $adoptIdentityPath) {
+            Get-Content -LiteralPath $adoptIdentityPath -Raw | ConvertFrom-Json
+        } else { $null }
+        $adoptGrandIdentity = if (Test-Path -LiteralPath $adoptGrandIdentityPath) {
+            Get-Content -LiteralPath $adoptGrandIdentityPath -Raw | ConvertFrom-Json
+        } else { $null }
+        if ($null -ne $adoptIdentity) {
+            $adoptPid = [int]$adoptIdentity.pid; $adoptStart = [string]$adoptIdentity.start_time
+        }
+        if ($null -ne $adoptGrandIdentity) {
+            $adoptGrandPid = [int]$adoptGrandIdentity.pid
+            $adoptGrandStart = [string]$adoptGrandIdentity.start_time
+        }
+        for ($deathPoll = 0; $deathPoll -lt 50 -and
+                ((Test-EngineProcessIs $adoptPid $adoptStart -Strict) -or
+                 (Test-EngineProcessIs $adoptGrandPid $adoptGrandStart -Strict)); $deathPoll++) {
+            Start-Sleep -Milliseconds 100
+        }
+        $timeoutMarkerPath = Join-Path $stateRoot "engine-adopt-timeouts\$adoptRunId.json"
+        $timeoutMarker = if (Test-Path -LiteralPath $timeoutMarkerPath) {
+            Get-Content -LiteralPath $timeoutMarkerPath -Raw | ConvertFrom-Json
+        } else { $null }
+        Assert-EngineCase 'adopt wait kills its child process tree and writes a durable marker' `
+            ($adoptTimedOut.exit_code -eq -1 -and
+                $null -ne $adoptTimedOut.PSObject.Properties['adopt_timed_out'] -and
+                $adoptTimedOut.adopt_timed_out -and
+                $adoptTimedOut.diagnosis -match '1-second adopt cap' -and
+                $adoptTimedOut.diagnosis -match 'was killed' -and
+                $adoptPid -gt 0 -and -not [string]::IsNullOrWhiteSpace($adoptStart) -and
+                $adoptGrandPid -gt 0 -and -not [string]::IsNullOrWhiteSpace($adoptGrandStart) -and
+                -not (Test-EngineProcessIs $adoptPid $adoptStart -Strict) -and
+                -not (Test-EngineProcessIs $adoptGrandPid $adoptGrandStart -Strict) -and
+                -not $script:EngineDispatchProcesses.ContainsKey($adoptPid) -and
+                $null -ne $timeoutMarker -and [string]$timeoutMarker.run_id -ceq $adoptRunId -and
+                [int]$timeoutMarker.adopter_pid -eq $adoptPid -and
+                [string]$timeoutMarker.adopter_start -ceq $adoptStart -and
+                -not [string]::IsNullOrWhiteSpace([string]$timeoutMarker.timed_out_at) -and
+                [int]$timeoutMarker.adopt_wait_seconds -eq 1) `
+            "pid=$adoptPid/$adoptStart; grand=$adoptGrandPid/$adoptGrandStart; exit=$($adoptTimedOut.exit_code); diagnosis=$($adoptTimedOut.diagnosis)"
+    } finally {
+        if (Test-EngineProcessIs $adoptGrandPid $adoptGrandStart -Strict) {
+            Stop-Process -Id $adoptGrandPid -Force -ErrorAction SilentlyContinue
+        }
+    }
+
+    $repeatTimedOut = Invoke-EngineAdopt -WrapperPath $adoptSleepWrapper -RunId $adoptRunId `
+        -Spec $spec -Task '1' -Worktree $repo5 -StateRoot $stateRoot `
+        -ChildOutputPath (Join-Path $stateRoot 'children\adopt-timeout-repeat.out') -AdoptWaitSeconds 1
+    $previousAdopterDiagnosis = "previous adopter of run $adoptRunId timed out; not re-adopting (finish or -AbandonRunId it, then remove marker)"
+    $repeatRow = [pscustomobject]@{
+        row_kind = 'dispatch'; run_id = $adoptRunId; worktree = $repo5; spec = $spec
+        task = '1'; phase = 'build'; status = 'running'
+    }
+    $repeatLive = Wait-EngineLiveRow -WrapperPath $adoptSleepWrapper -Row $repeatRow `
+        -Spec $spec -Task '1' -Worktree $repo5 -StateRoot $stateRoot `
+        -ChildOutputPath (Join-Path $stateRoot 'children\adopt-timeout-live.out') `
+        -WaitStartedAt (Get-Date).ToUniversalTime() -AdoptWaitSeconds 1
+    $adoptLaunchCount = if (Test-Path -LiteralPath $adoptCountPath) {
+        [int](Get-Content -LiteralPath $adoptCountPath -Raw)
+    } else { 0 }
+    Assert-EngineCase 'timed-out adoption marker refuses repeat Invoke and live-row adoption' `
+        ($repeatTimedOut.exit_code -eq -1 -and $repeatTimedOut.adopt_timed_out -and
+            $repeatTimedOut.diagnosis -ceq $previousAdopterDiagnosis -and
+            $repeatLive.status -ceq 'parked' -and
+            $repeatLive.diagnosis -ceq $previousAdopterDiagnosis -and $adoptLaunchCount -eq 1) `
+        "count=$adoptLaunchCount; invoke=$($repeatTimedOut.diagnosis); live=$($repeatLive.status)/$($repeatLive.diagnosis)"
 
     $args1 = Join-Path $stateRoot 'args\one.json'
     $args2 = Join-Path $stateRoot 'args\two.json'
@@ -341,19 +518,138 @@ Start-Sleep -Seconds 20
         "$($prelaunchResult.status): $($prelaunchResult.diagnosis); result=$($prelaunchResult.result.diagnosis)"
     $script:EngineDispatchMaxWaitSeconds = 30
 
+    # Model the wrapper's terminal-under-lock refusal directly. A matching exit 75 must re-read
+    # the row and classify the missing final report as failed, not park it as an unknown refusal.
+    $terminalRefusalRunId = 'eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee'
+    $terminalRefusalState = Join-Path $testRoot 'constructed-terminal-state'
+    $terminalRefusalLedger = Join-Path $terminalRefusalState 'progress\codex-run-ledger.jsonl'
+    $terminalRefusalStamp = (Get-Process -Id $PID).StartTime.ToUniversalTime().ToString('o')
+    $terminalRefusalRow = [ordered]@{
+        row_kind = 'dispatch'; run_id = $terminalRefusalRunId; worktree = $repo5; spec = $spec
+        task = '1'; phase = 'build'; status = 'failed'; started = (Get-Date).ToUniversalTime().ToString('o')
+        pid = $PID; pid_start = $terminalRefusalStamp
+        launcher_pid = $null; launcher_start = $null
+        final_path = (Join-Path $terminalRefusalState 'missing-terminal-refusal.final.md')
+    }
+    [System.IO.Directory]::CreateDirectory((Split-Path $terminalRefusalLedger -Parent)) | Out-Null
+    [System.IO.File]::AppendAllText($terminalRefusalLedger,
+        (($terminalRefusalRow | ConvertTo-Json -Compress) + [Environment]::NewLine),
+        [System.Text.UTF8Encoding]::new($false))
+    $script:constructedTerminalRefusal = [pscustomobject]@{
+        exit_code = 75; child_output_path = 'constructed'; event_path = 'constructed'
+        event = [pscustomobject]@{
+            kind = 'refusal'; exit_code = 75; run_id = $terminalRefusalRunId
+            detail = "run_id '$terminalRefusalRunId' is already terminal (status 'failed'); nothing to adopt."
+        }
+        wrapper_run_id = $terminalRefusalRunId; end_tree_digest = $null; diagnosis = $null
+    }
+    $savedInvokeEngineAdopt = ${function:Invoke-EngineAdopt}
+    try {
+        Set-Item -Path Function:Invoke-EngineAdopt -Value {
+            [CmdletBinding()]
+            param(
+                [string]$WrapperPath, [string]$RunId, [string]$Spec, [string]$Task,
+                [string]$Worktree, [string]$StateRoot, [string]$ChildOutputPath,
+                [int]$AdoptWaitSeconds
+            )
+            return $script:constructedTerminalRefusal
+        }
+        $script:EngineDispatchTerminalReportWaitSeconds = 1
+        $terminalRefusalResult = Wait-EngineLiveRow -WrapperPath $wrapper `
+            -Row ([pscustomobject]$terminalRefusalRow) -Spec $spec -Task '1' -Worktree $repo5 `
+            -StateRoot $terminalRefusalState `
+            -ChildOutputPath (Join-Path $terminalRefusalState 'children\terminal-refusal.out') `
+            -WaitStartedAt (Get-Date).ToUniversalTime()
+    } finally {
+        $script:EngineDispatchTerminalReportWaitSeconds = 10
+        Set-Item -Path Function:Invoke-EngineAdopt -Value $savedInvokeEngineAdopt
+        Remove-Variable -Name constructedTerminalRefusal -Scope Script -ErrorAction SilentlyContinue
+    }
+    Assert-EngineCase 'already-terminal exit-75 refusal reclassifies the matching row' `
+        ($terminalRefusalResult.status -ceq 'failed' -and
+            $terminalRefusalResult.diagnosis -ceq 'terminal row has no final report' -and
+            $terminalRefusalResult.diagnosis -cnotmatch 'did not identify') `
+        "$($terminalRefusalResult.status): $($terminalRefusalResult.diagnosis)"
+
+    $treeMovedEvent = [pscustomobject]@{ tree_moved = $true }
     $explicitTable = @(
-        @{ E = 0; S = 'done' }, @{ E = 0; S = 'success' }, @{ E = 0; S = 'adopted-done+scope2' },
-        @{ E = 68; S = 'done_with_concerns' }, @{ E = 68; S = 'adopted-done_with_concerns+scope1' },
-        @{ E = 67; S = 'blocked' }, @{ E = 67; S = 'adopted-blocked' }, @{ E = 67; S = 'adopted-void+scope3' },
-        @{ E = 69; S = 'done' }, @{ E = 69; S = 'done_with_concerns' }, @{ E = 69; S = 'adopted-void' },
+        @{ E = 0; S = 'done' }, @{ E = 0; S = 'success' }, @{ E = 0; S = 'adopted-done' },
+        @{ E = 68; S = 'done_with_concerns' }, @{ E = 68; S = 'adopted-done_with_concerns' },
+        @{ E = 67; S = 'blocked' }, @{ E = 67; S = 'blocked+scope2' },
+        @{ E = 67; S = 'adopted-blocked' }, @{ E = 67; S = 'adopted-blocked+scope65' },
+        @{ E = 67; S = 'adopted-void' },
+        @{ E = 69; S = 'done'; V = $treeMovedEvent }, @{ E = 69; S = 'done_with_concerns'; V = $treeMovedEvent },
+        @{ E = 69; S = 'adopted-void'; V = $treeMovedEvent }, @{ E = 69; S = 'failed'; V = $treeMovedEvent },
         @{ E = 1; S = 'failed' }, @{ E = 1; S = 'done' }, @{ E = 1; S = 'done_with_concerns' },
-        @{ E = 65; S = 'done' }, @{ E = 66; S = 'done_with_concerns' }, @{ E = 73; S = 'failed' }, @{ E = 77; S = 'failed' }
+        @{ E = 65; S = 'done' }, @{ E = 65; S = 'adopted-done+scope65' },
+        @{ E = 65; S = 'adopted-done_with_concerns+scope73' },
+        @{ E = 66; S = 'done_with_concerns' }, @{ E = 66; S = 'adopted-done+scope66' },
+        @{ E = 73; S = 'failed' }, @{ E = 73; S = 'adopted-done' },
+        @{ E = 77; S = 'failed' }, @{ E = 77; S = 'adopted-done_with_concerns' }
     )
     $tableOk = $true
-    foreach ($pair in $explicitTable) { if (-not (Test-EngineTerminalStatus $pair.E $pair.S)) { $tableOk = $false } }
+    foreach ($pair in $explicitTable) {
+        $pairEvent = if ($pair.ContainsKey('V')) { $pair.V } else { $null }
+        if (-not (Test-EngineTerminalStatus $pair.E $pair.S $pairEvent)) { $tableOk = $false }
+    }
     if (Test-EngineTerminalStatus 0 'failed') { $tableOk = $false }
     if (Test-EngineTerminalStatus 68 'done') { $tableOk = $false }
+    if (Test-EngineTerminalStatus 0 'adopted-done+scope65') { $tableOk = $false }
+    if (Test-EngineTerminalStatus 68 'adopted-done_with_concerns+scope1') { $tableOk = $false }
+    if (Test-EngineTerminalStatus 67 'adopted-void+scope3') { $tableOk = $false }
+    if (Test-EngineTerminalStatus 69 'done' ([pscustomobject]@{ tree_moved = $false })) { $tableOk = $false }
+    if (Test-EngineTerminalStatus 69 'failed' ([pscustomobject]@{})) { $tableOk = $false }
+    if (Test-EngineTerminalStatus 65 'adopted-done+scope66') { $tableOk = $false }
+    if (Test-EngineTerminalStatus 65 'adopted-done+scope0') { $tableOk = $false }
+    if (Test-EngineTerminalStatus 66 'adopted-done+scope65') { $tableOk = $false }
     Assert-EngineCase 'explicit exit/status table including adopted suffixes' $tableOk 'an allowed status was rejected or a disallowed status was accepted'
+
+    $scope65 = Invoke-TestWrapperEvent -WrapperPath $wrapper -StateRoot $stateRoot `
+        -FakeCodexPath $fakeCodex -Repo $repo6 -BaseSha $base6 -Spec $spec -CaseName 'scope65' `
+        -Authorized @('src/a.py', 'src/two.py') `
+        -Environment @{ FAKE_CODEX_INSCOPE_ONLY = '1'; FAKE_CODEX_EXTRA_WRITE = 'src/rogue.py' }
+    $scope65Status = if ($null -ne $scope65.event) { [string]$scope65.event.status } else { '' }
+    Assert-EngineCase 'real-wrapper scope-65 event correlates' `
+        ($scope65.exit_code -eq 65 -and $null -ne $scope65.event -and
+            (Test-EngineTerminalStatus $scope65.exit_code $scope65Status $scope65.event)) `
+        "exit=$($scope65.exit_code); status=$scope65Status; output=$($scope65.output)"
+
+    $scope66 = Invoke-TestWrapperEvent -WrapperPath $wrapper -StateRoot $stateRoot `
+        -FakeCodexPath $fakeCodex -Repo $repo7 -BaseSha $base7 -Spec $spec -CaseName 'scope66' `
+        -Authorized @('wrong/one.py') `
+        -Environment @{ FAKE_CODEX_INSCOPE_ONLY = '1'; FAKE_CODEX_EXTRA_WRITE = 'src/two.py' }
+    $scope66Status = if ($null -ne $scope66.event) { [string]$scope66.event.status } else { '' }
+    Assert-EngineCase 'real-wrapper scope-66 event correlates' `
+        ($scope66.exit_code -eq 66 -and $null -ne $scope66.event -and
+            (Test-EngineTerminalStatus $scope66.exit_code $scope66Status $scope66.event)) `
+        "exit=$($scope66.exit_code); status=$scope66Status; output=$($scope66.output)"
+
+    $pinMoveScript = Join-Path $testRoot 'pin-move.ps1'
+    Write-TestText $pinMoveScript @'
+[CmdletBinding()]
+param(
+    [switch]$Pin, [switch]$Verify, [switch]$Digest,
+    [string]$Worktree, [string]$Label, [string]$PinDirectory
+)
+if ($Pin) { exit 0 }
+if ($Verify) { exit 69 }
+if ($Digest) { Write-Output ('0' * 64); exit 0 }
+exit 2
+'@
+    $pinMoved = Invoke-TestWrapperEvent -WrapperPath $wrapper -StateRoot $stateRoot `
+        -FakeCodexPath $fakeCodex -Repo $repo8 -BaseSha $base8 -Spec $spec -CaseName 'pin-move' `
+        -Authorized @('src/a.py', 'src/two.py') -Environment @{ FAKE_CODEX_INSCOPE_ONLY = '1' } `
+        -TreePinScript $pinMoveScript -RunPreflight
+    $pinMovedStatus = if ($null -ne $pinMoved.event) { [string]$pinMoved.event.status } else { '' }
+    Assert-EngineCase 'real-wrapper pre-launch pin move correlates only with tree_moved=true' `
+        ($pinMoved.exit_code -eq 69 -and $pinMovedStatus -ceq 'failed' -and
+            $null -ne $pinMoved.event.PSObject.Properties['tree_moved'] -and
+            $pinMoved.event.tree_moved -eq $true -and
+            (Test-EngineTerminalStatus $pinMoved.exit_code $pinMovedStatus $pinMoved.event)) `
+        "exit=$($pinMoved.exit_code); status=$pinMovedStatus; output=$($pinMoved.output)"
+
+    $env:FAKE_CODEX_INSCOPE_ONLY = '1'
+    $env:FAKE_CODEX_EXTRA_WRITE = 'src/two.py'
 
     if (-not $result1.event_path) { throw 'successful fixture did not produce an event path; see preceding failure' }
     $eventRaw = [System.IO.File]::ReadAllText($result1.event_path)

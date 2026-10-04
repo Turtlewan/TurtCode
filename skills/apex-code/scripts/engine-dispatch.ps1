@@ -15,6 +15,9 @@ if (-not (Get-Variable -Name EngineDispatchPollSeconds -Scope Script -ErrorActio
 if (-not (Get-Variable -Name EngineDispatchMaxWaitSeconds -Scope Script -ErrorAction SilentlyContinue)) {
     $script:EngineDispatchMaxWaitSeconds = 14400
 }
+if (-not (Get-Variable -Name EngineDispatchTerminalReportWaitSeconds -Scope Script -ErrorAction SilentlyContinue)) {
+    $script:EngineDispatchTerminalReportWaitSeconds = 10
+}
 
 function Get-EngineFullPath {
     param([Parameter(Mandatory)][string]$Path)
@@ -59,6 +62,42 @@ function Write-EngineUtf8NoBom {
     $parent = Split-Path $Path -Parent
     if ($parent) { [System.IO.Directory]::CreateDirectory($parent) | Out-Null }
     [System.IO.File]::WriteAllText($Path, $Text, [System.Text.UTF8Encoding]::new($false))
+}
+
+function Write-EngineAtomicJson {
+    param(
+        [Parameter(Mandatory)][string]$Path,
+        [Parameter(Mandatory)][object]$Value,
+        [switch]$Durable
+    )
+    $parent = Split-Path $Path -Parent
+    if ($parent) { [System.IO.Directory]::CreateDirectory($parent) | Out-Null }
+    $temporary = "$Path.$([guid]::NewGuid().ToString('N')).tmp"
+    $backup = "$Path.$([guid]::NewGuid().ToString('N')).bak"
+    $bytes = [System.Text.UTF8Encoding]::new($false).GetBytes(
+        [string]($Value | ConvertTo-Json -Depth 20 -Compress))
+    try {
+        $stream = [System.IO.FileStream]::new($temporary, [System.IO.FileMode]::CreateNew,
+            [System.IO.FileAccess]::Write, [System.IO.FileShare]::None)
+        try {
+            $stream.Write($bytes, 0, $bytes.Length)
+            $stream.Flush([bool]$Durable)
+        } finally {
+            $stream.Dispose()
+        }
+        if (Test-Path -LiteralPath $Path -PathType Leaf) {
+            [System.IO.File]::Replace($temporary, $Path, $backup)
+        } else {
+            [System.IO.File]::Move($temporary, $Path)
+        }
+    } finally {
+        if (Test-Path -LiteralPath $temporary -PathType Leaf) {
+            Remove-Item -LiteralPath $temporary -Force -ErrorAction SilentlyContinue
+        }
+        if (Test-Path -LiteralPath $backup -PathType Leaf) {
+            Remove-Item -LiteralPath $backup -Force -ErrorAction SilentlyContinue
+        }
+    }
 }
 
 function ConvertTo-EngineHashtable {
@@ -189,10 +228,15 @@ exit `$LASTEXITCODE
     $process = [System.Diagnostics.Process]::new()
     $process.StartInfo = $startInfo
     if (-not $process.Start()) { throw 'Failed to start dispatch child PowerShell.' }
+    $startTime = $process.StartTime.ToUniversalTime().ToString('o')
+    Write-EngineAtomicJson -Path "$output.invocation.json" -Value ([ordered]@{
+        adopt = [bool]$isAdopt; args_path = $argsFile; start_time = $startTime
+    })
     $script:EngineDispatchProcesses[[int]$process.Id] = $process
     $script:EngineDispatchModes[$output] = [bool]$isAdopt
     return [pscustomobject]@{
         pid = [int]$process.Id
+        start_time = $startTime
         args_path = $argsFile
         child_output_path = $output
     }
@@ -217,7 +261,7 @@ function Test-EngineHasProperty {
         foreach ($key in $Object.Keys) { if ([string]$key -ceq $Name) { return $true } }
         return $false
     }
-    return (@($Object.PSObject.Properties.Name) -ccontains $Name)
+    return ($null -ne $Object.PSObject.Properties[$Name])
 }
 
 function Test-EngineProcessIs {
@@ -232,6 +276,109 @@ function Test-EngineProcessIs {
         return ([Math]::Abs(($actual - $expected).TotalMilliseconds) -lt 50)
     } catch {
         return (-not $Strict)
+    }
+}
+
+function Get-EngineDescendantProcessIds {
+    param([Parameter(Mandatory)][int]$ProcessId)
+    try {
+        if ($null -eq ('ApexEngineProcessTree' -as [type])) {
+            Add-Type -TypeDefinition @'
+using System;
+using System.Collections.Generic;
+using System.Runtime.InteropServices;
+
+public static class ApexEngineProcessTree
+{
+    private const uint TH32CS_SNAPPROCESS = 0x00000002;
+
+    [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
+    private struct PROCESSENTRY32
+    {
+        public uint dwSize;
+        public uint cntUsage;
+        public uint th32ProcessID;
+        public IntPtr th32DefaultHeapID;
+        public uint th32ModuleID;
+        public uint cntThreads;
+        public uint th32ParentProcessID;
+        public int pcPriClassBase;
+        public uint dwFlags;
+        [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 260)]
+        public string szExeFile;
+    }
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern IntPtr CreateToolhelp32Snapshot(uint flags, uint processId);
+
+    [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+    private static extern bool Process32FirstW(IntPtr snapshot, ref PROCESSENTRY32 entry);
+
+    [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+    private static extern bool Process32NextW(IntPtr snapshot, ref PROCESSENTRY32 entry);
+
+    [DllImport("kernel32.dll")]
+    private static extern bool CloseHandle(IntPtr handle);
+
+    public static int[] Descendants(int rootProcessId)
+    {
+        var children = new Dictionary<int, List<int>>();
+        IntPtr snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
+        if (snapshot == new IntPtr(-1)) return new int[0];
+        try
+        {
+            var entry = new PROCESSENTRY32();
+            entry.dwSize = (uint)Marshal.SizeOf(typeof(PROCESSENTRY32));
+            if (Process32FirstW(snapshot, ref entry))
+            {
+                do
+                {
+                    int parent = unchecked((int)entry.th32ParentProcessID);
+                    int child = unchecked((int)entry.th32ProcessID);
+                    List<int> values;
+                    if (!children.TryGetValue(parent, out values))
+                    {
+                        values = new List<int>();
+                        children[parent] = values;
+                    }
+                    values.Add(child);
+                    entry.dwSize = (uint)Marshal.SizeOf(typeof(PROCESSENTRY32));
+                }
+                while (Process32NextW(snapshot, ref entry));
+            }
+        }
+        finally
+        {
+            CloseHandle(snapshot);
+        }
+
+        var result = new List<int>();
+        var seen = new HashSet<int>();
+        var pending = new Queue<int>();
+        pending.Enqueue(rootProcessId);
+        seen.Add(rootProcessId);
+        while (pending.Count > 0)
+        {
+            int parent = pending.Dequeue();
+            List<int> values;
+            if (!children.TryGetValue(parent, out values)) continue;
+            foreach (int child in values)
+            {
+                if (!seen.Add(child)) continue;
+                result.Add(child);
+                pending.Enqueue(child);
+            }
+        }
+        return result.ToArray();
+    }
+}
+'@
+        }
+        return [pscustomobject]@{
+            process_ids = [int[]]([ApexEngineProcessTree]::Descendants($ProcessId))
+        }
+    } catch {
+        return [pscustomobject]@{ process_ids = [int[]]@() }
     }
 }
 
@@ -424,19 +571,44 @@ function Test-EngineSchemaDefinition {
 }
 
 function Test-EngineTerminalStatus {
-    param([Parameter(Mandatory)][int]$ExitCode, [Parameter(Mandatory)][string]$Status)
-    if ($Status -match '\+scope[0-9]+$' -and $Status -cnotmatch '^adopted-') { return $false }
-    $baseStatus = $Status -replace '\+scope[0-9]+$', ''
+    param(
+        [Parameter(Mandatory)][int]$ExitCode,
+        [Parameter(Mandatory)][string]$Status,
+        [AllowNull()][object]$Event
+    )
+    $scopeMatch = [regex]::Match($Status, '^(?<base>.+)\+scope(?<scope>[0-9]+)$')
+    $hasScope = $scopeMatch.Success
+    $baseStatus = if ($hasScope) { $scopeMatch.Groups['base'].Value } else { $Status }
+    $scopeText = if ($hasScope) { $scopeMatch.Groups['scope'].Value } else { '' }
+    $normalizedScope = if ($hasScope) { $scopeText.TrimStart([char[]]@('0')) } else { '' }
+    if ($hasScope -and $normalizedScope.Length -eq 0) { $normalizedScope = '0' }
     switch ($ExitCode) {
-        0 { return ($baseStatus -in @('done', 'success', 'adopted-done')) }
-        68 { return ($baseStatus -in @('done_with_concerns', 'adopted-done_with_concerns')) }
-        67 { return ($baseStatus -in @('blocked', 'adopted-blocked', 'adopted-void')) }
-        69 { return ($baseStatus -in @('done', 'done_with_concerns', 'adopted-void')) }
-        1 { return ($baseStatus -in @('failed', 'done', 'done_with_concerns')) }
-        65 { return ($baseStatus -in @('done', 'done_with_concerns', 'failed')) }
-        66 { return ($baseStatus -in @('done', 'done_with_concerns', 'failed')) }
-        73 { return ($baseStatus -in @('done', 'done_with_concerns', 'failed')) }
-        77 { return ($baseStatus -in @('done', 'done_with_concerns', 'failed')) }
+        0 { return (-not $hasScope -and $Status -in @('done', 'success', 'adopted-done')) }
+        68 { return (-not $hasScope -and $Status -in @('done_with_concerns', 'adopted-done_with_concerns')) }
+        67 {
+            if (-not $hasScope) { return ($Status -in @('blocked', 'adopted-blocked', 'adopted-void')) }
+            return ($baseStatus -in @('blocked', 'adopted-blocked'))
+        }
+        69 {
+            if ($hasScope -or $Status -notin @('done', 'done_with_concerns', 'adopted-void', 'failed')) {
+                return $false
+            }
+            return ($null -ne $Event -and (Test-EngineHasProperty $Event 'tree_moved') -and
+                (Get-EngineProperty $Event 'tree_moved') -eq $true)
+        }
+        1 { return (-not $hasScope -and $Status -in @('failed', 'done', 'done_with_concerns')) }
+        65 {
+            if (-not $hasScope) { return ($Status -in @('done', 'done_with_concerns', 'failed')) }
+            return ($baseStatus -in @('adopted-done', 'adopted-done_with_concerns') -and
+                $normalizedScope -cne '0' -and $normalizedScope -cne '66')
+        }
+        66 {
+            if (-not $hasScope) { return ($Status -in @('done', 'done_with_concerns', 'failed')) }
+            return ($baseStatus -in @('adopted-done', 'adopted-done_with_concerns') -and
+                $scopeText -ceq '66')
+        }
+        73 { return (-not $hasScope -and $Status -in @('done', 'done_with_concerns', 'failed', 'adopted-done', 'adopted-done_with_concerns')) }
+        77 { return (-not $hasScope -and $Status -in @('done', 'done_with_concerns', 'failed', 'adopted-done', 'adopted-done_with_concerns')) }
         default { return $false }
     }
 }
@@ -597,9 +769,9 @@ function Read-EngineDispatchEvent {
             return New-EngineReadResult $false $ExitCode $output $eventPath $event $wrapperRunId $null 'terminal run_id mismatch'
         }
         if (-not (Test-EngineHasProperty $row 'status') -or
-                -not (Test-EngineTerminalStatus -ExitCode $ExitCode -Status ([string]$event.status)) -or
+                -not (Test-EngineTerminalStatus -ExitCode $ExitCode -Status ([string]$event.status) -Event $event) -or
                 -not (Test-EngineTerminalStatus -ExitCode $ExitCode `
-                    -Status ([string](Get-EngineProperty $row 'status')))) {
+                    -Status ([string](Get-EngineProperty $row 'status')) -Event $event)) {
             return New-EngineReadResult $false $ExitCode $output $eventPath $event $wrapperRunId $null `
                 "exit/status correlation failed for exit $ExitCode"
         }
@@ -665,10 +837,16 @@ function Wait-EngineDispatch {
     } elseif (Test-Path -LiteralPath $exitPath -PathType Leaf) {
         try { $exitCode = [int](Get-Content $exitPath -Raw | ConvertFrom-Json).exit_code } catch { }
     } else {
+        $dispatchStamp = $null
+        try {
+            $invocation = Get-Content -LiteralPath "$output.invocation.json" -Raw | ConvertFrom-Json
+            if ($null -ne $invocation.PSObject.Properties['start_time']) {
+                $dispatchStamp = [string]$invocation.start_time
+            }
+        } catch { }
         $started = Get-Date
         while ($null -eq $exitCode) {
-            $live = Get-Process -Id $ChildPid -ErrorAction SilentlyContinue
-            if ($null -eq $live) { break }
+            if (-not (Test-EngineProcessIs $ChildPid $dispatchStamp -Strict)) { break }
             if (((Get-Date) - $started).TotalSeconds -ge $MaxWaitSeconds) { break }
             Start-Sleep -Seconds ([Math]::Max(1, [int]$script:EngineDispatchPollSeconds))
             if (Test-Path -LiteralPath $exitPath -PathType Leaf) {
@@ -725,6 +903,16 @@ function Invoke-EngineAdopt {
         [ValidateRange(1, 2147483)][int]$AdoptWaitSeconds = 600
     )
     $output = Get-EngineFullPath $ChildOutputPath
+    $timeoutRoot = Join-Path (Get-EngineFullPath $StateRoot) 'engine-adopt-timeouts'
+    $timeoutMarker = Join-Path $timeoutRoot "$RunId.json"
+    $previousDiagnosis = "previous adopter of run $RunId timed out; not re-adopting (finish or -AbandonRunId it, then remove marker)"
+    if (Test-Path -LiteralPath $timeoutMarker -PathType Leaf) {
+        return [pscustomobject]@{
+            exit_code = -1; child_output_path = $output; event_path = $null; event = $null
+            wrapper_run_id = $RunId; end_tree_digest = $null; diagnosis = $previousDiagnosis
+            adopt_timed_out = $true
+        }
+    }
     $argsPath = "$output.adopt.args.json"
     $parameters = [ordered]@{
         Adopt = $true; RunId = $RunId; Spec = $Spec; Task = $Task; Worktree = $Worktree
@@ -739,18 +927,63 @@ function Invoke-EngineAdopt {
     if ($result.exit_code -eq -1 -and
             $script:EngineDispatchProcesses.ContainsKey([int]$started.pid)) {
         $process = $script:EngineDispatchProcesses[[int]$started.pid]
+        $timedOutAt = (Get-Date).ToUniversalTime().ToString('o')
         $killDiagnosis = $null
+        $taskkillExit = $null
+        $taskkillText = @()
+        $descendantProcesses = @()
+        $oldPreference = $ErrorActionPreference
+        $ErrorActionPreference = 'Continue'
         try {
             if (-not $process.HasExited) {
-                $process.Kill()
-                if (-not $process.WaitForExit(5000)) {
+                $descendantSnapshot = Get-EngineDescendantProcessIds -ProcessId ([int]$started.pid)
+                foreach ($descendantPid in @($descendantSnapshot.process_ids)) {
+                    $descendant = Get-Process -Id ([int]$descendantPid) -ErrorAction SilentlyContinue
+                    if ($null -eq $descendant) { continue }
+                    try { $null = $descendant.StartTime; $descendantProcesses += $descendant }
+                    catch { $descendant.Dispose() }
+                }
+                $taskkillText = @(& taskkill.exe /PID ([string]$started.pid) /T /F 2>&1)
+                $taskkillExit = $LASTEXITCODE
+                if ($taskkillExit -ne 0) {
+                    for ($descendantIndex = $descendantProcesses.Count - 1;
+                            $descendantIndex -ge 0; $descendantIndex--) {
+                        if (-not $descendantProcesses[$descendantIndex].HasExited) {
+                            $descendantProcesses[$descendantIndex].Kill()
+                            $null = $descendantProcesses[$descendantIndex].WaitForExit(5000)
+                        }
+                    }
+                    if (-not $process.HasExited) { $process.Kill() }
+                }
+                $adopterExited = $process.WaitForExit(5000)
+                if (-not $adopterExited) {
+                    $process.Refresh()
+                    $adopterExited = $process.HasExited
+                }
+                if (-not $adopterExited) {
+                    $adopterExited = $process.WaitForExit(5000)
+                }
+                if (-not $adopterExited) {
                     $killDiagnosis = 'timed-out adopt child did not exit after it was killed'
+                } elseif ($taskkillExit -ne 0) {
+                    $killDiagnosis = "taskkill exited $taskkillExit; timed-out adopt process tree was killed by process fallback: $([string[]]$taskkillText -join ' ')"
                 }
             }
         } catch {
             $killDiagnosis = "timed-out adopt child could not be killed: $($_.Exception.Message)"
         } finally {
+            foreach ($descendantProcess in @($descendantProcesses)) { $descendantProcess.Dispose() }
+            $ErrorActionPreference = $oldPreference
             $script:EngineDispatchProcesses.Remove([int]$started.pid)
+        }
+        Write-EngineAtomicJson -Path $timeoutMarker -Durable -Value ([ordered]@{
+            run_id = $RunId; adopter_pid = [int]$started.pid; adopter_start = [string]$started.start_time
+            timed_out_at = $timedOutAt; adopt_wait_seconds = [int]$AdoptWaitSeconds
+        })
+        if ($null -eq $result.PSObject.Properties['adopt_timed_out']) {
+            $result | Add-Member -NotePropertyName adopt_timed_out -NotePropertyValue $true
+        } else {
+            $result.adopt_timed_out = $true
         }
         $result.diagnosis = if ($killDiagnosis) {
             "adopt child wait exceeded the $AdoptWaitSeconds-second adopt cap; $killDiagnosis"
@@ -858,7 +1091,20 @@ function Wait-EngineLiveRow {
         $result = Invoke-EngineAdopt -WrapperPath $WrapperPath -RunId $runId -Spec $Spec -Task $Task `
             -Worktree $Worktree -StateRoot $StateRoot -ChildOutputPath $adoptOutput `
             -AdoptWaitSeconds $AdoptWaitSeconds
-        if ($result.exit_code -ne 75) {
+        if ($null -ne $result.PSObject.Properties['adopt_timed_out'] -and
+                [bool]$result.adopt_timed_out) {
+            return [pscustomobject]@{ status = 'parked'; result = $result; diagnosis = $result.diagnosis }
+        }
+        $event = if ($null -ne $result.PSObject.Properties['event']) { $result.event } else { $null }
+        $detail = if ($null -ne $event -and $null -ne $event.PSObject.Properties['detail']) {
+            [string]$event.detail
+        } else { '' }
+        $eventRunId = if ($null -ne $event -and $null -ne $event.PSObject.Properties['run_id']) {
+            [string]$event.run_id
+        } else { '' }
+        $alreadyTerminalMatch = ($result.exit_code -eq 75 -and $eventRunId -ceq $runId -and
+            $detail -match 'is already terminal')
+        if ($result.exit_code -ne 75 -or $alreadyTerminalMatch) {
             # Adoption can outlive the process identity observed at the top of this poll. Re-read
             # before using local liveness to classify a non-75 result, so a launcher that exited
             # during adoption cannot leave the stale pre-adopt verdict in control.
@@ -875,15 +1121,72 @@ function Wait-EngineLiveRow {
                 return [pscustomobject]@{ status = 'failed'; result = $result
                     diagnosis = 'recorded dispatch process is dead and no final report exists' }
             }
+            if ($alreadyTerminalMatch -and $postAdoptFinal -and
+                    (Test-Path -LiteralPath $postAdoptFinal -PathType Leaf)) {
+                # Re-enter at the top so the terminal event, rather than the refusal, controls the
+                # result. The wrapper made the terminal decision under the ledger lock.
+                continue
+            }
+            if ($alreadyTerminalMatch) {
+                # A terminal ledger update can become visible just before its final/event files.
+                # Give that publication a short bounded window; never let the raw exit-75 refusal
+                # masquerade as the terminal result merely because the recorded PID is still live.
+                $terminalReportDeadline = (Get-Date).ToUniversalTime().AddSeconds(
+                    [int]$script:EngineDispatchTerminalReportWaitSeconds)
+                $terminalFinalPublished = $false
+                while ((Get-Date).ToUniversalTime() -lt $terminalReportDeadline) {
+                    Start-Sleep -Milliseconds 100
+                    $postAdoptRow = Get-EngineRowByRunId -LedgerPath $ledgerPath -RunId $runId
+                    $postAdoptFinal = if ($null -ne $postAdoptRow -and
+                            (Test-EngineHasProperty $postAdoptRow 'final_path')) {
+                        [string](Get-EngineProperty $postAdoptRow 'final_path')
+                    } else { '' }
+                    if ($postAdoptFinal -and
+                            (Test-Path -LiteralPath $postAdoptFinal -PathType Leaf)) {
+                        $terminalFinalPublished = $true
+                        break
+                    }
+                    $eventsRoot = Join-Path (Get-EngineFullPath $StateRoot) 'events'
+                    $publishedEvent = $null
+                    foreach ($candidate in @(Get-ChildItem -LiteralPath $eventsRoot `
+                                -Filter "$runId-*.event.json" -File -ErrorAction SilentlyContinue |
+                                Sort-Object LastWriteTimeUtc -Descending)) {
+                        try { $candidateEvent = Get-Content -LiteralPath $candidate.FullName -Raw | ConvertFrom-Json }
+                        catch { continue }
+                        if ([string]$candidateEvent.kind -ceq 'dispatch_result' -and
+                                [string]$candidateEvent.run_id -ceq $runId) {
+                            $publishedEvent = [pscustomobject]@{ Path = $candidate.FullName; Event = $candidateEvent }
+                            break
+                        }
+                    }
+                    if ($null -ne $publishedEvent) {
+                        Write-EngineUtf8NoBom -Path $adoptOutput `
+                            -Text ("[event] $($publishedEvent.Path)" + [Environment]::NewLine)
+                        $routed = Read-EngineDispatchEvent -ChildOutputPath $adoptOutput `
+                            -ExitCode ([int]$publishedEvent.Event.exit_code) -TaskId $Task `
+                            -Worktree $Worktree -LedgerPath $ledgerPath
+                        $routedResult = [pscustomobject]@{
+                            exit_code = [int]$publishedEvent.Event.exit_code
+                            child_output_path = $adoptOutput; event_path = $routed.event_path
+                            event = $routed.event; wrapper_run_id = $routed.wrapper_run_id
+                            end_tree_digest = $routed.end_tree_digest; diagnosis = $routed.diagnosis
+                        }
+                        if ($routed.ok) {
+                            return [pscustomobject]@{ status = 'terminal'; result = $routedResult; diagnosis = $null }
+                        }
+                        return [pscustomobject]@{ status = 'failed'; result = $routedResult; diagnosis = $routed.diagnosis }
+                    }
+                }
+                if ($terminalFinalPublished) { continue }
+                return [pscustomobject]@{ status = 'failed'; result = $result
+                    diagnosis = 'terminal row has no final report' }
+            }
             if ($result.diagnosis) {
                 return [pscustomobject]@{ status = 'failed'; result = $result; diagnosis = $result.diagnosis }
             }
             return [pscustomobject]@{ status = 'terminal'; result = $result; diagnosis = $null }
         }
-        $event = $result.event
-        $detail = if ($null -eq $event) { '' } else { [string]$event.detail }
-        $liveMatch = ($null -ne $event -and [string]$event.run_id -ceq $runId -and
-            $detail -match 'remains live')
+        $liveMatch = ($eventRunId -ceq $runId -and $detail -match 'remains live')
         if (-not $liveMatch) {
             return [pscustomobject]@{ status = 'parked'; result = $result
                 diagnosis = 'adopt refusal did not identify the matching live dispatch row' }

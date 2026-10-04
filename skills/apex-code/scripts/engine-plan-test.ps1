@@ -419,6 +419,95 @@ catch { `$strictPreserved = `$true }
         )
         return -not (Invoke-Plan (New-Fixture -Tasks $tasks)).allowed
     }
+    Assert-Case '.git metadata paths refuse before worktree creation' {
+        $paths = @('.git/config', 'sub/.git/hooks/pre-commit', '.GIT/x', '.git./x', 'git~1/config', 'a/.git')
+        foreach ($path in $paths) {
+            $task = @(New-Task -Id '1' -Files @(New-File -Path $path))
+            $fixture = New-Fixture -Tasks $task
+            $worktreesPath = Join-Path $fixture.Repo '.git/worktrees'
+            if (Test-Path -LiteralPath $worktreesPath) { throw ('fixture unexpectedly has linked worktrees for ' + $path) }
+            $plan = Invoke-Plan $fixture
+            if ($plan.allowed -or $plan.refusal -cne ('manifest path contains a .git segment: ' + $path)) {
+                throw ('unexpected refusal for ' + $path + ': ' + $plan.refusal)
+            }
+            if (Test-Path -LiteralPath $worktreesPath) { throw ('planner created a worktree before refusing ' + $path) }
+        }
+        return $true
+    }
+    Assert-Case 'colon path refuses as Git metadata path' {
+        $path = 'src/file.txt:stream'
+        $task = @(New-Task -Id '1' -Files @(New-File -Path $path))
+        $plan = Invoke-Plan (New-Fixture -Tasks $task)
+        return -not $plan.allowed -and $plan.refusal -ceq ('manifest path contains a .git segment: ' + $path)
+    }
+    Assert-Case 'safe dot-prefixed paths are allowed' {
+        $task = @(New-Task -Id '1' -Files @(
+            (New-File -Path '.github/workflows/x.yml')
+            (New-File -Path '.gitignore')
+            (New-File -Path '.gitkeep')
+        ))
+        return (Invoke-Plan (New-Fixture -Tasks $task)).allowed
+    }
+    Assert-Case 'within-task ancestor overlap refuses' {
+        $task = @(New-Task -Id '1' -Files @(
+            (New-File -Path 'src')
+            (New-File -Path 'src/child.txt')
+        ))
+        $plan = Invoke-Plan (New-Fixture -Tasks $task)
+        return -not $plan.allowed -and $plan.refusal -ceq 'manifest paths overlap (ancestor/descendant): src, src/child.txt'
+    }
+    Assert-Case 'cross-task ancestor overlap refuses' {
+        $tasks = @(
+            (New-Task -Id '1' -Files @(New-File -Path 'src'))
+            (New-Task -Id '2' -Files @(New-File -Path 'src/child.txt'))
+        )
+        $plan = Invoke-Plan (New-Fixture -Tasks $tasks)
+        return -not $plan.allowed -and $plan.refusal -ceq 'manifest paths overlap (ancestor/descendant): src, src/child.txt'
+    }
+    Assert-Case 'case-variant ancestor overlap refuses' {
+        $tasks = @(
+            (New-Task -Id '1' -Files @(New-File -Path 'SRC'))
+            (New-Task -Id '2' -Files @(New-File -Path 'src/x'))
+        )
+        $plan = Invoke-Plan (New-Fixture -Tasks $tasks)
+        return -not $plan.allowed -and $plan.refusal -ceq 'manifest paths overlap (ancestor/descendant): SRC, src/x'
+    }
+    Assert-Case 'trimmed segment canonical duplicates refuse' {
+        $leafTasks = @(
+            (New-Task -Id '1' -Files @(New-File -Path 'foo.'))
+            (New-Task -Id '2' -Files @(New-File -Path 'foo'))
+        )
+        $nestedTasks = @(
+            (New-Task -Id '1' -Files @(New-File -Path 'foo./a'))
+            (New-Task -Id '2' -Files @(New-File -Path 'foo/a'))
+        )
+        return -not (Invoke-Plan (New-Fixture -Tasks $leafTasks)).allowed -and
+            -not (Invoke-Plan (New-Fixture -Tasks $nestedTasks)).allowed
+    }
+    Assert-Case 'path prefix with non-segment suffix does not overlap' {
+        $tasks = @(
+            (New-Task -Id '1' -Files @(New-File -Path 'src'))
+            (New-Task -Id '2' -Files @(New-File -Path 'src-suffix/child.txt'))
+        )
+        return (Invoke-Plan (New-Fixture -Tasks $tasks)).allowed
+    }
+    Assert-Case 'regular-file ancestor refuses' {
+        $task = @(New-Task -Id '1' -Files @(New-File -Path 'parent/child.txt'))
+        $fixture = New-Fixture -Tasks $task
+        Write-Utf8 -Path (Join-Path $fixture.Repo 'parent') -Text 'not a directory'
+        $plan = Invoke-Plan $fixture
+        return -not $plan.allowed -and $plan.refusal -ceq 'manifest path ancestor is a file: parent/child.txt'
+    }
+    Assert-Case 'task IDs allow 32 characters and refuse 33' {
+        $id32 = '12345678901234567890123456789012'
+        $id33 = '123456789012345678901234567890123'
+        $allowedTask = @(New-Task -Id $id32 -Files @(New-File -Path 'id32.txt'))
+        $refusedTask = @(New-Task -Id $id33 -Files @(New-File -Path 'id33.txt'))
+        $allowed = Invoke-Plan (New-Fixture -Tasks $allowedTask)
+        $refused = Invoke-Plan (New-Fixture -Tasks $refusedTask)
+        return $allowed.allowed -and -not $refused.allowed -and
+            $refused.refusal -ceq 'manifest task id exceeds 32 characters: 1234567890123456...'
+    }
     Assert-Case '.gitattributes leaf refuses' {
         $task = @(New-Task -Id '1' -Files @(New-File -Path 'nested/.GITATTRIBUTES'))
         return -not (Invoke-Plan (New-Fixture -Tasks $task)).allowed
@@ -445,13 +534,14 @@ catch { `$strictPreserved = `$true }
             @($declared.waves).Count -eq 2 -and @($declared.waves[0].tasks).Count -eq 2 -and
             @($declared.waves[1].tasks).Count -eq 1 -and $null -eq $absent.spec.max_parallel_codex
     }
-    Assert-Case 'ancestor overlap splits a topological layer' {
+    Assert-Case 'ancestor overlap refuses instead of splitting a topological layer' {
         $tasks = @(
             (New-Task -Id '1' -Files @(New-File -Path 'src'))
             (New-Task -Id '2' -Files @(New-File -Path 'src/child.txt'))
         )
         $plan = Invoke-Plan -Fixture (New-Fixture -Tasks $tasks) -MaxParallel 2
-        return $plan.allowed -and @($plan.waves).Count -eq 2
+        return -not $plan.allowed -and @($plan.waves).Count -eq 0 -and
+            $plan.refusal -ceq 'manifest paths overlap (ancestor/descendant): src, src/child.txt'
     }
     Assert-Case 'oversize ultra task refuses' {
         $task = @(New-Task -Id '1' -Files @(New-File -Path 'ultra.txt') -Effort 'ultra')

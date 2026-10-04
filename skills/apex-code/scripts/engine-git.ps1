@@ -404,16 +404,62 @@ function Commit-EngineWave {
     [CmdletBinding()]
     param(
         [Parameter(Mandatory = $true)][string]$IntegrationWorktree,
-        [Parameter(Mandatory = $true)][string]$Message
+        [Parameter(Mandatory = $true)][string]$Message,
+        [Parameter(Mandatory = $true)][string]$BaseSha,
+        [Parameter(Mandatory = $true)][string[]]$AllowedPaths
     )
     $branchResult = Invoke-EngineGit $IntegrationWorktree @('symbolic-ref', '--short', 'HEAD')
     Assert-EngineGitResult $branchResult 'Read integration branch'
     if ($branchResult.text -notmatch '^codex/.+-integration$') { throw 'Wave commits are allowed only on an Engine integration branch.' }
+    $baseHead = Invoke-EngineGit $IntegrationWorktree @('rev-parse', 'HEAD')
+    Assert-EngineGitResult $baseHead 'Read integration HEAD before commit'
+    if ($baseHead.text -cne $BaseSha) {
+        throw "Integration HEAD does not match wave base (expected $BaseSha, got $($baseHead.text))."
+    }
     $unstaged = Invoke-EngineGit $IntegrationWorktree @('diff', '--quiet')
     if ($unstaged.exit_code -ne 0) { throw 'Integration worktree has unstaged tracked changes.' }
     $staged = Invoke-EngineGit $IntegrationWorktree @('diff', '--cached', '--quiet')
     if ($staged.exit_code -eq 0) { throw 'Integration index has no verified changes to commit.' }
     if ($staged.exit_code -ne 1) { throw "Cannot inspect integration index: $($staged.text)" }
+    $startInfo = New-Object Diagnostics.ProcessStartInfo
+    $startInfo.FileName = 'git.exe'
+    $startInfo.WorkingDirectory = $IntegrationWorktree
+    $startInfo.Arguments = "diff --cached --name-only --no-renames -z $BaseSha"
+    $startInfo.UseShellExecute = $false
+    $startInfo.CreateNoWindow = $true
+    $startInfo.RedirectStandardOutput = $true
+    $startInfo.RedirectStandardError = $true
+    $startInfo.StandardOutputEncoding = New-Object Text.UTF8Encoding($false, $true)
+    $startInfo.StandardErrorEncoding = New-Object Text.UTF8Encoding($false, $true)
+    $process = New-Object Diagnostics.Process
+    $process.StartInfo = $startInfo
+    if (-not $process.Start()) { throw 'Inspect integration index paths failed to start git.' }
+    try {
+        $stdoutTask = $process.StandardOutput.ReadToEndAsync()
+        $stderrTask = $process.StandardError.ReadToEndAsync()
+        $process.WaitForExit()
+        $pathExitCode = $process.ExitCode
+        $pathOutput = $stdoutTask.Result
+        $pathError = $stderrTask.Result
+    } finally {
+        $process.Dispose()
+    }
+    if ($pathExitCode -ne 0) { throw "Inspect integration index paths failed (git exit $pathExitCode): $($pathError.Trim())" }
+    $indexedPaths = @($pathOutput -split [char]0 | Where-Object { $_.Length -gt 0 })
+    $allowedSet = New-Object 'Collections.Generic.HashSet[string]' ([StringComparer]::Ordinal)
+    foreach ($allowedPath in @($AllowedPaths)) { [void]$allowedSet.Add([string]$allowedPath) }
+    $indexedSet = New-Object 'Collections.Generic.HashSet[string]' ([StringComparer]::Ordinal)
+    foreach ($indexedPath in @($indexedPaths)) { [void]$indexedSet.Add([string]$indexedPath) }
+    $pathDifferences = New-Object System.Collections.ArrayList
+    foreach ($indexedPath in @($indexedPaths)) {
+        if (-not $allowedSet.Contains($indexedPath)) { [void]$pathDifferences.Add($indexedPath) }
+    }
+    foreach ($allowedPath in @($AllowedPaths)) {
+        if (-not $indexedSet.Contains($allowedPath)) { [void]$pathDifferences.Add("missing: $allowedPath") }
+    }
+    if ($pathDifferences.Count -gt 0) {
+        throw "integration index contains paths outside wave manifest: $(@($pathDifferences) -join ', ')"
+    }
     $verifiedTree = Invoke-EngineGit $IntegrationWorktree @('write-tree')
     Assert-EngineGitResult $verifiedTree 'Capture verified integration index tree'
     $commit = Invoke-EngineGit $IntegrationWorktree @('commit', '--no-verify', '-m', $Message)

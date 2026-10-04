@@ -151,6 +151,127 @@ function Invoke-RunnerGitText {
     return (($lines | ForEach-Object { [string]$_ }) -join "`n").Trim()
 }
 
+function Invoke-RunnerGitBytes {
+    param([string]$Root, [Parameter(Mandatory)][string]$Arguments)
+    $startInfo = New-Object Diagnostics.ProcessStartInfo
+    $startInfo.FileName = 'git.exe'
+    $startInfo.WorkingDirectory = $Root
+    $startInfo.Arguments = $Arguments
+    $startInfo.UseShellExecute = $false
+    $startInfo.CreateNoWindow = $true
+    $startInfo.RedirectStandardOutput = $true
+    $startInfo.RedirectStandardError = $true
+    $startInfo.StandardErrorEncoding = New-Object Text.UTF8Encoding($false, $true)
+    $process = New-Object Diagnostics.Process
+    $process.StartInfo = $startInfo
+    if (-not $process.Start()) { throw "git $Arguments failed to start" }
+    $memory = New-Object IO.MemoryStream
+    try {
+        $errorTask = $process.StandardError.ReadToEndAsync()
+        $process.StandardOutput.BaseStream.CopyTo($memory)
+        $process.WaitForExit()
+        $code = $process.ExitCode
+        $errorText = $errorTask.Result
+        $bytes = $memory.ToArray()
+    } finally {
+        $memory.Dispose()
+        $process.Dispose()
+    }
+    if ($code -ne 0) { throw "git $Arguments failed ($code): $($errorText.Trim())" }
+    return ,$bytes
+}
+
+function Get-RunnerIndexIdentity {
+    param([string]$Root)
+    if ($env:APEX_ENGINE_TEST_MODE -ceq '1' -and
+            $env:APEX_ENGINE_TEST_FAIL_INDEX_IDENTITY -ceq '1') {
+        throw 'git ls-files index identity read failed (test seam)'
+    }
+    $head = Invoke-RunnerGitText $Root 'rev-parse' 'HEAD'
+    $bytes = Invoke-RunnerGitBytes $Root 'ls-files -s -z'
+    $sha = [Security.Cryptography.SHA256]::Create()
+    try { $digest = ([BitConverter]::ToString($sha.ComputeHash($bytes))).Replace('-', '').ToLowerInvariant() }
+    finally { $sha.Dispose() }
+    [pscustomobject]@{ head = $head; index_digest = $digest }
+}
+
+function Test-RunnerToolCachePath {
+    param([string]$Path)
+    $normalized = ($Path -replace '\\', '/').TrimEnd('/')
+    foreach ($prefix in @('.mypy_cache', '.pytest_cache', '.ruff_cache', '__pycache__', '.coverage', 'node_modules/.cache', '.venv')) {
+        if ($normalized.Equals($prefix, [StringComparison]::OrdinalIgnoreCase) -or
+                $normalized.StartsWith($prefix + '/', [StringComparison]::OrdinalIgnoreCase) -or
+                $normalized.EndsWith('/' + $prefix, [StringComparison]::OrdinalIgnoreCase) -or
+                $normalized.Contains('/' + $prefix + '/')) { return $true }
+    }
+    return $false
+}
+
+function Get-RunnerUntrackedIgnoredPaths {
+    param([string]$Root)
+    $bytes = Invoke-RunnerGitBytes $Root 'status --porcelain -uall --ignored -z'
+    $text = (New-Object Text.UTF8Encoding($false, $true)).GetString($bytes)
+    $paths = New-Object 'Collections.Generic.List[string]'
+    foreach ($entry in @($text -split [char]0)) {
+        if ($entry.Length -lt 4) { continue }
+        $xy = $entry.Substring(0, 2)
+        if ($xy -notin @('??', '!!')) { continue }
+        $path = ($entry.Substring(3) -replace '\\', '/').TrimEnd('/')
+        if ($xy -ceq '!!' -and (Test-RunnerToolCachePath $path)) { continue }
+        [void]$paths.Add($path)
+    }
+    $result = [string[]]@($paths | Sort-Object -CaseSensitive -Unique)
+    if (@($result).Count -eq 1) { return ,$result }
+    return $result
+}
+
+function Get-RunnerWaveRuntime {
+    param([int]$WaveNumber, [switch]$Create)
+    if (-not $script:EngineState.PSObject.Properties['wave_runtime']) {
+        if (-not $Create) { return $null }
+        $script:EngineState | Add-Member -MemberType NoteProperty -Name wave_runtime -Value ([pscustomobject][ordered]@{})
+    }
+    $key = [string]$WaveNumber
+    $property = $script:EngineState.wave_runtime.PSObject.Properties[$key]
+    if ($null -eq $property -and $Create) {
+        $script:EngineState.wave_runtime | Add-Member -MemberType NoteProperty -Name $key -Value ([pscustomobject][ordered]@{})
+        $property = $script:EngineState.wave_runtime.PSObject.Properties[$key]
+    }
+    if ($null -eq $property) { return $null }
+    return $property.Value
+}
+
+function Ensure-RunnerResidueInventory {
+    param([int]$WaveNumber)
+    $runtime = Get-RunnerWaveRuntime $WaveNumber -Create
+    if (-not $runtime.PSObject.Properties['residue_inventory']) {
+        $inventory = [string[]]@(Get-RunnerUntrackedIgnoredPaths ([string]$script:EngineState.integration.worktree))
+        $runtime | Add-Member -NotePropertyName residue_inventory -NotePropertyValue $inventory
+        Save-RunnerState
+    }
+    $result = [string[]]@($runtime.residue_inventory)
+    if (@($result).Count -eq 1) { return ,$result }
+    return $result
+}
+
+function Get-RunnerUnexpectedResidue {
+    param([object[]]$Files, [int]$WaveNumber)
+    $runtime = Get-RunnerWaveRuntime $WaveNumber
+    $saved = @()
+    if ($null -ne $runtime -and $runtime.PSObject.Properties['residue_inventory']) {
+        $saved = [string[]]@($runtime.residue_inventory)
+    }
+    $manifest = [string[]]@($Files | ForEach-Object { [string]$_.path })
+    $unexpected = @()
+    foreach ($path in @(Get-RunnerUntrackedIgnoredPaths ([string]$script:EngineState.integration.worktree))) {
+        if ($saved -ccontains $path -or $manifest -ccontains $path) { continue }
+        $unexpected += $path
+    }
+    $result = [string[]]@($unexpected)
+    if (@($result).Count -eq 1) { return ,$result }
+    return $result
+}
+
 function Invoke-RunnerScript {
     param([Parameter(Mandatory)][string]$Path, [Parameter(Mandatory)][string[]]$Arguments)
     $old = $ErrorActionPreference; $ErrorActionPreference = 'Continue'
@@ -306,7 +427,12 @@ function Start-RunnerAttempt {
         $child = Start-EngineDispatch -WrapperPath $script:EngineWrapper -ArgsPath $Attempt.args_path `
             -ChildOutputPath $Attempt.child_output_path -StateRoot $script:EngineStateRoot
         $Attempt.child_pid = [int]$child.pid
-        $Attempt.child_start_time = Get-RunnerProcessStamp ([int]$child.pid)
+        if ($child.PSObject.Properties['start_time'] -and
+                -not [string]::IsNullOrWhiteSpace([string]$child.start_time)) {
+            $Attempt.child_start_time = [string]$child.start_time
+        } else {
+            $Attempt.child_start_time = Get-RunnerProcessStamp ([int]$child.pid)
+        }
         Add-RunnerTransition 'dispatch-started' "$($TaskPlan.id)/$($Attempt.number)/pid=$($Attempt.child_pid)"
         Save-RunnerState
         return $child
@@ -327,21 +453,77 @@ function Update-RunnerAttemptResult {
     Save-RunnerState
 }
 
+function Test-RunnerQuotaJsonObject {
+    param([string]$Text)
+    try { $event = $Text | ConvertFrom-Json }
+    catch { return $false }
+    if (-not $event.PSObject.Properties['type']) { return $false }
+    $message = $null
+    if ([string]$event.type -ceq 'error') {
+        if ($event.PSObject.Properties['message']) { $message = [string]$event.message }
+    } elseif ([string]$event.type -ceq 'turn.failed') {
+        if ($event.PSObject.Properties['error'] -and $null -ne $event.error -and
+                $event.error.PSObject.Properties['message']) {
+            $message = [string]$event.error.message
+        }
+    }
+    return ($null -ne $message -and
+        ($message -cmatch 'You''ve hit your usage limit' -or
+         $message -match '(?i)\b429\b.*Too Many Requests|status:?\s*429\b'))
+}
+
+function Test-RunnerQuotaPlainText {
+    param([string]$Text)
+    return ($Text -cmatch '(?:^|[^\w"\\])(?:ERROR:\s*)?You''ve hit your usage limit')
+}
+
 function Test-RunnerQuotaResult {
     param([object]$Result, [object]$Attempt)
-    # The real wrapper captures the Codex child's stdout/stderr in event.log_path. Its merged log
-    # is assembled from independently drained chunks, so a JSONL event may begin mid-line. Match
-    # only the exact service-event prefixes (plus the legacy plain stderr diagnostic): never the
-    # prompt, event tail, item/agent_message text, or coder final report.
+    # The merged log can concatenate stderr with JSONL events. Only scan plain text outside JSON
+    # event objects; within objects, accept rate limits solely from the two service error shapes.
     $logPath = $null
-    try { if ($Result.event -and $Result.event.log_path) { $logPath = [string]$Result.event.log_path } } catch { }
+    try {
+        if ($Result.PSObject.Properties['event'] -and $null -ne $Result.event -and
+                $Result.event.PSObject.Properties['log_path']) {
+            $logPath = [string]$Result.event.log_path
+        }
+    } catch { }
     if (-not $logPath -or -not (Test-Path -LiteralPath $logPath -PathType Leaf)) { return $false }
     try { $lines = [IO.File]::ReadAllLines($logPath) } catch { return $false }
     foreach ($line in @($lines)) {
-        if ($line.Contains('{"type":"error","message":"You''ve hit your usage limit') -or
-                $line.Contains('{"type":"turn.failed","error":{"message":"You''ve hit your usage limit') -or
-                $line -cmatch '^(?:ERROR:\s*)?You''ve hit your usage limit(?:[\s\.:].*)?$') {
-            return $true
+        $cursor = 0
+        while ($cursor -lt $line.Length) {
+            $start = $line.IndexOf('{"type":"', $cursor, [StringComparison]::Ordinal)
+            if ($start -lt 0) {
+                if (Test-RunnerQuotaPlainText $line.Substring($cursor)) { return $true }
+                break
+            }
+            if ($start -gt $cursor -and
+                    (Test-RunnerQuotaPlainText $line.Substring($cursor, $start - $cursor))) {
+                return $true
+            }
+            $depth = 0
+            $inString = $false
+            $escaped = $false
+            $end = -1
+            for ($index = $start; $index -lt $line.Length; $index++) {
+                $character = $line[$index]
+                if ($inString) {
+                    if ($escaped) { $escaped = $false }
+                    elseif ($character -ceq '\') { $escaped = $true }
+                    elseif ($character -ceq [char]34) { $inString = $false }
+                } else {
+                    if ($character -ceq [char]34) { $inString = $true }
+                    elseif ($character -ceq '{') { $depth++ }
+                    elseif ($character -ceq '}') {
+                        $depth--
+                        if ($depth -eq 0) { $end = $index; break }
+                    }
+                }
+            }
+            if ($end -lt 0) { break }
+            if (Test-RunnerQuotaJsonObject $line.Substring($start, $end - $start + 1)) { return $true }
+            $cursor = $end + 1
         }
     }
     return $false
@@ -372,8 +554,10 @@ function Confirm-RunnerBuildDigest {
 function Route-RunnerResult {
     param([object]$TaskPlan, [object]$TaskState, [object]$Attempt, [object]$Result, [switch]$Adopted)
     Update-RunnerAttemptResult $Attempt $Result
-    if ($Result.diagnosis) { $Attempt.status = 'parked'; Set-RunnerParked ([string]$Result.diagnosis) $TaskState; return 'park' }
     $code = [int]$Result.exit_code
+    # A populated result diagnosis means Read-EngineDispatchEvent rejected the event. Never turn
+    # fields from that unvalidated object into a stronger factual diagnosis, including for exit 69.
+    if ($Result.diagnosis) { $Attempt.status = 'parked'; Set-RunnerParked ([string]$Result.diagnosis) $TaskState; return 'park' }
     if ($code -in @(0, 68)) {
         if (-not (Confirm-RunnerBuildDigest $Attempt $TaskState)) { return 'park' }
         $Attempt.status = 'succeeded'
@@ -437,7 +621,26 @@ function Route-RunnerResult {
         Set-RunnerParked 'process failure retry exhausted' $TaskState; return 'park'
     }
     $Attempt.status = 'parked'
-    $diagnosis = if ($Result.diagnosis) { [string]$Result.diagnosis } else { "wrapper exit $code" }
+    $eventStatus = ''
+    $eventError = ''
+    $treeMoved = $false
+    if ($Result.PSObject.Properties['event'] -and $null -ne $Result.event) {
+        if ($Result.event.PSObject.Properties['status']) { $eventStatus = [string]$Result.event.status }
+        if ($Result.event.PSObject.Properties['error']) { $eventError = [string]$Result.event.error }
+        if ($Result.event.PSObject.Properties['tree_moved']) { $treeMoved = [bool]$Result.event.tree_moved }
+    }
+    if ($code -eq 69 -and $treeMoved -and $eventStatus -ceq 'failed') {
+        $diagnosis = 'tree moved between pre-flight and launch (exit 69)'
+    } elseif ($code -eq 69 -and $treeMoved -and $eventStatus -ceq 'adopted-void') {
+        $diagnosis = 'adopted tree moved; verdict void (exit 69)'
+    } elseif ($code -eq 69 -and $treeMoved -and $eventStatus -in @('done', 'done_with_concerns')) {
+        $diagnosis = 'task tree moved during build (exit 69)'
+    } else {
+        $statusDetail = if ([string]::IsNullOrWhiteSpace($eventStatus)) { 'unknown' } else { $eventStatus }
+        $diagnosis = "wrapper exit $code (status $statusDetail"
+        if (-not [string]::IsNullOrWhiteSpace($eventError)) { $diagnosis += "; error $eventError" }
+        $diagnosis += ')'
+    }
     Set-RunnerParked $diagnosis $TaskState
     return 'park'
 }
@@ -551,21 +754,45 @@ function Get-RunnerNextEffort {
 
 function Invoke-RunnerGate {
     param([object[]]$Files, [int]$WaveNumber)
-    $stage = Stage-EngineWave -IntegrationWorktree $script:EngineState.integration.worktree -Files $Files
-    if (-not $stage.ok) { return [pscustomobject]@{ code = 1; diagnosis = 'operation precondition failure'; moved = $false; gate = 'stage' } }
-    $label = "engine-$($script:EngineState.run_id)-wave-$WaveNumber"
-    for ($pass = 0; $pass -lt 2; $pass++) {
-        $pin = Invoke-RunnerScript $script:EngineTreePinScript `
-            @('-Pin', '-Worktree', [string]$script:EngineState.integration.worktree, '-Label', $label, '-PinDirectory', (Split-Path -Parent $script:EngineStatePath))
-        if ($pin.exit_code -ne 0) { return [pscustomobject]@{ code = $pin.exit_code; diagnosis = $pin.output; moved = $false; gate = 'pin' } }
-        $baseline = Invoke-RunnerScript $script:EngineBaselineScript `
-            @('-Full', '-Worktree', [string]$script:EngineState.integration.worktree)
-        $verify = Invoke-RunnerScript $script:EngineTreePinScript `
-            @('-Verify', '-Worktree', [string]$script:EngineState.integration.worktree, '-Label', $label, '-PinDirectory', (Split-Path -Parent $script:EngineStatePath))
-        if ($verify.exit_code -eq 0) { return [pscustomobject]@{ code = $baseline.exit_code; diagnosis = $baseline.output; moved = $false; gate = 'baseline' } }
-        if ($verify.exit_code -ne 69) { return [pscustomobject]@{ code = $verify.exit_code; diagnosis = $verify.output; moved = $false; gate = 'verify' } }
-        if ($pass -eq 1) { return [pscustomobject]@{ code = 69; diagnosis = 'integration tree moved twice'; moved = $true; gate = 'verify' } }
+    try { $stage = Stage-EngineWave -IntegrationWorktree $script:EngineState.integration.worktree -Files $Files }
+    catch {
+        return [pscustomobject]@{ code = 1; diagnosis = "git stage operation failed: $($_.Exception.Message)"; moved = $false; gate = 'verify' }
     }
+    if (-not $stage.ok) { return [pscustomobject]@{ code = 1; diagnosis = 'operation precondition failure'; moved = $false; gate = 'stage' } }
+    try { $before = Get-RunnerIndexIdentity ([string]$script:EngineState.integration.worktree) }
+    catch {
+        return [pscustomobject]@{ code = 1; diagnosis = "git index identity read before pin failed: $($_.Exception.Message)"; moved = $false; gate = 'verify' }
+    }
+    $label = "engine-$($script:EngineState.run_id)-wave-$WaveNumber"
+    $pin = Invoke-RunnerScript $script:EngineTreePinScript `
+        @('-Pin', '-Worktree', [string]$script:EngineState.integration.worktree, '-Label', $label, '-PinDirectory', (Split-Path -Parent $script:EngineStatePath))
+    if ($pin.exit_code -ne 0) { return [pscustomobject]@{ code = $pin.exit_code; diagnosis = $pin.output; moved = $false; gate = 'pin' } }
+    $baseline = Invoke-RunnerScript $script:EngineBaselineScript `
+        @('-Full', '-Worktree', [string]$script:EngineState.integration.worktree)
+    $verify = Invoke-RunnerScript $script:EngineTreePinScript `
+        @('-Verify', '-Worktree', [string]$script:EngineState.integration.worktree, '-Label', $label, '-PinDirectory', (Split-Path -Parent $script:EngineStatePath))
+    try { $after = Get-RunnerIndexIdentity ([string]$script:EngineState.integration.worktree) }
+    catch {
+        return [pscustomobject]@{ code = 1; diagnosis = "git index identity read after verify failed: $($_.Exception.Message)"; moved = $false; gate = 'verify' }
+    }
+    if ($before.head -cne $after.head) {
+        return [pscustomobject]@{ code = 69; diagnosis = 'integration verify moved HEAD'; moved = $true; gate = 'verify' }
+    }
+    if ($before.index_digest -cne $after.index_digest) {
+        return [pscustomobject]@{ code = 69; diagnosis = 'integration verify changed the index'; moved = $true; gate = 'verify' }
+    }
+    if ($verify.exit_code -ne 0) {
+        $movement = @($verify.output -split "`r?`n" | Where-Object { $_ -cmatch '(?:GONE|NEW|CHANGED):' } | Select-Object -First 10)
+        return [pscustomobject]@{ code = $verify.exit_code; diagnosis = "integration verify changed the working tree: $($movement -join '; ')"; moved = $true; gate = 'verify' }
+    }
+    try { $residue = [string[]]@(Get-RunnerUnexpectedResidue $Files $WaveNumber) }
+    catch {
+        return [pscustomobject]@{ code = 1; diagnosis = "git residue scan failed: $($_.Exception.Message)"; moved = $false; gate = 'verify' }
+    }
+    if (@($residue).Count -gt 0) {
+        return [pscustomobject]@{ code = 69; diagnosis = "integration tree has untracked/ignored residue outside wave manifest: $(@($residue | Select-Object -First 10) -join ', ')"; moved = $true; gate = 'verify' }
+    }
+    return [pscustomobject]@{ code = $baseline.exit_code; diagnosis = $baseline.output; moved = $false; gate = 'baseline' }
 }
 
 function Restore-RunnerWave {
@@ -662,6 +889,8 @@ function Invoke-RunnerWave {
         if ($route -cne 'success') { return $false }
     }
 
+    [void](Ensure-RunnerResidueInventory ([int]$Wave.number))
+
     while ($script:EngineState.status -ceq 'running') {
         [void](Restore-RunnerWave $waveBase $waveFiles)
         $copyFailures = @()
@@ -676,7 +905,18 @@ function Invoke-RunnerWave {
         $gate = $null
         if ($failureIds.Count -eq 0) { $gate = Invoke-RunnerGate $waveFiles ([int]$Wave.number) }
         if ($failureIds.Count -eq 0 -and $gate.code -eq 0) {
-            try { $commit = Commit-EngineWave -IntegrationWorktree $script:EngineState.integration.worktree -Message "APEX Engine $($script:EngineState.spec.name) wave $($Wave.number)" }
+            $allowedPaths = [string[]]@($waveFiles | ForEach-Object { [string]$_.path })
+            $expectedTree = Invoke-RunnerGitText $script:EngineState.integration.worktree 'write-tree'
+            $runtime = Get-RunnerWaveRuntime ([int]$Wave.number) -Create
+            $intent = [pscustomobject][ordered]@{ base = [string]$waveBase; expected_tree = [string]$expectedTree }
+            if ($runtime.PSObject.Properties['commit_intent']) { $runtime.commit_intent = $intent }
+            else { $runtime | Add-Member -NotePropertyName commit_intent -NotePropertyValue $intent }
+            Save-RunnerState
+            try {
+                $commit = Commit-EngineWave -IntegrationWorktree $script:EngineState.integration.worktree `
+                    -Message "APEX Engine $($script:EngineState.spec.name) wave $($Wave.number)" `
+                    -BaseSha $waveBase -AllowedPaths $allowedPaths
+            }
             catch { Set-RunnerParked "wave commit failed: $($_.Exception.Message)" $null; return $false }
             # Test-only crash-window seam: the commit exists, but its state transition does not.
             if ($env:APEX_ENGINE_TEST_MODE -ceq '1' -and $env:APEX_ENGINE_TEST_CRASH_AFTER_WAVE_COMMIT -ceq '1') {
@@ -711,8 +951,9 @@ function Invoke-RunnerWave {
         }
         $currentAttempt.status = 'failed'; $currentAttempt.diagnosis = 'verification failure'
         $script:EngineState.counters.retries++; Save-RunnerState
+        $crashEffort = [string]$env:APEX_ENGINE_TEST_CRASH_AFTER_VERIFICATION_FAILURE
         if ($env:APEX_ENGINE_TEST_MODE -ceq '1' -and
-                $env:APEX_ENGINE_TEST_CRASH_AFTER_VERIFICATION_FAILURE -ceq '1') {
+                ($crashEffort -ceq '1' -or $crashEffort -ceq [string]$currentAttempt.effort)) {
             throw 'simulated crash after verification failure before next rung'
         }
         if (-not (Invoke-RunnerTaskUntilBuilt $failedPlan $failedState $next)) { return $false }
@@ -828,13 +1069,24 @@ function Invoke-RunnerTeardown {
 function Initialize-RunnerNewState {
     if (-not $SpecPath -or -not $Repo) { throw '-SpecPath and -Repo are required for a new run.' }
     if (-not [IO.Path]::IsPathRooted($SpecPath) -or -not [IO.Path]::IsPathRooted($Repo)) { throw '-SpecPath and -Repo must be absolute.' }
-    $effective = if ($script:EngineMaxParallelBound) { $MaxParallel } else { 2 }
-    $plan = Get-EnginePlan -SpecPath $SpecPath -Repo $Repo -MaxParallel $effective
-    if (-not $script:EngineMaxParallelBound -and $plan.allowed -and $null -ne $plan.spec.max_parallel_codex -and
-            [int]$plan.spec.max_parallel_codex -ne $effective) {
-        $effective = [int]$plan.spec.max_parallel_codex
-        $plan = Get-EnginePlan -SpecPath $SpecPath -Repo $Repo -MaxParallel $effective
+    $machineCeiling = 4
+    $probe = Get-EnginePlan -SpecPath $SpecPath -Repo $Repo -MaxParallel $machineCeiling
+    $specCeiling = 2
+    if ($probe.PSObject.Properties['spec'] -and $null -ne $probe.spec -and
+            $probe.spec.PSObject.Properties['max_parallel_codex'] -and
+            $null -ne $probe.spec.max_parallel_codex) {
+        $specCeiling = [int]$probe.spec.max_parallel_codex
     }
+    $cliCeiling = $null
+    $effective = [Math]::Min($specCeiling, $machineCeiling)
+    if ($script:EngineMaxParallelBound) {
+        $cliCeiling = [int]$MaxParallel
+        $effective = [Math]::Min($effective, $cliCeiling)
+    }
+    $capacity = [pscustomobject][ordered]@{
+        cli = $cliCeiling; spec_ceiling = $specCeiling; machine_ceiling = $machineCeiling; effective = $effective
+    }
+    $plan = Get-EnginePlan -SpecPath $SpecPath -Repo $Repo -MaxParallel $effective
     $runId = [Guid]::NewGuid().ToString('N')
     $runDirectory = Join-Path $script:EngineStateRoot $runId
     $script:EngineStatePath = Join-Path $runDirectory 'engine-state.json'
@@ -845,7 +1097,7 @@ function Initialize-RunnerNewState {
         [void][IO.Directory]::CreateDirectory($runDirectory)
         $name = if ($plan.spec.name -match '^[a-z0-9][a-z0-9-]{0,62}$') { [string]$plan.spec.name } else { 'refused' }
         $digest = if ($plan.spec.digest -match '^[0-9a-f]{64}$') { [string]$plan.spec.digest } else { '0' * 64 }
-        $script:EngineState = New-RunnerStateObject $runId $runDirectory $repoRoot $baseSha $effective $plan $name $digest $null $owner
+        $script:EngineState = New-RunnerStateObject $runId $runDirectory $repoRoot $baseSha $effective $capacity $plan $name $digest $null $owner
         $script:EngineState.status = 'refused'; $script:EngineState.diagnosis = [string]$plan.refusal
         Add-RunnerTransition 'refused' ([string]$plan.refusal); Save-RunnerState; return $false
     }
@@ -859,7 +1111,7 @@ function Initialize-RunnerNewState {
             $task | Add-Member -NotePropertyName coder_model -NotePropertyValue ([string]$plan.spec.coder_model)
         }
     } }
-    $script:EngineState = New-RunnerStateObject $runId $runDirectory $repoRoot $baseSha $effective $plan $plan.spec.name $plan.spec.digest $snapshot $owner
+    $script:EngineState = New-RunnerStateObject $runId $runDirectory $repoRoot $baseSha $effective $capacity $plan $plan.spec.name $plan.spec.digest $snapshot $owner
     Save-RunnerState # base_sha and immutable plan are durable before New-EngineIntegration.
     try {
         $integration = New-EngineIntegration -Repo $repoRoot `
@@ -873,7 +1125,7 @@ function Initialize-RunnerNewState {
 }
 
 function New-RunnerStateObject {
-    param($RunId, $RunDirectory, $RepoRoot, $BaseSha, $Effective, $Plan, $Name, $Digest, $Snapshot, $Owner)
+    param($RunId, $RunDirectory, $RepoRoot, $BaseSha, $Effective, $Capacity, $Plan, $Name, $Digest, $Snapshot, $Owner)
     $tasks = @()
     foreach ($wave in @($Plan.waves)) { foreach ($task in @($wave.tasks)) {
         $tasks += [pscustomobject][ordered]@{ id = [string]$task.id; status = 'pending'; diagnosis = $null; concerns = @(); attempts = @() }
@@ -888,7 +1140,7 @@ function New-RunnerStateObject {
         spec = [pscustomobject][ordered]@{ name = $Name; original_path = (Get-RunnerPath $SpecPath); original_digest = $Digest; snapshot_path = $Snapshot; snapshot_digest = $Digest }
         repo = $RepoRoot; base_sha = $BaseSha
         integration = [pscustomobject][ordered]@{ worktree = $null; branch = $null; tip = $null }
-        max_parallel = [int]$Effective; plan = $Plan; tasks = [object[]]$tasks
+        max_parallel = [int]$Effective; capacity = $Capacity; plan = $Plan; tasks = [object[]]$tasks
         counters = [pscustomobject][ordered]@{ dispatches = 0; retries = 0; capacity_retries = 0; concerns = 0 }
         concerns = @(); diagnosis = $null
         handoff = [pscustomobject][ordered]@{ status = 'pending'; started_at = $null; completed_at = $null; journaled_paths = @(); mismatch_path = $null; recovery_patch = $null }
@@ -939,8 +1191,19 @@ function Invoke-RunnerAdoptCrashWindowCommit {
         }
         if ($verified) { $candidates += $wave }
     }
-    if ($candidates.Count -ne 1 -or -not (Test-RunnerCommitMatchesWave $candidates[0] $RecordedTip $ActualTip)) { return $false }
+    if (@($candidates).Count -ne 1) { return $false }
     $wave = $candidates[0]
+    $runtime = Get-RunnerWaveRuntime ([int]$wave.number)
+    if ($null -eq $runtime -or -not $runtime.PSObject.Properties['commit_intent']) { return $false }
+    $intent = $runtime.commit_intent
+    if (-not $intent.PSObject.Properties['base'] -or -not $intent.PSObject.Properties['expected_tree']) { return $false }
+    if ([string]$intent.base -cne $RecordedTip) { return $false }
+    try {
+        $parent = Invoke-RunnerGitText $script:EngineState.integration.worktree 'rev-parse' "$ActualTip^"
+        $tree = Invoke-RunnerGitText $script:EngineState.integration.worktree 'rev-parse' "$ActualTip^{tree}"
+    } catch { return $false }
+    if ($parent -cne [string]$intent.base -or $tree -cne [string]$intent.expected_tree) { return $false }
+    if (-not (Test-RunnerCommitMatchesWave $wave $RecordedTip $ActualTip)) { return $false }
     $script:EngineState.integration.tip = $ActualTip
     foreach ($taskPlan in @($wave.tasks)) { (Get-RunnerTaskState ([string]$taskPlan.id)).status = 'integrated' }
     Add-RunnerTransition 'wave-commit-adopted' "$($wave.number)/$ActualTip"

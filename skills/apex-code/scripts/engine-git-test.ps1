@@ -194,9 +194,24 @@ try {
     Assert-True $copy.ok 'second copy succeeds'
     $stage = Stage-EngineWave -IntegrationWorktree $integration.worktree -Files $files
     Assert-True $stage.ok ($stage.failures | ConvertTo-Json -Compress)
+    $allowedPaths = @($files | ForEach-Object { $_.path })
+    Write-TestBytes (Join-Path $integration.worktree 'off-manifest.txt') (Get-Utf8Bytes "not in wave`n")
+    [void](Invoke-TestGit $integration.worktree @('add', '-f', '--', 'off-manifest.txt'))
+    Assert-Throws { Commit-EngineWave -IntegrationWorktree $integration.worktree -Message 'must reject extra path' -BaseSha $baseSha -AllowedPaths $allowedPaths } 'integration index contains paths outside wave manifest:.*off-manifest\.txt' 'off-manifest staged path is rejected'
+    Assert-Equal $baseSha (Invoke-TestGit $integration.worktree @('rev-parse', 'HEAD')).text 'off-manifest refusal writes no commit'
+    [void](Invoke-TestGit $integration.worktree @('rm', '--cached', '--', 'off-manifest.txt'))
+    [IO.File]::Delete((Join-Path $integration.worktree 'off-manifest.txt'))
+    $caseVariantAllowedPaths = @($allowedPaths)
+    $caseVariantAllowedPaths[0] = 'Created.txt'
+    Assert-Throws { Commit-EngineWave -IntegrationWorktree $integration.worktree -Message 'must compare paths case-sensitively' -BaseSha $baseSha -AllowedPaths $caseVariantAllowedPaths } 'integration index contains paths outside wave manifest:.*created\.txt' 'allowed-path set comparison is case-sensitive'
+    Assert-Equal $baseSha (Invoke-TestGit $integration.worktree @('rev-parse', 'HEAD')).text 'case mismatch refusal writes no commit'
+    $wrongBaseSha = '0000000000000000000000000000000000000000'
+    Assert-Throws { Commit-EngineWave -IntegrationWorktree $integration.worktree -Message 'must reject moved head' -BaseSha $wrongBaseSha -AllowedPaths $allowedPaths } 'Integration HEAD does not match wave base' 'HEAD mismatch is rejected'
+    Assert-Equal $baseSha (Invoke-TestGit $integration.worktree @('rev-parse', 'HEAD')).text 'HEAD mismatch refusal writes no commit'
+    Write-Output 'ok - off-manifest index and HEAD mismatch refusal'
     $preCommitHook = Join-Path $repo '.git\hooks\pre-commit'
     Write-TestBytes $preCommitHook (Get-Utf8Bytes "#!/bin/sh`nexit 1`n")
-    $commit = Commit-EngineWave -IntegrationWorktree $integration.worktree -Message 'integrate test wave'
+    $commit = Commit-EngineWave -IntegrationWorktree $integration.worktree -Message 'integrate test wave' -BaseSha $baseSha -AllowedPaths $allowedPaths
     [IO.File]::Delete($preCommitHook)
     $tip = $commit.head_sha
     $textDiffStat = (Invoke-TestGit $integration.worktree @('diff', '--numstat', $baseSha, $tip, '--', $textCrlfPath)).text
@@ -213,6 +228,7 @@ try {
     Assert-Equal (Get-EngineRawSha256 (Join-Path $task.worktree $textCrlfPath)) (Get-EngineRawSha256 (Join-Path $integration.worktree $textCrlfPath)) 'unattributed CRLF UTF-8 text blob bytes survive integration commit'
     Write-Output 'ok - blanket-ignore create'
     Write-Output 'ok - filtered blob identity with CRLF conversion'
+    Write-Output 'ok - exact allowed-path set commit'
     Write-Output 'ok - verified-index commit binding and hook bypass'
 
     $taskHead = (Invoke-TestGit $task.worktree @('rev-parse', 'HEAD')).text
@@ -231,6 +247,7 @@ try {
     Write-TestBytes (Join-Path $treeMismatchRepo 'verified.txt') (Get-Utf8Bytes "base`n")
     [void](Invoke-TestGit $treeMismatchRepo @('add', '--', 'verified.txt'))
     [void](Invoke-TestGit $treeMismatchRepo @('commit', '-m', 'base'))
+    $treeMismatchBaseSha = (Invoke-TestGit $treeMismatchRepo @('rev-parse', 'HEAD')).text
     Write-TestBytes (Join-Path $treeMismatchRepo 'verified.txt') (Get-Utf8Bytes "verified`n")
     [void](Invoke-TestGit $treeMismatchRepo @('add', '--', 'verified.txt'))
     $postCommitHook = Join-Path $treeMismatchRepo '.git\hooks\post-commit'
@@ -244,7 +261,7 @@ commit=$(printf 'hook-mutated\n' | git commit-tree "$tree" -p "$parent") || exit
 git update-ref HEAD "$commit"
 '@
     Write-TestBytes $postCommitHook (Get-Utf8Bytes $postCommitHookText)
-    Assert-Throws { Commit-EngineWave -IntegrationWorktree $treeMismatchRepo -Message 'must detect hook mutation' } 'does not match verified index tree' 'post-commit tree mutation is rejected'
+    Assert-Throws { Commit-EngineWave -IntegrationWorktree $treeMismatchRepo -Message 'must detect hook mutation' -BaseSha $treeMismatchBaseSha -AllowedPaths @('verified.txt') } 'does not match verified index tree' 'post-commit tree mutation is rejected'
     Write-Output 'ok - post-commit tree mismatch refusal'
 
     $handoffPreconditions = @(

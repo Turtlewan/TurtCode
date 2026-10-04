@@ -114,12 +114,33 @@ function Test-EngineRelativeManifestPath {
     param([object]$Path)
 
     if (-not ($Path -is [string]) -or [string]::IsNullOrWhiteSpace($Path)) { return $false }
-    if ($Path -match '\\' -or $Path -match '^[A-Za-z]:' -or $Path.StartsWith('/') -or
+    if ($Path -match '\\' -or $Path.Contains(':') -or $Path.StartsWith('/') -or
         $Path.EndsWith('/') -or $Path.Contains('//')) { return $false }
     foreach ($segment in $Path.Split('/')) {
         if ([string]::IsNullOrEmpty($segment) -or $segment -eq '.' -or $segment -eq '..') { return $false }
     }
     return $true
+}
+
+function ConvertTo-EngineCanonicalManifestPath {
+    param([Parameter(Mandatory = $true)][string]$Path)
+
+    $segments = @($Path.Split('/') | ForEach-Object {
+        $_.TrimEnd([char[]]@([char]46, [char]32)).ToLowerInvariant()
+    })
+    return ($segments -join '/')
+}
+
+function Test-EngineGitMetadataManifestPath {
+    param([string]$Path)
+
+    if ([string]::IsNullOrEmpty($Path)) { return $false }
+    if ($Path.Contains(':')) { return $true }
+    foreach ($segment in $Path.Split('/')) {
+        $canonicalSegment = $segment.TrimEnd([char[]]@([char]46, [char]32)).ToLowerInvariant()
+        if ($canonicalSegment -ceq '.git' -or $canonicalSegment -cmatch '^git~[0-9]+$') { return $true }
+    }
+    return $false
 }
 
 function Test-EnginePathOverlap {
@@ -128,8 +149,8 @@ function Test-EnginePathOverlap {
         [Parameter(Mandatory = $true)][string]$Right
     )
 
-    $a = $Left.TrimEnd('/').ToLowerInvariant()
-    $b = $Right.TrimEnd('/').ToLowerInvariant()
+    $a = ConvertTo-EngineCanonicalManifestPath -Path $Left.TrimEnd('/')
+    $b = ConvertTo-EngineCanonicalManifestPath -Path $Right.TrimEnd('/')
     return $a -eq $b -or $a.StartsWith($b + '/') -or $b.StartsWith($a + '/')
 }
 
@@ -459,6 +480,7 @@ function Get-EnginePlan {
         }
         $id = ([string]$manifestTask.id).ToLowerInvariant()
         if ($id -cnotmatch '^[0-9]+[a-z]?$') { return New-EngineRefusal -Reason ('manifest task id is invalid: ' + $id) -Spec $planSpec }
+        if ($id.Length -gt 32) { return New-EngineRefusal -Reason ('manifest task id exceeds 32 characters: ' + $id.Substring(0, 16) + '...') -Spec $planSpec }
         if ($taskById.ContainsKey($id)) { return New-EngineRefusal -Reason ('duplicate manifest task id: ' + $id) -Spec $planSpec }
         if ([string]$manifestTask.repo -cne $repoKey) { return New-EngineRefusal -Reason ('task ' + $id + ' uses an unknown repo key') -Spec $planSpec }
         if (-not $taskDeclarations.ContainsKey($id)) { return New-EngineRefusal -Reason ('task declaration is missing for manifest task ' + $id) -Spec $planSpec }
@@ -473,12 +495,13 @@ function Get-EnginePlan {
         foreach ($manifestFile in @($manifestTask.files)) {
             $relative = [string]$manifestFile.path
             $op = [string]$manifestFile.op
+            if (Test-EngineGitMetadataManifestPath -Path $relative) { return New-EngineRefusal -Reason ('manifest path contains a .git segment: ' + $relative) -Spec $planSpec }
             if (-not (Test-EngineRelativeManifestPath -Path $relative)) { return New-EngineRefusal -Reason ('manifest path is invalid or contains traversal: ' + $relative) -Spec $planSpec }
             if (@('create', 'modify', 'delete') -cnotcontains $op) { return New-EngineRefusal -Reason ('manifest operation is invalid for ' + $relative) -Spec $planSpec }
             if ([string]::Equals([System.IO.Path]::GetFileName($relative), '.gitattributes', [System.StringComparison]::OrdinalIgnoreCase)) {
                 return New-EngineRefusal -Reason '.gitattributes is not an authorized manifest path' -Spec $planSpec
             }
-            $canonical = $relative.ToLowerInvariant()
+            $canonical = ConvertTo-EngineCanonicalManifestPath -Path $relative
             if ($pathOwner.ContainsKey($canonical)) {
                 return New-EngineRefusal -Reason ('canonical manifest path appears in more than one task: ' + $relative) -Spec $planSpec
             }
@@ -508,6 +531,16 @@ function Get-EnginePlan {
     }
     if ($taskObjects.Count -eq 0) { return New-EngineRefusal -Reason 'execution manifest has no tasks' -Spec $planSpec }
 
+    for ($leftIndex = 0; $leftIndex -lt $allPaths.Count; $leftIndex++) {
+        for ($rightIndex = $leftIndex + 1; $rightIndex -lt $allPaths.Count; $rightIndex++) {
+            $leftPath = $allPaths[$leftIndex]
+            $rightPath = $allPaths[$rightIndex]
+            if (Test-EnginePathOverlap -Left $leftPath -Right $rightPath) {
+                return New-EngineRefusal -Reason ('manifest paths overlap (ancestor/descendant): ' + $leftPath + ', ' + $rightPath) -Spec $planSpec
+            }
+        }
+    }
+
     foreach ($task in $taskObjects) {
         foreach ($dependency in @($task.depends_on)) {
             if (-not $taskById.ContainsKey($dependency) -or $dependency -eq $task.id) {
@@ -528,13 +561,14 @@ function Get-EnginePlan {
             if ($null -ne $item) {
                 if (($item.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0) { return New-EngineRefusal -Reason ('manifest path is at or under a reparse point: ' + $relative) -Spec $planSpec }
                 if ([string]::Equals($current, $full, [System.StringComparison]::OrdinalIgnoreCase) -and $item.PSIsContainer) { return New-EngineRefusal -Reason ('manifest path is a directory: ' + $relative) -Spec $planSpec }
+                if (-not [string]::Equals($current, $full, [System.StringComparison]::OrdinalIgnoreCase) -and -not $item.PSIsContainer) { return New-EngineRefusal -Reason ('manifest path ancestor is a file: ' + $relative) -Spec $planSpec }
             }
             if ([string]::Equals($current, $repoRoot, [System.StringComparison]::OrdinalIgnoreCase)) { break }
             $parent = Split-Path -Parent $current
             if ([string]::IsNullOrEmpty($parent) -or $parent -eq $current) { break }
             $current = $parent
         }
-        $key = $relative.ToLowerInvariant()
+        $key = ConvertTo-EngineCanonicalManifestPath -Path $relative
         if ($operations[$key] -eq 'create' -and (Test-Path -LiteralPath $full)) {
             return New-EngineRefusal -Reason ('create path already exists (tracked or ignored): ' + $relative) -Spec $planSpec
         }
@@ -551,7 +585,7 @@ function Get-EnginePlan {
             $reported = $reported.Replace([char]92, [char]47)
             foreach ($relative in $allPaths) {
                 if ([string]::Equals($reported, $relative, [System.StringComparison]::OrdinalIgnoreCase)) {
-                    if ($operations[$relative.ToLowerInvariant()] -eq 'create') {
+                    if ($operations[(ConvertTo-EngineCanonicalManifestPath -Path $relative)] -eq 'create') {
                         return New-EngineRefusal -Reason ('create path already exists (tracked or ignored): ' + $relative) -Spec $planSpec
                     }
                     else {
@@ -614,15 +648,7 @@ function Get-EnginePlan {
         foreach ($task in @($layer)) {
             $weight = 1
             if ($task.effort -ceq 'ultra') { $weight = 2 }
-            $overlap = $false
-            foreach ($placed in $currentTasks) {
-                foreach ($left in @($placed.files)) {
-                    foreach ($right in @($task.files)) {
-                        if (Test-EnginePathOverlap -Left $left.path -Right $right.path) { $overlap = $true }
-                    }
-                }
-            }
-            if ($currentTasks.Count -gt 0 -and (($currentWeight + $weight) -gt $MaxParallel -or $overlap)) {
+            if ($currentTasks.Count -gt 0 -and ($currentWeight + $weight) -gt $MaxParallel) {
                 $waves.Add([pscustomobject][ordered]@{ number = $waveNumber; tasks = $currentTasks.ToArray() })
                 $waveNumber++
                 $currentTasks = New-Object 'System.Collections.Generic.List[object]'
