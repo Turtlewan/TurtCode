@@ -820,8 +820,11 @@ function Set-PendingDispatchResultEvent {
 
     $boundedFinal = ConvertTo-BoundedCompletionEventFinal -Final $Final
     if ($boundedFinal.Truncated) { $truncated.Add('final') }
-    $normalizedScopeExit = if ($ScopeExit -in @(65, 66)) { [int]$ScopeExit } else { $null }
-    if ($null -ne $ScopeExit -and $ScopeExit -notin @(65, 66)) { $truncated.Add('scope_exit') }
+    $normalizedScopeExit = $null
+    if ($null -eq $ScopeExit -or $ScopeExit -eq 0) { }
+    elseif ($ScopeExit -in @(1, 65)) { $normalizedScopeExit = 65 }
+    elseif ($ScopeExit -eq 66) { $normalizedScopeExit = 66 }
+    else { $truncated.Add('scope_exit') }
 
     $event = [ordered]@{
         kind = 'dispatch_result'
@@ -2431,16 +2434,29 @@ function Invoke-Adopt {
 
     # The working tree, not just commits: the coder leaves its work UNCOMMITTED by contract. Keep
     # the diagnostic tail bounded so the worktree path above remains the sole machine-readable line.
-    $adoptPreviousErrorActionPreference = $ErrorActionPreference
+    $capturePreference = $ErrorActionPreference
     $ErrorActionPreference = 'Continue'
     try {
-        $adoptDiffOutput = @(& git -C $adoptWorktree --no-pager diff $match.base_sha)
-        $adoptPorcelainLines = @(& git -C $adoptWorktree --no-pager status --porcelain)
-        $adoptOutput = @($adoptDiffOutput) + @($adoptPorcelainLines)
+        $global:LASTEXITCODE = 99
+        try {
+            $adoptDiffLines = @(& git -C $adoptWorktree --no-pager diff $match.base_sha 2>$null)
+            $adoptDiffExit = $LASTEXITCODE
+        } catch { $adoptDiffLines = @(); $adoptDiffExit = 99 }
+        $global:LASTEXITCODE = 99
+        try {
+            $adoptPorcelainLines = @(& git -C $adoptWorktree --no-pager status --porcelain -uall 2>$null)
+            $adoptPorcelainExit = $LASTEXITCODE
+        } catch { $adoptPorcelainLines = @(); $adoptPorcelainExit = 99 }
+    } finally { $ErrorActionPreference = $capturePreference }
+    if ($adoptDiffExit -ne 0) {
+        Write-Host "[adopt] WARNING: git diff capture failed (exit $adoptDiffExit); using empty diff text." -ForegroundColor Yellow
+        $adoptDiffLines = @()
     }
-    finally {
-        $ErrorActionPreference = $adoptPreviousErrorActionPreference
+    if ($adoptPorcelainExit -ne 0) {
+        Write-Host "[adopt] WARNING: git status capture failed (exit $adoptPorcelainExit); using empty porcelain text." -ForegroundColor Yellow
+        $adoptPorcelainLines = @()
     }
+    $adoptOutput = @($adoptDiffLines) + @($adoptPorcelainLines)
     $adoptOutputLines = @($adoptOutput | ForEach-Object { $_.ToString() })
     foreach ($adoptOutputLine in @($adoptOutputLines | Select-Object -First 50)) {
         Write-Host $adoptOutputLine
@@ -2488,16 +2504,24 @@ function Invoke-Adopt {
         else {
             $adoptWrittenPathsFile = Join-Path $harnessStateDir "adopt-written-$([string]$match.run_id).txt"
             try {
-                if ($adoptIsBuildPhase) {
-                    $adoptScopeCheckLines = @(& $adoptScript -Check -Worktree $adoptWorktree -Task $adoptScopeTask `
-                        -Authorized @($match.authorized) -ExcludeRunId ([string]$match.run_id) `
-                        -StateDirectory $harnessStateDir -WrittenPathsFile $adoptWrittenPathsFile)
+                $adoptScopePreviousErrorActionPreference = $ErrorActionPreference
+                try {
+                    $ErrorActionPreference = 'Continue'
+                    if ($adoptIsBuildPhase) {
+                        $adoptScopeCheckLines = @(& $adoptScript -Check -Worktree $adoptWorktree -Task $adoptScopeTask `
+                            -Authorized @($match.authorized) -ExcludeRunId ([string]$match.run_id) `
+                            -StateDirectory $harnessStateDir -WrittenPathsFile $adoptWrittenPathsFile 6>&1 |
+                            ForEach-Object { [string]$_ })
+                        $adoptScopeExit = $LASTEXITCODE
+                    }
+                    else {
+                        $adoptScopeCheckLines = @(& $adoptScript -Check -Worktree $adoptWorktree -Task $adoptScopeTask `
+                            -Authorized @($match.authorized) -ExcludeRunId ([string]$match.run_id) -StateDirectory $harnessStateDir 6>&1 |
+                            ForEach-Object { [string]$_ })
+                        $adoptScopeExit = $LASTEXITCODE
+                    }
                 }
-                else {
-                    $adoptScopeCheckLines = @(& $adoptScript -Check -Worktree $adoptWorktree -Task $adoptScopeTask `
-                        -Authorized @($match.authorized) -ExcludeRunId ([string]$match.run_id) -StateDirectory $harnessStateDir)
-                }
-                $adoptScopeExit = $LASTEXITCODE
+                finally { $ErrorActionPreference = $adoptScopePreviousErrorActionPreference }
                 $adoptScopeCheckLines | ForEach-Object { Write-Host $_ }
                 $adoptScopeCheckText = ([string[]]$adoptScopeCheckLines -join [Environment]::NewLine)
             } catch {
@@ -4184,10 +4208,15 @@ try {
     $scopeCheckText = $null
     if ($scopeCheckArmed) {
         try {
-            $scopeCheckLines = @(& $scopeCheckScript -Check -Worktree $Worktree -Task $gateKey -Authorized $Authorized `
-                -ExcludeRunId $runId -StateDirectory $harnessStateDir `
-                -WrittenPathsFile $writtenPathsFile)
-            $scopeExit = $LASTEXITCODE
+            $scopePreviousErrorActionPreference = $ErrorActionPreference
+            try {
+                $ErrorActionPreference = 'Continue'
+                $scopeCheckLines = @(& $scopeCheckScript -Check -Worktree $Worktree -Task $gateKey -Authorized $Authorized `
+                    -ExcludeRunId $runId -StateDirectory $harnessStateDir `
+                    -WrittenPathsFile $writtenPathsFile 6>&1 | ForEach-Object { [string]$_ })
+                $scopeExit = $LASTEXITCODE
+            }
+            finally { $ErrorActionPreference = $scopePreviousErrorActionPreference }
             $scopeCheckLines | ForEach-Object { Write-Host $_ }
             $scopeCheckText = ([string[]]$scopeCheckLines -join [Environment]::NewLine)
             if ($scopeExit -ne 0) { $scopeViolation = $true }
@@ -4340,11 +4369,19 @@ try {
 
     Write-Host "[dispatch] report: $finalPath" -ForegroundColor DarkGray
 
-    $porcelainLines = @()
-    $porcelainPreviousErrorActionPreference = $ErrorActionPreference
+    # Diagnostic capture is best effort: the terminal ledger verdict is already durable.
+    $capturePreference = $ErrorActionPreference
     $ErrorActionPreference = 'Continue'
-    try { $porcelainLines = @(& git -C $Worktree status --porcelain 2>$null) }
-    finally { $ErrorActionPreference = $porcelainPreviousErrorActionPreference }
+    try {
+        $global:LASTEXITCODE = 99
+        $porcelainLines = @(& git -C $Worktree status --porcelain -uall 2>$null)
+        $porcelainExit = $LASTEXITCODE
+    } catch { $porcelainLines = @(); $porcelainExit = 99 }
+    finally { $ErrorActionPreference = $capturePreference }
+    if ($porcelainExit -ne 0) {
+        Write-Host "[dispatch] WARNING: git status capture failed (exit $porcelainExit); using empty porcelain text." -ForegroundColor Yellow
+        $porcelainLines = @()
+    }
     Set-PendingDispatchResultEvent -TaskId $Task -Repo $Worktree -RunIdentity $runId `
         -LogPath $logPath -LedgerStatus $status -ReportStatus $reportStatus `
         -ScopeViolation $scopeViolation -ScopeExit $scopeExit -EncodingViolation $encodingViolation `
@@ -4352,6 +4389,11 @@ try {
         -Final $report -ConcernsText $concernsText -ScopeCheckText $scopeCheckText `
         -PorcelainText ([string[]]$porcelainLines -join [Environment]::NewLine) `
         -ErrorText $null -EventPhase $Phase
+
+    if ($porcelainExit -ne 0) {
+        $script:pendingDispatchResultEvent.truncated = @(
+            @($script:pendingDispatchResultEvent.truncated) + 'porcelain' | Select-Object -Unique)
+    }
 
     # `blocked` outranks EVERYTHING, including a moved tree. The contract says so, and the previous
     # ordering contradicted it: a blocked report plus any tree movement exited 69 and never reached

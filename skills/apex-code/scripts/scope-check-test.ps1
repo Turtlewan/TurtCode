@@ -15,6 +15,7 @@ $failureCount = 0
 $assertionCount = 0
 $suiteExitCode = 1
 $previousGitConfigGlobal = $env:GIT_CONFIG_GLOBAL
+$previousApexStateDir = $env:APEX_STATE_DIR
 
 function Assert-True {
     param(
@@ -154,6 +155,44 @@ function New-FailingGitShim {
     return $shimPath + [System.IO.Path]::PathSeparator + $env:PATH
 }
 
+function Write-FixtureFile {
+    param([string]$RepoPath, [string]$Path, [string]$Content = "generated`r`n")
+    $fullPath = Join-Path $RepoPath $Path
+    New-Item -ItemType Directory -Force -Path (Split-Path -Parent $fullPath) | Out-Null
+    [System.IO.File]::WriteAllText($fullPath, $Content, [System.Text.UTF8Encoding]::new($false))
+}
+
+function New-BuildOutputRepo {
+    param(
+        [string]$Name,
+        [AllowNull()][string]$AgentsText = $null,
+        [string[]]$Files = @('src/a.py', 'src/App/Program.cs', 'tests/App/ProgramTests.cs'),
+        [string]$IgnoreText = "bin/`nobj/`n.hooks/`n"
+    )
+    $repoPath = New-TestRepo -Name $Name -Files $Files
+    Write-FixtureFile -RepoPath $repoPath -Path '.gitignore' -Content $IgnoreText
+    if (-not [string]::IsNullOrEmpty($AgentsText)) { Write-FixtureFile -RepoPath $repoPath -Path 'AGENTS.md' -Content $AgentsText }
+    Invoke-TestGit -RepoPath $repoPath -GitArguments @('add', '-A')
+    Invoke-TestGit -RepoPath $repoPath -GitArguments @('commit', '-q', '-m', 'fixture build-output declarations')
+    return $repoPath
+}
+
+function New-AgentsFetchFailureShim {
+    param([string]$Name, [ValidateSet('ls-tree', 'show')][string]$FailCommand, [string]$Head)
+    $shimPath = Join-Path $testRoot $Name
+    New-Item -ItemType Directory -Force -Path $shimPath | Out-Null
+    # Match only the committed-AGENTS fetch, leaving the separate HEAD inventory operational.
+    $failLine = if ($FailCommand -ceq 'ls-tree') {
+        'if "%~3"=="ls-tree" if "%~4"=="--full-tree" if "%~5"=="--name-only" if "%~8"=="AGENTS.md" exit /b 42'
+    } else {
+        ('if "%~3"=="show" if "%~4"=="{0}:AGENTS.md" exit /b 42' -f $Head)
+    }
+    [System.IO.File]::WriteAllLines((Join-Path $shimPath 'git.cmd'), [string[]]@(
+        '@echo off', $failLine, ('"{0}" %*' -f $gitPath), 'exit /b %ERRORLEVEL%'
+    ), [System.Text.Encoding]::ASCII)
+    return $shimPath + [System.IO.Path]::PathSeparator + $env:PATH
+}
+
 function New-IgnoredCacheRepo {
     param(
         [Parameter(Mandatory = $true)][string]$Name,
@@ -280,6 +319,70 @@ try {
         throw "Scope checker was not found at '$checkerPath'."
     }
     New-Item -ItemType Directory -Force -Path $testRoot | Out-Null
+    $env:APEX_STATE_DIR = Join-Path $testRoot 'apex-state'
+    $fixtureGitConfig = Join-Path $testRoot 'fixture.gitconfig'
+    $fixtureGitIgnore = Join-Path $testRoot 'fixture-global-ignore'
+    [System.IO.File]::WriteAllText($fixtureGitIgnore, '', [System.Text.UTF8Encoding]::new($false))
+    [System.IO.File]::WriteAllText($fixtureGitConfig,
+        ("[core]`n    excludesFile = {0}`n" -f ($fixtureGitIgnore -replace '\\', '/')),
+        [System.Text.UTF8Encoding]::new($false))
+    $env:GIT_CONFIG_GLOBAL = $fixtureGitConfig
+
+    # Exercise the shared pure functions without invoking the checker or adding a dot-sourced
+    # module. End-to-end fixtures below separately prove committed provenance and status gating.
+    $checkerText = [System.IO.File]::ReadAllText($checkerPath)
+    $buildOutputBlock = [regex]::Match($checkerText, '(?ms)^# BEGIN build-outputs lockstep\r?\n.*?^# END build-outputs lockstep')
+    if (-not $buildOutputBlock.Success) { throw 'Missing build-outputs lockstep block' }
+    $buildOutputProbes = @'
+$validText = "## Build outputs`n``````text`nsrc/*/bin`n```````n"
+$parsed = ConvertFrom-BuildOutputsSection -Text $validText
+[pscustomobject]@{ Name = 'parser valid declaration'; Pass = @($parsed.Entries).Count -eq 1 -and -not $parsed.Warning; Detail = $validText }
+foreach ($probe in @(
+    @{ Path = 'SRC/App/BIN'; Match = $true },
+    @{ Path = 'src/App/bin/output.dll'; Match = $true },
+    @{ Path = 'src/bin'; Match = $false },
+    @{ Path = 'src/App'; Match = $false },
+    @{ Path = 'src/App/sub/bin'; Match = $false },
+    @{ Path = 'src/App/binary'; Match = $false }
+)) {
+    $matched = Test-IsDeclaredBuildOutputPath -Path $probe.Path -Entries $parsed.Entries
+    [pscustomobject]@{ Name = ('parser segment prefix ' + $probe.Path); Pass = $matched -eq $probe.Match; Detail = "expected $($probe.Match), got $matched" }
+}
+$wildEntries = @('src/App*/pre*post/bin')
+foreach ($probe in @(
+    @{ Path = 'src/Application/pre-middle-post/bin/x'; Match = $true },
+    @{ Path = 'src/App/prepost/bin'; Match = $true },
+    @{ Path = 'src/Application/pre/middle/post/bin'; Match = $false }
+)) {
+    $matched = Test-IsDeclaredBuildOutputPath -Path $probe.Path -Entries $wildEntries
+    [pscustomobject]@{ Name = ('parser within-segment star ' + $probe.Path); Pass = $matched -eq $probe.Match; Detail = "expected $($probe.Match), got $matched" }
+}
+foreach ($entry in @('src/[App]/bin', 'src/{App}/bin', 'src/!App/bin', './bin', 'src/./bin', 'src/../bin', 'src/.GIT/bin', '//server/share/bin', 'src//bin')) {
+    $parsed = ConvertFrom-BuildOutputsSection -Text ("## Build outputs`n```````n$entry`n```````n")
+    [pscustomobject]@{ Name = ('parser rejects ' + $entry); Pass = @($parsed.Entries).Count -eq 0 -and [bool]$parsed.Warning; Detail = [string]$parsed.Warning }
+}
+foreach ($info in @('powershell', 'TEXT')) {
+    $parsed = ConvertFrom-BuildOutputsSection -Text ("## Build outputs`n``````$info`nsrc/*/bin`n```````n")
+    [pscustomobject]@{ Name = ('parser rejects fence info ' + $info); Pass = @($parsed.Entries).Count -eq 0 -and [bool]$parsed.Warning; Detail = [string]$parsed.Warning }
+}
+foreach ($entryCount in @(32, 33)) {
+    $entries = @(for ($entryIndex = 0; $entryIndex -lt $entryCount; $entryIndex++) { "output$entryIndex" })
+    $parsed = ConvertFrom-BuildOutputsSection -Text ("## Build outputs`n```````n" + ($entries -join "`n") + "`n```````n")
+    $expectedCount = if ($entryCount -eq 32) { 32 } else { 0 }
+    [pscustomobject]@{ Name = ("parser entry bound $entryCount"); Pass = @($parsed.Entries).Count -eq $expectedCount -and [bool]$parsed.Warning -eq ($entryCount -eq 33); Detail = ("entries={0}; warning={1}" -f @($parsed.Entries).Count, $parsed.Warning) }
+}
+foreach ($text in @('', "## Build outputs example`n", "## build outputs`n", "## Build Outputs`n", "##  Build outputs`n", "~~~markdown`n## Build outputs`n~~~`n")) {
+    $parsed = ConvertFrom-BuildOutputsSection -Text $text
+    [pscustomobject]@{ Name = 'parser absent or fenced heading'; Pass = @($parsed.Entries).Count -eq 0 -and -not $parsed.Warning; Detail = ('text: ' + $text) }
+}
+$parsed = ConvertFrom-BuildOutputsSection -Text "## Build outputs`n``````text`nsrc/*/bin`n"
+[pscustomobject]@{ Name = 'parser unclosed fence'; Pass = @($parsed.Entries).Count -eq 0 -and [bool]$parsed.Warning; Detail = [string]$parsed.Warning }
+$parsed = ConvertFrom-BuildOutputsSection -Text ($validText + "## Another section`n``````text`nother prose`n```````n")
+[pscustomobject]@{ Name = 'parser fence after next heading allowed'; Pass = @($parsed.Entries).Count -eq 1 -and -not $parsed.Warning; Detail = [string]$parsed.Warning }
+'@
+    foreach ($probe in @(& ([scriptblock]::Create($buildOutputBlock.Value + "`n" + $buildOutputProbes)))) {
+        Assert-True -Name $probe.Name -Condition $probe.Pass -Detail ('pure block: ' + $probe.Detail)
+    }
 
     # Preserve the old ad hoc scenario as a real accumulated test case.
     $mangledRepo = New-TestRepo -Name 'mangled-allowlist' -Files @('src/a.py', 'src/b.py', 'src/c.py')
@@ -391,6 +494,10 @@ try {
     # (7) Pre-dirty authorized work that did not change is still host work.
     $authorizedUntouchedRepo = New-TestRepo -Name 'emit-authorized-untouched'
     Add-Content -LiteralPath (Join-Path $authorizedUntouchedRepo 'src/a.py') -Value 'HOST AUTHORIZED WORK' -Encoding ASCII
+    # A BOM-free snapshot must explicitly read UTF-8 in PowerShell 5.1. Otherwise a quoted
+    # non-ASCII host filename is decoded with the ANSI code page and spuriously re-attributed.
+    $unicodeHostPath = 'host-' + [char]0x00E9 + '.txt'
+    Write-FixtureFile -RepoPath $authorizedUntouchedRepo -Path $unicodeHostPath
     $authorizedUntouchedState = Join-Path -Path $testRoot -ChildPath 'state-emit-authorized-untouched'
     $authorizedUntouchedFile = Join-Path -Path $testRoot -ChildPath 'written-authorized-untouched.txt'
     $authorizedUntouchedSnapshot = Invoke-ScopeCheck -CheckerArguments @('-Snapshot', '-Worktree', $authorizedUntouchedRepo, '-Task', 'emit-authorized-untouched', '-StateDirectory', $authorizedUntouchedState)
@@ -412,7 +519,7 @@ try {
     Assert-True -Name 'written paths malformed allowlist exits 66' -Condition ($exit66.ExitCode -eq 66) -Detail ("expected 66, got {0}: {1}" -f $exit66.ExitCode, $exit66.Output)
     Assert-WrittenPaths -Name 'written paths malformed allowlist still emits' -Path $exit66File -Expected @('src/a.py', 'src/b.py', 'src/c.py')
 
-    # (9) A newly collapsed directory emits both its token and all current leaf paths.
+    # (9) A new untracked directory emits only the enumerated leaf paths.
     $newDirectoryRepo = New-TestRepo -Name 'emit-new-directory'
     $newDirectoryState = Join-Path -Path $testRoot -ChildPath 'state-emit-new-directory'
     $newDirectoryFile = Join-Path -Path $testRoot -ChildPath 'written-new-directory.txt'
@@ -423,9 +530,9 @@ try {
     [System.IO.File]::WriteAllText($sensitiveLeaf, "secret=true`r`n", [System.Text.Encoding]::ASCII)
     $newDirectory = Invoke-ScopeCheck -CheckerArguments @('-Check', '-Worktree', $newDirectoryRepo, '-Task', 'emit-new-directory', '-StateDirectory', $newDirectoryState, '-WrittenPathsFile', $newDirectoryFile)
     Assert-True -Name 'written paths new-directory exits non-zero' -Condition ($newDirectory.ExitCode -ne 0) -Detail ("expected non-zero, got {0}" -f $newDirectory.ExitCode)
-    Assert-WrittenPaths -Name 'written paths new-directory expands sensitive leaf' -Path $newDirectoryFile -Expected @('scratch', 'scratch/nested/.env')
+    Assert-WrittenPaths -Name 'written paths new-directory reports sensitive leaf' -Path $newDirectoryFile -Expected @('scratch/nested/.env')
 
-    # (10) A vanished collapsed directory has no leaves to enumerate, but keeps its token.
+    # (10) A vanished untracked directory retains each snapshot leaf's identity.
     $goneDirectoryRepo = New-TestRepo -Name 'emit-gone-directory'
     $goneDirectoryState = Join-Path -Path $testRoot -ChildPath 'state-emit-gone-directory'
     $goneDirectoryFile = Join-Path -Path $testRoot -ChildPath 'written-gone-directory.txt'
@@ -437,7 +544,7 @@ try {
     Remove-Item -LiteralPath $goneDirectoryPath -Recurse -Force
     $goneDirectory = Invoke-ScopeCheck -CheckerArguments @('-Check', '-Worktree', $goneDirectoryRepo, '-Task', 'emit-gone-directory', '-StateDirectory', $goneDirectoryState, '-WrittenPathsFile', $goneDirectoryFile)
     Assert-True -Name 'written paths gone-directory exits non-zero' -Condition ($goneDirectory.ExitCode -ne 0) -Detail ("expected non-zero, got {0}" -f $goneDirectory.ExitCode)
-    Assert-WrittenPaths -Name 'written paths gone-directory emits bare token' -Path $goneDirectoryFile -Expected @('host-scratch')
+    Assert-WrittenPaths -Name 'written paths gone-directory emits vanished leaf' -Path $goneDirectoryFile -Expected @('host-scratch/draft.txt')
 
     # (11) The emitted UTF-8 file must not carry a BOM.
     $noBomRepo = New-TestRepo -Name 'emit-no-bom'
@@ -500,7 +607,7 @@ try {
     Assert-True -Name 'written paths authorized revert exits clean' -Condition ($authorizedRevert.ExitCode -eq 0) -Detail ("expected 0, got {0}: {1}" -f $authorizedRevert.ExitCode, $authorizedRevert.Output)
     Assert-WrittenPaths -Name 'written paths authorized revert emits path' -Path $authorizedRevertFile -Expected @('src/a.py')
 
-    # (16) A modified leaf in a pre-existing collapsed directory expands to every current leaf.
+    # (16) A modified untracked leaf does not attribute its unchanged siblings.
     $modifiedDirectoryRepo = New-TestRepo -Name 'emit-modified-directory'
     $modifiedDirectoryState = Join-Path -Path $testRoot -ChildPath 'state-emit-modified-directory'
     $modifiedDirectoryFile = Join-Path -Path $testRoot -ChildPath 'written-modified-directory.txt'
@@ -514,9 +621,9 @@ try {
     Add-Content -LiteralPath $modifiedLeaf -Value 'CODER WORK' -Encoding ASCII
     $modifiedDirectory = Invoke-ScopeCheck -CheckerArguments @('-Check', '-Worktree', $modifiedDirectoryRepo, '-Task', 'emit-modified-directory', '-StateDirectory', $modifiedDirectoryState, '-WrittenPathsFile', $modifiedDirectoryFile)
     Assert-True -Name 'written paths modified-directory exits non-zero' -Condition ($modifiedDirectory.ExitCode -ne 0) -Detail ("expected non-zero, got {0}" -f $modifiedDirectory.ExitCode)
-    Assert-WrittenPaths -Name 'written paths modified-directory expands current leaves' -Path $modifiedDirectoryFile -Expected @('scratch', 'scratch/a.txt', 'scratch/nested/b.txt')
+    Assert-WrittenPaths -Name 'written paths modified-directory names changed leaf' -Path $modifiedDirectoryFile -Expected @('scratch/nested/b.txt')
 
-    # (17) A deleted leaf is unidentifiable, so emit the directory token and remaining leaves.
+    # (17) Leaf enumeration identifies a deleted untracked leaf exactly.
     $deletedLeafRepo = New-TestRepo -Name 'emit-deleted-leaf'
     $deletedLeafState = Join-Path -Path $testRoot -ChildPath 'state-emit-deleted-leaf'
     $deletedLeafFile = Join-Path -Path $testRoot -ChildPath 'written-deleted-leaf.txt'
@@ -530,7 +637,7 @@ try {
     Remove-Item -LiteralPath $deletedLeafPath -Force
     $deletedLeaf = Invoke-ScopeCheck -CheckerArguments @('-Check', '-Worktree', $deletedLeafRepo, '-Task', 'emit-deleted-leaf', '-StateDirectory', $deletedLeafState, '-WrittenPathsFile', $deletedLeafFile)
     Assert-True -Name 'written paths deleted-leaf exits non-zero' -Condition ($deletedLeaf.ExitCode -ne 0) -Detail ("expected non-zero, got {0}" -f $deletedLeaf.ExitCode)
-    Assert-WrittenPaths -Name 'written paths deleted-leaf documents expansion limit' -Path $deletedLeafFile -Expected @('scratch', 'scratch/keep.txt')
+    Assert-WrittenPaths -Name 'written paths deleted-leaf names deleted leaf' -Path $deletedLeafFile -Expected @('scratch/nested/delete.txt')
 
     # (18) Without the switch, authorized paths stay on the legacy no-hash fast path and output is exact.
     $noSwitchRepo = New-TestRepo -Name 'emit-no-switch'
@@ -591,7 +698,7 @@ try {
     [System.IO.File]::WriteAllText($runtimePinLeaf, "session churn`r`n", [System.Text.Encoding]::ASCII)
     $runtimePin = Invoke-ScopeCheck -CheckerArguments @('-Check', '-Worktree', $runtimePinRepo, '-Task', 'runtime-root-pin', '-StateDirectory', $runtimePinState, '-WrittenPathsFile', $runtimePinFile)
     Assert-True -Name 'runtime root pin exits non-zero away from configured root' -Condition ($runtimePin.ExitCode -ne 0) -Detail ("expected non-zero, got {0}" -f $runtimePin.ExitCode)
-    Assert-WrittenPaths -Name 'runtime root pin attributes token and expanded leaf' -Path $runtimePinFile -Expected @('projects', 'projects/session-x.jsonl')
+    Assert-WrittenPaths -Name 'runtime root pin attributes leaf' -Path $runtimePinFile -Expected @('projects/session-x.jsonl')
 
     # Runtime exclusion (4): ordinary untracked source remains attributable at the runtime root.
     $runtimeNoOverRepo = New-TestRepo -Name 'runtime-no-over-exclusion'
@@ -659,7 +766,7 @@ try {
     Assert-True -Name 'runtime metacharacter exits non-zero' -Condition ($runtimeMeta.ExitCode -ne 0) -Detail ("expected non-zero, got {0}" -f $runtimeMeta.ExitCode)
     Assert-WrittenPaths -Name 'runtime metacharacter remains attributed literally' -Path $runtimeMetaFile -Expected @('projects/file[1].txt')
 
-    # Runtime exclusion (10): a collapsed directory token is curated by an indexed descendant.
+    # Runtime exclusion (10): ?? to staged A is changed; the other runtime leaf remains churn.
     $runtimeCollapsedRepo = New-TestRepo -Name 'runtime-collapsed-directory'
     $runtimeCollapsedState = Join-Path -Path $testRoot -ChildPath 'state-runtime-collapsed-directory'
     $runtimeCollapsedFile = Join-Path -Path $testRoot -ChildPath 'written-runtime-collapsed-directory.txt'
@@ -672,7 +779,22 @@ try {
     Invoke-TestGit -RepoPath $runtimeCollapsedRepo -GitArguments @('add', '-f', '--', 'projects/a.jsonl')
     $runtimeCollapsed = Invoke-ScopeCheck -CheckerArguments @('-Check', '-Worktree', $runtimeCollapsedRepo, '-Task', 'runtime-collapsed-directory', '-StateDirectory', $runtimeCollapsedState, '-RuntimeExclusionRoot', $runtimeCollapsedRepo, '-WrittenPathsFile', $runtimeCollapsedFile)
     Assert-True -Name 'runtime collapsed directory exits non-zero' -Condition ($runtimeCollapsed.ExitCode -ne 0) -Detail ("expected non-zero, got {0}" -f $runtimeCollapsed.ExitCode)
-    Assert-WrittenPaths -Name 'runtime collapsed directory token remains attributed' -Path $runtimeCollapsedFile -Expected @('projects', 'projects/a.jsonl', 'projects/b.jsonl')
+    Assert-WrittenPaths -Name 'runtime staged leaf remains attributed' -Path $runtimeCollapsedFile -Expected @('projects/a.jsonl')
+
+    # Runtime exclusion (10b): an ignored /projects/ token is curated by an indexed descendant.
+    $runtimeIgnoredRepo = New-IgnoredCacheRepo -Name 'runtime-ignored-curated' -IgnoredNames @('projects')
+    Write-FixtureFile -RepoPath $runtimeIgnoredRepo -Path 'projects/a.jsonl' -Content "a`r`n"
+    Write-FixtureFile -RepoPath $runtimeIgnoredRepo -Path 'projects/b.jsonl' -Content "b`r`n"
+    $runtimeIgnoredState = Join-Path $testRoot 'state-runtime-ignored-curated'
+    $runtimeIgnoredFile = Join-Path $testRoot 'written-runtime-ignored-curated.txt'
+    [void](Invoke-ScopeCheck -CheckerArguments @('-Snapshot', '-Worktree', $runtimeIgnoredRepo, '-Task', 'runtime-ignored-curated', '-StateDirectory', $runtimeIgnoredState))
+    $runtimeIgnoredSnap = Get-Content -LiteralPath (Join-Path $runtimeIgnoredState 'scope-runtime-ignored-curated.snapshot.json') -Raw | ConvertFrom-Json
+    Assert-True -Name 'runtime ignored curated fixture starts with collapsed !! projects token' -Condition ($runtimeIgnoredSnap.statuses.'projects/' -ceq '!!') -Detail (@($runtimeIgnoredSnap.dirty) -join ', ')
+    Invoke-TestGit -RepoPath $runtimeIgnoredRepo -GitArguments @('add', '-f', '--', 'projects/a.jsonl')
+    Write-FixtureFile -RepoPath $runtimeIgnoredRepo -Path 'projects/b.jsonl' -Content "b changed`r`n"
+    $runtimeIgnored = Invoke-ScopeCheck -CheckerArguments @('-Check', '-Worktree', $runtimeIgnoredRepo, '-Task', 'runtime-ignored-curated', '-StateDirectory', $runtimeIgnoredState, '-RuntimeExclusionRoot', $runtimeIgnoredRepo, '-WrittenPathsFile', $runtimeIgnoredFile)
+    Assert-True -Name 'runtime ignored indexed descendant keeps collapsed snapshot token checked' -Condition ($runtimeIgnored.ExitCode -eq 1 -and $runtimeIgnored.Output -match '(?m)^\s*GONE\s+projects(?:/|\s|$)') -Detail $runtimeIgnored.Output
+    Assert-WrittenPaths -Name 'runtime ignored curated token and descendants attributed' -Path $runtimeIgnoredFile -Expected @('projects', 'projects/a.jsonl', 'projects/b.jsonl')
 
     # Runtime exclusion (11): rename attribution keeps the HEAD source and index destination.
     $runtimeRenameRepo = New-TestRepo -Name 'runtime-rename' -Files @('projects/keep.txt')
@@ -697,7 +819,7 @@ try {
     $runtimeLsFilesShim = New-FailingGitShim -Name 'shim-runtime-ls-files' -FailCommand 'ls-files'
     $runtimeLsFiles = Invoke-ScopeCheck -CheckerArguments @('-Check', '-Worktree', $runtimeLsFilesRepo, '-Task', 'runtime-ls-files-failure', '-StateDirectory', $runtimeLsFilesState, '-RuntimeExclusionRoot', $runtimeLsFilesRepo, '-WrittenPathsFile', $runtimeLsFilesFile) -PathOverride $runtimeLsFilesShim
     Assert-True -Name 'runtime ls-files inventory failure exits non-zero' -Condition ($runtimeLsFiles.ExitCode -ne 0) -Detail ("expected non-zero, got {0}" -f $runtimeLsFiles.ExitCode)
-    Assert-WrittenPaths -Name 'runtime ls-files inventory failure attributes churn' -Path $runtimeLsFilesFile -Expected @('projects', 'projects/session-x.jsonl')
+    Assert-WrittenPaths -Name 'runtime ls-files inventory failure attributes churn' -Path $runtimeLsFilesFile -Expected @('projects/session-x.jsonl')
     Assert-True -Name 'runtime ls-files inventory failure is loud' -Condition ($runtimeLsFiles.Output -match 'runtime inventory could not be built') -Detail $runtimeLsFiles.Output
 
     # Runtime exclusion (13): an ls-tree HEAD inventory failure is fail-closed in the same way.
@@ -712,8 +834,47 @@ try {
     $runtimeLsTreeShim = New-FailingGitShim -Name 'shim-runtime-ls-tree' -FailCommand 'ls-tree'
     $runtimeLsTree = Invoke-ScopeCheck -CheckerArguments @('-Check', '-Worktree', $runtimeLsTreeRepo, '-Task', 'runtime-ls-tree-failure', '-StateDirectory', $runtimeLsTreeState, '-RuntimeExclusionRoot', $runtimeLsTreeRepo, '-WrittenPathsFile', $runtimeLsTreeFile) -PathOverride $runtimeLsTreeShim
     Assert-True -Name 'runtime ls-tree inventory failure exits non-zero' -Condition ($runtimeLsTree.ExitCode -ne 0) -Detail ("expected non-zero, got {0}" -f $runtimeLsTree.ExitCode)
-    Assert-WrittenPaths -Name 'runtime ls-tree inventory failure attributes churn' -Path $runtimeLsTreeFile -Expected @('projects', 'projects/session-x.jsonl')
+    Assert-WrittenPaths -Name 'runtime ls-tree inventory failure attributes churn' -Path $runtimeLsTreeFile -Expected @('projects/session-x.jsonl')
     Assert-True -Name 'runtime ls-tree inventory failure is loud' -Condition ($runtimeLsTree.Output -match 'runtime inventory could not be built') -Detail $runtimeLsTree.Output
+    Assert-True -Name 'runtime 13 failed declarations lookup is distinct from absent AGENTS' -Condition ($runtimeLsTree.Output -match '\[scope\] WARNING: .*build-output declarations unavailable \(.*exit 42.*\); declared class disabled') -Detail $runtimeLsTree.Output
+
+    # Runtime (13) committed-AGENTS failures disable only the declared class. Keep runtime and
+    # derived exclusions active, and keep the original runtime-13 leaf expectation above.
+    $buildOutputsText = @'
+## Build outputs
+```text
+src/*/bin
+src/*/obj
+tests/*/bin
+tests/*/obj
+```
+Generated output directories only.
+'@
+    foreach ($fetchCommand in @('ls-tree', 'show')) {
+        $fetchTask = 'runtime-13-agents-' + $fetchCommand
+        $fetchRepo = New-BuildOutputRepo -Name $fetchTask -AgentsText $buildOutputsText -IgnoreText "bin/`nobj/`n.codex-scratch/`n"
+        $fetchState = Join-Path $testRoot ('state-' + $fetchTask)
+        $fetchFile = Join-Path $testRoot ('written-' + $fetchTask + '.txt')
+        $fetchSnapshot = Invoke-ScopeCheck -CheckerArguments @('-Snapshot', '-Worktree', $fetchRepo, '-Task', $fetchTask, '-StateDirectory', $fetchState)
+        Assert-True -Name ($fetchTask + ' snapshot succeeds') -Condition ($fetchSnapshot.ExitCode -eq 0) -Detail $fetchSnapshot.Output
+        Write-FixtureFile -RepoPath $fetchRepo -Path 'projects/session-x.jsonl'
+        Write-FixtureFile -RepoPath $fetchRepo -Path '.codex-scratch/log.txt'
+        Write-FixtureFile -RepoPath $fetchRepo -Path 'src/App/bin/output.dll'
+        Write-FixtureFile -RepoPath $fetchRepo -Path 'src/a.py' -Content "unauthorized source write`r`n"
+        $fetchSnap = Get-Content -LiteralPath (Join-Path $fetchState ("scope-$fetchTask.snapshot.json")) -Raw | ConvertFrom-Json
+        $fetchSnapPath = Join-Path $fetchState ("scope-$fetchTask.snapshot.json")
+        $fetchSnapText = [System.IO.File]::ReadAllText($fetchSnapPath)
+        $fetchShim = New-AgentsFetchFailureShim -Name ('shim-' + $fetchTask) -FailCommand $fetchCommand -Head $fetchSnap.head
+        foreach ($collectFetch in @($true, $false)) {
+            [System.IO.File]::WriteAllText($fetchSnapPath, $fetchSnapText, [System.Text.UTF8Encoding]::new($false))
+            $fetchArguments = @('-Check', '-Worktree', $fetchRepo, '-Task', $fetchTask, '-StateDirectory', $fetchState, '-RuntimeExclusionRoot', $fetchRepo)
+            if ($collectFetch) { $fetchArguments += @('-WrittenPathsFile', $fetchFile) }
+            $fetchResult = Invoke-ScopeCheck -CheckerArguments $fetchArguments -PathOverride $fetchShim
+            Assert-True -Name ("{0} disable-and-warn collecting={1}" -f $fetchTask, $collectFetch) -Condition ($fetchResult.ExitCode -eq 1 -and @([regex]::Matches($fetchResult.Output, '\[scope\] WARNING: .*build-output declarations unavailable \(.*exit 42.*\); declared class disabled')).Count -eq 1 -and $fetchResult.Output -notmatch 'runtime inventory could not be built') -Detail $fetchResult.Output
+            Assert-True -Name ("{0} other classes continue collecting={1}" -f $fetchTask, $collectFetch) -Condition ($fetchResult.Output -match '1 runtime path\(s\) excluded' -and $fetchResult.Output -match '1 derived-cache path\(s\) excluded' -and $fetchResult.Output -match 'src/a.py' -and $fetchResult.Output -match 'src/App/bin') -Detail $fetchResult.Output
+        }
+        Assert-WrittenPaths -Name ($fetchTask + ' only declared output and source attributed') -Path $fetchFile -Expected @('src/a.py', 'src/App/bin', 'src/App/bin/output.dll')
+    }
 
     # Runtime marker (1): rewrites inside a collapsed ignored directory do not move scope state.
     $runtimeMarkerRewriteRepo = New-RuntimeMarkerRepo -Name 'runtime-marker-rewrite'
@@ -934,6 +1095,190 @@ try {
     [string[]]$runtimeMarkerNoteGoneWritten = if (Test-Path -LiteralPath $runtimeMarkerNoteGoneFile -PathType Leaf) { [System.IO.File]::ReadAllLines($runtimeMarkerNoteGoneFile) } else { @() }
     Assert-True -Name 'runtime marker 17 removed note is attributed with GONE' -Condition ($runtimeMarkerNoteGone.ExitCode -ne 0 -and $runtimeMarkerNoteGone.Output -match '(?m)^\s*GONE\s+skills/synced/u1/notes\.md' -and $runtimeMarkerNoteGoneWritten -contains 'skills/synced/u1/notes.md') -Detail ("exit {0}, paths [{1}]: {2}" -f $runtimeMarkerNoteGone.ExitCode, ($runtimeMarkerNoteGoneWritten -join ', '), $runtimeMarkerNoteGone.Output)
 
+    # An open writer that permits readers must not prevent hashing an untracked leaf.
+    $writerRepo = New-TestRepo -Name 'snapshot-open-writer'
+    Write-FixtureFile -RepoPath $writerRepo -Path 'open.txt' -Content 'writer-held bytes'
+    $writerState = Join-Path $testRoot 'state-open-writer'
+    $writer = New-Object IO.FileStream((Join-Path $writerRepo 'open.txt'), 'Open', 'Write', ([IO.FileShare]::ReadWrite -bor [IO.FileShare]::Delete))
+    try {
+        $writerSnapshot = Invoke-ScopeCheck -CheckerArguments @('-Snapshot', '-Worktree', $writerRepo, '-Task', 'open-writer', '-StateDirectory', $writerState)
+        Assert-True -Name 'snapshot hashes untracked leaf while writer is open' -Condition ($writerSnapshot.ExitCode -eq 0) -Detail $writerSnapshot.Output
+        if ($writerSnapshot.ExitCode -eq 0) {
+            $writerSnap = Get-Content -LiteralPath (Join-Path $writerState 'scope-open-writer.snapshot.json') -Raw | ConvertFrom-Json
+            $writerSha = [System.Security.Cryptography.SHA256]::Create()
+            try { $writerHash = [BitConverter]::ToString($writerSha.ComputeHash([Text.Encoding]::UTF8.GetBytes('writer-held bytes'))).Replace('-', '').ToLowerInvariant() }
+            finally { $writerSha.Dispose() }
+            Assert-True -Name 'open writer snapshot retains exact raw hash' -Condition ($writerSnap.states.'open.txt' -ceq "work:raw:$writerHash index:-") -Detail $writerSnap.states.'open.txt'
+        }
+    } finally { $writer.Dispose() }
+
+    # Root declarations apply from a subdirectory, even with conflicting nested instructions.
+    $subdirRepo = New-BuildOutputRepo -Name 'build-subdirectory-agents' -AgentsText "## Build outputs`n```````nchild/bin`nchild/deeper/bin`n```````n" -Files @('child/Program.cs', 'child/deeper/Program.cs')
+    Write-FixtureFile -RepoPath $subdirRepo -Path 'child/AGENTS.md' -Content "## Build outputs`n```````nobj`n```````n"
+    Invoke-TestGit -RepoPath $subdirRepo -GitArguments @('add', '--', 'child/AGENTS.md')
+    Invoke-TestGit -RepoPath $subdirRepo -GitArguments @('commit', '-q', '-m', 'conflicting nested declarations')
+    foreach ($subdir in @('child', 'child/deeper')) {
+        $subdirWorktree = Join-Path $subdirRepo $subdir
+        $subdirTask = 'subdir-' + $subdir.Replace('/', '-')
+        $subdirState = Join-Path $testRoot ('state-' + $subdirTask)
+        $subdirWritten = Join-Path $testRoot ($subdirTask + '.txt')
+        $subdirSnapshot = Invoke-ScopeCheck -CheckerArguments @('-Snapshot', '-Worktree', $subdirWorktree, '-Task', $subdirTask, '-StateDirectory', $subdirState)
+        Assert-True -Name ($subdirTask + ' snapshot succeeds') -Condition ($subdirSnapshot.ExitCode -eq 0) -Detail $subdirSnapshot.Output
+        Write-FixtureFile -RepoPath $subdirWorktree -Path 'bin/output.dll'
+        Write-FixtureFile -RepoPath $subdirWorktree -Path 'obj/cache'
+        $subdirResult = Invoke-ScopeCheck -CheckerArguments @('-Check', '-Worktree', $subdirWorktree, '-Task', $subdirTask, '-StateDirectory', $subdirState, '-WrittenPathsFile', $subdirWritten)
+        Assert-True -Name ($subdirTask + ' uses root declarations') -Condition ($subdirResult.ExitCode -eq 1 -and $subdirResult.Output -match '\[scope\] 1 declared build-output path\(s\) excluded') -Detail $subdirResult.Output
+        Assert-WrittenPaths -Name ($subdirTask + ' nested declaration is not used') -Path $subdirWritten -Expected @($subdir + '/obj')
+        Remove-Item -LiteralPath (Join-Path $subdirWorktree 'bin'), (Join-Path $subdirWorktree 'obj') -Recurse -Force
+    }
+
+    # Grammar pointers stay below the filled recipe and outside the Build outputs fence.
+    $templatePath = Join-Path (Split-Path (Split-Path $PSScriptRoot -Parent) -Parent) 'apex-orchestrate/templates/AGENTS-template.md'
+    $templateText = [IO.File]::ReadAllText($templatePath)
+    $filledTemplateText = [regex]::Replace($templateText, '(?s)<!-- apex:agents:verify -->.*?If the stack is TBD at init, leave this marker as the stub\.}', "```````necho ok>marker.txt`n``````")
+    $templateChecker = Join-Path $PSScriptRoot 'apex-baseline-check.ps1'
+    foreach ($templateCase in @(
+            @{ Name = 'unfilled'; Text = $templateText; Exit = 3 },
+            @{ Name = 'filled'; Text = $filledTemplateText; Exit = 0 })) {
+        $templateRepo = New-TestRepo -Name ('grammar-template-' + $templateCase.Name)
+        Write-FixtureFile -RepoPath $templateRepo -Path 'AGENTS.md' -Content $templateCase.Text
+        $templatePreference = $ErrorActionPreference
+        $ErrorActionPreference = 'Continue'
+        try {
+            $templateOutput = @(& $powerShellPath -NoProfile -File $templateChecker -Full -Worktree $templateRepo 2>&1)
+            $templateExit = $LASTEXITCODE
+        } finally { $ErrorActionPreference = $templatePreference }
+        Assert-True -Name ($templateCase.Name + ' real template recipe exit') -Condition ($templateExit -eq $templateCase.Exit) -Detail ($templateOutput -join [Environment]::NewLine)
+        Assert-True -Name ($templateCase.Name + ' real template marker') -Condition ((Test-Path -LiteralPath (Join-Path $templateRepo 'marker.txt')) -eq ($templateCase.Exit -eq 0)) -Detail 'only filled template executes its command'
+    }
+
+    # Task 3 A: authorizing four new-directory leaves never attributes their parent containers.
+    $leafRepo = New-TestRepo -Name 'build-A-leaves'
+    $leafState = Join-Path $testRoot 'state-build-A-leaves'
+    $leafFile = Join-Path $testRoot 'written-build-A-leaves.txt'
+    $leafSnapshot = Invoke-ScopeCheck -CheckerArguments @('-Snapshot', '-Worktree', $leafRepo, '-Task', 'build-A-leaves', '-StateDirectory', $leafState)
+    Assert-True -Name 'A leaf snapshot succeeds' -Condition ($leafSnapshot.ExitCode -eq 0) -Detail $leafSnapshot.Output
+    $leafPaths = @('src/App/Program.cs', 'tests/App/ProgramTests.cs', 'tools/new/run.ps1', 'data/new/sample.txt')
+    foreach ($leafPath in $leafPaths) { Write-FixtureFile -RepoPath $leafRepo -Path $leafPath }
+    $leafResult = Invoke-ScopeCheck -CheckerArguments @('-Check', '-Worktree', $leafRepo, '-Task', 'build-A-leaves', '-StateDirectory', $leafState, '-Authorized', ($leafPaths -join ','), '-WrittenPathsFile', $leafFile)
+    Assert-True -Name 'A four authorized leaves exit 0' -Condition ($leafResult.ExitCode -eq 0) -Detail $leafResult.Output
+    Assert-WrittenPaths -Name 'A exactly four written leaves' -Path $leafFile -Expected $leafPaths
+
+    # A nested repository remains a ?? container with a recursive digest and no index subprocess.
+    $nestedRepo = New-TestRepo -Name 'build-nested-container'
+    $nestedChild = New-TestRepo -Name 'build-nested-container/vendor/child'
+    $nestedState = Join-Path $testRoot 'state-build-nested-container'
+    $nestedShim = New-FailingGitShim -Name 'shim-nested-no-ls-files' -FailCommand 'ls-files'
+    $nestedSnapshot = Invoke-ScopeCheck -CheckerArguments @('-Snapshot', '-Worktree', $nestedRepo, '-Task', 'nested-container', '-StateDirectory', $nestedState) -PathOverride $nestedShim
+    Assert-True -Name 'nested ?? container snapshot needs no ls-files' -Condition ($nestedSnapshot.ExitCode -eq 0) -Detail $nestedSnapshot.Output
+    $nestedSnapPath = Join-Path $nestedState 'scope-nested-container.snapshot.json'
+    $nestedSnap = Get-Content -LiteralPath $nestedSnapPath -Raw | ConvertFrom-Json
+    $nestedRow = @($nestedSnap.dirty | Where-Object { $_ -ceq 'vendor/child/' })
+    $nestedHash = [string]$nestedSnap.states.'vendor/child/'
+    Assert-True -Name 'nested repository stays a ?? container with directory digest' -Condition ($nestedRow.Count -eq 1 -and $nestedSnap.statuses.'vendor/child/' -ceq '??' -and $nestedHash -match '^work:dir:[0-9a-f]{64} index:-$') -Detail $nestedHash
+    Write-FixtureFile -RepoPath $nestedChild -Path 'src/a.py' -Content "internal changed file, different length`r`n"
+    $nestedChangedSnapshot = Invoke-ScopeCheck -CheckerArguments @('-Snapshot', '-Worktree', $nestedRepo, '-Task', 'nested-container-after', '-StateDirectory', $nestedState) -PathOverride $nestedShim
+    Assert-True -Name 'nested changed snapshot succeeds' -Condition ($nestedChangedSnapshot.ExitCode -eq 0) -Detail $nestedChangedSnapshot.Output
+    $nestedAfter = Get-Content -LiteralPath (Join-Path $nestedState 'scope-nested-container-after.snapshot.json') -Raw | ConvertFrom-Json
+    Assert-True -Name 'nested internal edit changes recursive digest' -Condition ($nestedAfter.states.'vendor/child/' -cne $nestedHash) -Detail $nestedAfter.states.'vendor/child/'
+    $nestedResult = Invoke-ScopeCheck -CheckerArguments @('-Check', '-Worktree', $nestedRepo, '-Task', 'nested-container', '-StateDirectory', $nestedState)
+    Assert-True -Name 'nested internal edit is reported' -Condition ($nestedResult.ExitCode -eq 1 -and $nestedResult.Output -match 'vendor/child') -Detail $nestedResult.Output
+
+    # Task 3 B/B0/C/D/E/F/G1/G2/K/M: all exercise both lockstep classification branches.
+    $singleBuildOutputText = "## Build outputs`n``````text`nsrc/*/bin`n```````n"
+    $matrix = @(
+        @{ Name = 'B'; Agents = $buildOutputsText; Paths = @('src/App/bin/output.dll', 'src/App/obj/cache', 'tests/App/bin/output.dll', 'tests/App/obj/cache'); Exit = 0; Excluded = 4; Written = @() },
+        @{ Name = 'B0'; Agents = ''; Paths = @('src/App/bin/output.dll', 'src/App/obj/cache'); Exit = 1; Excluded = 0; Written = @('src/App/bin', 'src/App/bin/output.dll', 'src/App/obj', 'src/App/obj/cache') },
+        @{ Name = 'C'; Agents = $buildOutputsText; Paths = @('src/App/bin/output.dll', 'src/App/Evil.cs'); Exit = 1; Excluded = 1; Written = @('src/App/Evil.cs') },
+        @{ Name = 'D'; Agents = $buildOutputsText; Paths = @('src/App/bin/output.dll', 'src/App/.hooks/x'); Exit = 1; Excluded = 1; Written = @('src/App/.hooks', 'src/App/.hooks/x') },
+        @{ Name = 'E'; Agents = $buildOutputsText; Paths = @('src/App/bin/run.sh'); Files = @('src/a.py', 'src/App/bin/run.sh'); Exit = 1; Excluded = 0; Written = @('src/App/bin/run.sh') },
+        @{ Name = 'F'; Agents = $buildOutputsText; Paths = @('src/App/bin/output.dll'); Ignore = ''; Exit = 1; Excluded = 0; Written = @('src/App/bin/output.dll') },
+        @{ Name = 'G1'; Agents = ''; MidRunAgents = $buildOutputsText; Paths = @('src/App/bin/output.dll'); Exit = 1; Excluded = 0; Written = @('AGENTS.md', 'src/App/bin', 'src/App/bin/output.dll') },
+        @{ Name = 'G2'; Agents = "## Rules`nOriginal committed rules.`n"; MidRunAgents = $buildOutputsText; Paths = @('src/App/bin/output.dll'); Exit = 1; Excluded = 0; Written = @('AGENTS.md', 'src/App/bin', 'src/App/bin/output.dll') },
+        @{ Name = 'K'; Agents = $singleBuildOutputText; Files = @('src/a.py', 'src/App/Program.cs', 'src/App/sub/Keep.cs'); Paths = @('src/bin/output.dll', 'src/App/sub/bin/output.dll'); Exit = 1; Excluded = 0; Written = @('src/bin', 'src/bin/output.dll', 'src/App/sub/bin', 'src/App/sub/bin/output.dll') },
+        @{ Name = 'M'; Agents = "## Build outputs`n``````text`nsrc/*/bin`n../x`n```````n"; Paths = @('src/App/bin/output.dll'); Exit = 1; Excluded = 0; Warning = $true; Written = @('src/App/bin', 'src/App/bin/output.dll') }
+    )
+    $malformedEntries = @('**/bin', 'src/*', '../x', 'src/?/bin', '.git/hooks', 'src/*/bin/', '/bin', 'src\*\bin', 'C:/x', 'src//bin')
+    for ($badIndex = 0; $badIndex -lt $malformedEntries.Count; $badIndex++) {
+        $matrix += @{ Name = ('H-{0}' -f $badIndex); Agents = ("## Build outputs`n``````text`n{0}`n```````n" -f $malformedEntries[$badIndex]); Paths = @('src/App/bin/output.dll'); Exit = 1; Excluded = 0; Warning = $true; Written = @('src/App/bin', 'src/App/bin/output.dll') }
+    }
+    $matrix += @(
+        @{ Name = 'H-prose'; Agents = "## Build outputs`nProse before fence.`n``````text`nsrc/*/bin`n```````n"; Paths = @('src/App/bin/output.dll'); Exit = 1; Excluded = 0; Warning = $true; Written = @('src/App/bin', 'src/App/bin/output.dll') },
+        @{ Name = 'H-fenced-example'; Agents = "````````markdown`n## Build outputs`n``````text`nsrc/*/bin`n```````n`````````n"; Paths = @('src/App/bin/output.dll'); Exit = 1; Excluded = 0; Written = @('src/App/bin', 'src/App/bin/output.dll') },
+        @{ Name = 'H-duplicate'; Agents = ($singleBuildOutputText + $singleBuildOutputText); Paths = @('src/App/bin/output.dll'); Exit = 1; Excluded = 0; Warning = $true; Written = @('src/App/bin', 'src/App/bin/output.dll') },
+        @{ Name = 'H-empty'; Agents = "## Build outputs`n```````n```````nNotes below.`n"; Paths = @('src/App/bin/output.dll'); Exit = 1; Excluded = 0; Written = @('src/App/bin', 'src/App/bin/output.dll') },
+        @{ Name = 'H-second-fence'; Agents = ($singleBuildOutputText + "``````text`nother/bin`n```````n"); Paths = @('src/App/bin/output.dll'); Exit = 1; Excluded = 0; Warning = $true; Written = @('src/App/bin', 'src/App/bin/output.dll') }
+    )
+    foreach ($fixture in $matrix) {
+        $fixtureTask = 'build-' + $fixture.Name
+        $fixtureOptions = @{ Name = $fixtureTask; AgentsText = $fixture.Agents }
+        if ($fixture.ContainsKey('Files')) { $fixtureOptions.Files = $fixture.Files }
+        if ($fixture.ContainsKey('Ignore')) { $fixtureOptions.IgnoreText = $fixture.Ignore }
+        $fixtureRepo = New-BuildOutputRepo @fixtureOptions
+        $fixtureState = Join-Path $testRoot ('state-' + $fixtureTask)
+        $fixtureFile = Join-Path $testRoot ('written-' + $fixtureTask + '.txt')
+        $fixtureSnapshot = Invoke-ScopeCheck -CheckerArguments @('-Snapshot', '-Worktree', $fixtureRepo, '-Task', $fixtureTask, '-StateDirectory', $fixtureState)
+        Assert-True -Name ($fixtureTask + ' snapshot succeeds') -Condition ($fixtureSnapshot.ExitCode -eq 0) -Detail $fixtureSnapshot.Output
+        $fixtureSnapPath = Join-Path $fixtureState ("scope-$fixtureTask.snapshot.json")
+        $fixtureSnapText = [System.IO.File]::ReadAllText($fixtureSnapPath)
+        foreach ($fixturePath in $fixture.Paths) { Write-FixtureFile -RepoPath $fixtureRepo -Path $fixturePath -Content "build changed content`r`n" }
+        if ($fixture.ContainsKey('MidRunAgents')) { Write-FixtureFile -RepoPath $fixtureRepo -Path 'AGENTS.md' -Content $fixture.MidRunAgents }
+        foreach ($collectFixture in @($true, $false)) {
+            # Successful checks consume the snapshot; restore the same evidence for the twin branch.
+            [System.IO.File]::WriteAllText($fixtureSnapPath, $fixtureSnapText, [System.Text.UTF8Encoding]::new($false))
+            $fixtureArguments = @('-Check', '-Worktree', $fixtureRepo, '-Task', $fixtureTask, '-StateDirectory', $fixtureState)
+            if ($collectFixture) { $fixtureArguments += @('-WrittenPathsFile', $fixtureFile) }
+            if ($fixture.ContainsKey('MidRunAgents')) { $fixtureArguments += @('-Authorized', 'AGENTS.md') }
+            $fixtureResult = Invoke-ScopeCheck -CheckerArguments $fixtureArguments
+            $fixtureLabel = "{0} collecting={1}" -f $fixtureTask, $collectFixture
+            Assert-True -Name ($fixtureLabel + ' exit') -Condition ($fixtureResult.ExitCode -eq $fixture.Exit) -Detail $fixtureResult.Output
+            $warningCount = @([regex]::Matches($fixtureResult.Output, "\[scope\] WARNING: AGENTS.md '## Build outputs' unparseable \(line \d+: .*\); no build-output exclusions applied")).Count
+            $expectedWarningCount = if ($fixture.ContainsKey('Warning')) { 1 } else { 0 }
+            Assert-True -Name ($fixtureLabel + ' single fail-closed warning or no warning') -Condition ($warningCount -eq $expectedWarningCount) -Detail $fixtureResult.Output
+            if ($fixture.Excluded -gt 0) {
+                Assert-True -Name ($fixtureLabel + ' declared exclusion count') -Condition ($fixtureResult.Output.Contains(("{0} declared build-output path(s) excluded" -f $fixture.Excluded))) -Detail $fixtureResult.Output
+            } else {
+                Assert-True -Name ($fixtureLabel + ' no declared exclusions') -Condition ($fixtureResult.Output -notmatch 'declared build-output path\(s\) excluded') -Detail $fixtureResult.Output
+            }
+            foreach ($expectedPath in $fixture.Written) {
+                if ($expectedPath -ceq 'AGENTS.md' -or $expectedPath.EndsWith('/output.dll') -or $expectedPath.EndsWith('/cache') -or $expectedPath.EndsWith('/x')) { continue }
+                Assert-True -Name ($fixtureLabel + ' names ' + $expectedPath) -Condition ($fixtureResult.Output.Contains($expectedPath)) -Detail $fixtureResult.Output
+            }
+        }
+        Assert-WrittenPaths -Name ($fixtureTask + ' written paths') -Path $fixtureFile -Expected $fixture.Written
+    }
+
+    # V: snapshots are format 2; absent and other formats throw before any written artifact.
+    $versionRepo = New-TestRepo -Name 'build-V-format'
+    Write-FixtureFile -RepoPath $versionRepo -Path 'scratch/leaf.txt'
+    $versionState = Join-Path $testRoot 'state-build-V-format'
+    $versionTask = 'build-V-format'
+    $versionNoHashShim = New-FailingGitShim -Name 'shim-V-no-hash-object' -FailCommand 'hash-object'
+    $versionSnapshot = Invoke-ScopeCheck -CheckerArguments @('-Snapshot', '-Worktree', $versionRepo, '-Task', $versionTask, '-StateDirectory', $versionState) -PathOverride $versionNoHashShim
+    Assert-True -Name 'V snapshot succeeds' -Condition ($versionSnapshot.ExitCode -eq 0) -Detail $versionSnapshot.Output
+    $versionPath = Join-Path $versionState 'scope-build-V-format.snapshot.json'
+    $versionSnap = Get-Content -LiteralPath $versionPath -Raw | ConvertFrom-Json
+    Assert-True -Name 'V snapshot format is 2 and leaf uses raw SHA-256' -Condition ($versionSnap.format -ceq 2 -and $versionSnap.states.'scratch/leaf.txt' -match '^work:raw:[0-9a-f]{64} index:-$') -Detail ([string]$versionSnap.format + ' ' + $versionSnap.states.'scratch/leaf.txt')
+    $versionNoIndexShim = New-FailingGitShim -Name 'shim-V-no-ls-files' -FailCommand 'ls-files'
+    $versionNoIndexSnapshot = Invoke-ScopeCheck -CheckerArguments @('-Snapshot', '-Worktree', $versionRepo, '-Task', 'build-V-no-index', '-StateDirectory', $versionState) -PathOverride $versionNoIndexShim
+    Assert-True -Name 'V ?? leaf snapshot needs no ls-files' -Condition ($versionNoIndexSnapshot.ExitCode -eq 0) -Detail $versionNoIndexSnapshot.Output
+    foreach ($oldVersion in @('absent', '1', '3', 'string', 'array', 'empty-array', 'null')) {
+        $oldFormat = [ordered]@{ task = $versionSnap.task; head = $versionSnap.head; dirty = @($versionSnap.dirty); states = $versionSnap.states; statuses = $versionSnap.statuses; takenUtc = $versionSnap.takenUtc }
+        switch -CaseSensitive ($oldVersion) {
+            'absent' { }
+            'string' { $oldFormat.format = '2' }
+            'array' { $oldFormat.format = @(2) }
+            'empty-array' { $oldFormat.format = @() }
+            'null' { $oldFormat.format = $null }
+            default { $oldFormat.format = [int]$oldVersion }
+        }
+        [System.IO.File]::WriteAllText($versionPath, ($oldFormat | ConvertTo-Json -Depth 5), [System.Text.UTF8Encoding]::new($false))
+        $versionFile = Join-Path $testRoot ("written-version-$oldVersion.txt")
+        $versionResult = Invoke-ScopeCheck -CheckerArguments @('-Check', '-Worktree', $versionRepo, '-Task', $versionTask, '-StateDirectory', $versionState, '-WrittenPathsFile', $versionFile)
+        $versionMessage = "snapshot for '$versionTask' predates scope snapshot format 2 (leaf enumeration); re-run -Snapshot"
+        Assert-True -Name ("V {0} format throws named re-Snapshot message" -f $oldVersion) -Condition ($versionResult.ExitCode -ne 0 -and $versionResult.Output.Contains($versionMessage) -and -not (Test-Path -LiteralPath $versionFile)) -Detail $versionResult.Output
+    }
+
     # Derived-cache (1): ignored scratch created during dispatch is excluded and emits nothing.
     $derivedScratchRepo = New-IgnoredCacheRepo -Name 'derived-scratch-created'
     $derivedScratchState = Join-Path $testRoot 'state-derived-scratch-created'
@@ -1058,7 +1403,7 @@ try {
     [System.IO.File]::WriteAllText($derivedQuestionLeaf, "log`r`n", [System.Text.Encoding]::ASCII)
     $derivedQuestion = Invoke-ScopeCheck -CheckerArguments @('-Check', '-Worktree', $derivedQuestionRepo, '-Task', 'derived-current-question', '-StateDirectory', $derivedQuestionState, '-WrittenPathsFile', $derivedQuestionFile)
     Assert-True -Name 'derived-cache 11 nonignored exact name exits non-zero' -Condition ($derivedQuestion.ExitCode -ne 0) -Detail ("expected non-zero, got {0}" -f $derivedQuestion.ExitCode)
-    Assert-WrittenPaths -Name 'derived-cache 11 nonignored exact name is attributed' -Path $derivedQuestionFile -Expected @('.codex-scratch', '.codex-scratch/log.txt')
+    Assert-WrittenPaths -Name 'derived-cache 11 nonignored exact name is attributed' -Path $derivedQuestionFile -Expected @('.codex-scratch/log.txt')
 
     # Derived-cache (12): a snapshot-present ?? exact name cannot use the deletion arm.
     $derivedPreQuestionRepo = New-IgnoredCacheRepo -Name 'derived-snapshot-question' -IgnoredNames @()
@@ -1071,7 +1416,7 @@ try {
     Remove-Item -LiteralPath $derivedPreQuestionDirectory -Recurse -Force
     $derivedPreQuestion = Invoke-ScopeCheck -CheckerArguments @('-Check', '-Worktree', $derivedPreQuestionRepo, '-Task', 'derived-snapshot-question', '-StateDirectory', $derivedPreQuestionState, '-WrittenPathsFile', $derivedPreQuestionFile)
     Assert-True -Name 'derived-cache 12 snapshot question-status deletion exits non-zero' -Condition ($derivedPreQuestion.ExitCode -ne 0) -Detail ("expected non-zero, got {0}" -f $derivedPreQuestion.ExitCode)
-    Assert-WrittenPaths -Name 'derived-cache 12 snapshot question-status deletion is attributed' -Path $derivedPreQuestionFile -Expected @('.codex-scratch')
+    Assert-WrittenPaths -Name 'derived-cache 12 snapshot question-status deletion is attributed' -Path $derivedPreQuestionFile -Expected @('.codex-scratch/log.txt')
 
     # Derived-cache (13): git's collapsed ignored-directory key carries a trailing slash.
     $derivedSlashRepo = New-IgnoredCacheRepo -Name 'derived-trailing-slash'
@@ -1084,7 +1429,7 @@ try {
     $derivedSlash = Invoke-ScopeCheck -CheckerArguments @('-Check', '-Worktree', $derivedSlashRepo, '-Task', 'derived-trailing-slash', '-StateDirectory', $derivedSlashState)
     Assert-True -Name 'derived-cache 13 trailing-slash porcelain key is excluded' -Condition (($derivedSlashPorcelain -contains '!! .codex-scratch/') -and $derivedSlash.ExitCode -eq 0) -Detail ("porcelain [{0}], exit {1}: {2}" -f ($derivedSlashPorcelain -join ', '), $derivedSlash.ExitCode, $derivedSlash.Output)
 
-    # Derived-cache (14): old snapshots without statuses fail closed even for a still-ignored cache.
+    # Derived-cache (14): format-2 snapshots stripped of statuses exercise the transition guard.
     $derivedOldRepo = New-IgnoredCacheRepo -Name 'derived-old-snapshot'
     $derivedOldDirectory = Join-Path $derivedOldRepo '.codex-scratch'
     New-Item -ItemType Directory -Force -Path $derivedOldDirectory | Out-Null
@@ -1095,6 +1440,7 @@ try {
     $derivedOldSnapshotPath = Join-Path $derivedOldState 'scope-derived-old-snapshot.snapshot.json'
     $derivedOldSnapshot = Get-Content -LiteralPath $derivedOldSnapshotPath -Raw | ConvertFrom-Json
     $derivedOldFormat = [ordered]@{
+        format = 2
         task = $derivedOldSnapshot.task
         head = $derivedOldSnapshot.head
         dirty = @($derivedOldSnapshot.dirty)
@@ -1104,12 +1450,68 @@ try {
     $derivedOldFormat | ConvertTo-Json -Depth 5 | Out-File -LiteralPath $derivedOldSnapshotPath -Encoding utf8
     [System.IO.File]::WriteAllText((Join-Path $derivedOldDirectory 'after.txt'), "after`r`n", [System.Text.Encoding]::ASCII)
     $derivedOld = Invoke-ScopeCheck -CheckerArguments @('-Check', '-Worktree', $derivedOldRepo, '-Task', 'derived-old-snapshot', '-StateDirectory', $derivedOldState, '-WrittenPathsFile', $derivedOldFile)
-    Assert-True -Name 'derived-cache 14 old snapshot without statuses exits non-zero' -Condition ($derivedOld.ExitCode -ne 0) -Detail ("expected non-zero, got {0}" -f $derivedOld.ExitCode)
-    Assert-WrittenPaths -Name 'derived-cache 14 old snapshot without statuses is attributed' -Path $derivedOldFile -Expected @('.codex-scratch', '.codex-scratch/after.txt', '.codex-scratch/before.txt')
+    Assert-True -Name 'derived-cache 14 format-2 snapshot without statuses exits non-zero' -Condition ($derivedOld.ExitCode -eq 1) -Detail ("expected 1, got {0}" -f $derivedOld.ExitCode)
+    Assert-WrittenPaths -Name 'derived-cache 14 format-2 snapshot without statuses is attributed' -Path $derivedOldFile -Expected @('.codex-scratch', '.codex-scratch/after.txt', '.codex-scratch/before.txt')
+
+    # Declared-class twin of (14): the same format-2/statuses-stripped evidence must not exclude.
+    $declaredGuardRepo = New-BuildOutputRepo -Name 'declared-status-guard' -AgentsText $singleBuildOutputText
+    Write-FixtureFile -RepoPath $declaredGuardRepo -Path 'src/App/bin/before.txt'
+    $declaredGuardState = Join-Path $testRoot 'state-declared-status-guard'
+    $declaredGuardFile = Join-Path $testRoot 'written-declared-status-guard.txt'
+    [void](Invoke-ScopeCheck -CheckerArguments @('-Snapshot', '-Worktree', $declaredGuardRepo, '-Task', 'declared-status-guard', '-StateDirectory', $declaredGuardState))
+    $declaredGuardPath = Join-Path $declaredGuardState 'scope-declared-status-guard.snapshot.json'
+    $declaredGuardSnap = Get-Content -LiteralPath $declaredGuardPath -Raw | ConvertFrom-Json
+    $declaredGuardFormat = [ordered]@{ format = 2; task = $declaredGuardSnap.task; head = $declaredGuardSnap.head; dirty = @($declaredGuardSnap.dirty); states = $declaredGuardSnap.states; takenUtc = $declaredGuardSnap.takenUtc }
+    [System.IO.File]::WriteAllText($declaredGuardPath, ($declaredGuardFormat | ConvertTo-Json -Depth 5), [System.Text.UTF8Encoding]::new($false))
+    $declaredGuardText = [System.IO.File]::ReadAllText($declaredGuardPath)
+    Write-FixtureFile -RepoPath $declaredGuardRepo -Path 'src/App/bin/after.txt'
+    foreach ($collectGuard in @($true, $false)) {
+        [System.IO.File]::WriteAllText($declaredGuardPath, $declaredGuardText, [System.Text.UTF8Encoding]::new($false))
+        $guardArguments = @('-Check', '-Worktree', $declaredGuardRepo, '-Task', 'declared-status-guard', '-StateDirectory', $declaredGuardState)
+        if ($collectGuard) { $guardArguments += @('-WrittenPathsFile', $declaredGuardFile) }
+        $declaredGuard = Invoke-ScopeCheck -CheckerArguments $guardArguments
+        Assert-True -Name ("declared-class 14 format-2 statuses guard collecting={0}" -f $collectGuard) -Condition ($declaredGuard.ExitCode -eq 1 -and $declaredGuard.Output -notmatch 'declared build-output path\(s\) excluded') -Detail $declaredGuard.Output
+    }
+    Assert-WrittenPaths -Name 'declared-class 14 without statuses retains attribution' -Path $declaredGuardFile -Expected @('src/App/bin', 'src/App/bin/after.txt', 'src/App/bin/before.txt')
+
+    # Inventory failure disables the declared class as well as the root-derived class.
+    $declaredInventoryRepo = New-BuildOutputRepo -Name 'declared-inventory-guard' -AgentsText $singleBuildOutputText -IgnoreText "bin/`n.codex-scratch/`n"
+    $declaredInventoryState = Join-Path $testRoot 'state-declared-inventory-guard'
+    $declaredInventoryFile = Join-Path $testRoot 'written-declared-inventory-guard.txt'
+    [void](Invoke-ScopeCheck -CheckerArguments @('-Snapshot', '-Worktree', $declaredInventoryRepo, '-Task', 'declared-inventory-guard', '-StateDirectory', $declaredInventoryState))
+    Write-FixtureFile -RepoPath $declaredInventoryRepo -Path 'src/App/bin/output.dll'
+    Write-FixtureFile -RepoPath $declaredInventoryRepo -Path '.codex-scratch/log.txt'
+    $declaredInventoryShim = New-FailingGitShim -Name 'shim-declared-inventory' -FailCommand 'ls-files'
+    $declaredInventory = Invoke-ScopeCheck -CheckerArguments @('-Check', '-Worktree', $declaredInventoryRepo, '-Task', 'declared-inventory-guard', '-StateDirectory', $declaredInventoryState, '-WrittenPathsFile', $declaredInventoryFile) -PathOverride $declaredInventoryShim
+    Assert-True -Name 'declared-class inventory failure disables both classes' -Condition ($declaredInventory.ExitCode -eq 1 -and $declaredInventory.Output -match 'runtime inventory could not be built' -and $declaredInventory.Output -notmatch '(?:declared build-output|derived-cache) path\(s\) excluded') -Detail $declaredInventory.Output
+    Assert-WrittenPaths -Name 'declared-class inventory failure retains both attributions' -Path $declaredInventoryFile -Expected @('.codex-scratch', '.codex-scratch/log.txt', 'src/App/bin', 'src/App/bin/output.dll')
+
+    # A still-ignored declared prefix and its deletion are excluded in both branches.
+    $declaredGoneRepo = New-BuildOutputRepo -Name 'declared-gone-guard' -AgentsText $singleBuildOutputText
+    Write-FixtureFile -RepoPath $declaredGoneRepo -Path 'src/App/bin/before.txt'
+    $declaredGoneState = Join-Path $testRoot 'state-declared-gone-guard'
+    $declaredGoneFile = Join-Path $testRoot 'written-declared-gone-guard.txt'
+    [void](Invoke-ScopeCheck -CheckerArguments @('-Snapshot', '-Worktree', $declaredGoneRepo, '-Task', 'declared-gone-guard', '-StateDirectory', $declaredGoneState))
+    $declaredGonePath = Join-Path $declaredGoneState 'scope-declared-gone-guard.snapshot.json'
+    $declaredGoneText = [System.IO.File]::ReadAllText($declaredGonePath)
+    Write-FixtureFile -RepoPath $declaredGoneRepo -Path 'src/App/bin/before.txt' -Content "changed ignored contents`r`n"
+    $declaredStill = Invoke-ScopeCheck -CheckerArguments @('-Check', '-Worktree', $declaredGoneRepo, '-Task', 'declared-gone-guard', '-StateDirectory', $declaredGoneState, '-WrittenPathsFile', $declaredGoneFile)
+    Assert-True -Name 'declared-class still ignored transition excluded' -Condition ($declaredStill.ExitCode -eq 0 -and $declaredStill.Output -match '1 declared build-output path\(s\) excluded') -Detail $declaredStill.Output
+    $declaredGoneDirectory = [System.IO.Path]::GetFullPath((Join-Path $declaredGoneRepo 'src/App/bin'))
+    if (-not $declaredGoneDirectory.StartsWith($testRoot + '\', [System.StringComparison]::OrdinalIgnoreCase)) { throw 'Unsafe declared fixture removal target' }
+    Remove-Item -LiteralPath $declaredGoneDirectory -Recurse -Force
+    foreach ($collectGone in @($true, $false)) {
+        [System.IO.File]::WriteAllText($declaredGonePath, $declaredGoneText, [System.Text.UTF8Encoding]::new($false))
+        $goneArguments = @('-Check', '-Worktree', $declaredGoneRepo, '-Task', 'declared-gone-guard', '-StateDirectory', $declaredGoneState)
+        if ($collectGone) { $goneArguments += @('-WrittenPathsFile', $declaredGoneFile) }
+        $declaredGone = Invoke-ScopeCheck -CheckerArguments $goneArguments
+        Assert-True -Name ("declared-class ignored deletion collecting={0}" -f $collectGone) -Condition ($declaredGone.ExitCode -eq 0 -and $declaredGone.Output -match '1 declared build-output path\(s\) excluded' -and $declaredGone.Output -notmatch '\sGONE\s') -Detail $declaredGone.Output
+    }
+    Assert-WrittenPaths -Name 'declared-class ignored deletion emits no paths' -Path $declaredGoneFile -Expected @()
 
     # LOCKSTEP COVERAGE BOUNDARY: this block catches LIST and PRESCRIPTION drift plus per-entry
-    # behaviour. Guard-LOGIC weakening is caught by Task 2 cases (3), (4), (6), (11), (12), and
-    # (14). Parse and probe only scratch copies: no authorized or read-only source is mutated.
+    # behaviour. Guard-LOGIC weakening is caught by derived-cache cases (3), (4), (6), (11), (12),
+    # and format-2/statuses-stripped (14), plus its declared-class twin. Probe only scratch copies.
     $lockstepRoot = Join-Path $testRoot 'lockstep-copies'
     New-Item -ItemType Directory -Force -Path $lockstepRoot | Out-Null
     $lockstepChecker = Join-Path $lockstepRoot 'codex-scope-check.ps1'
@@ -1229,6 +1631,11 @@ catch {
     $suiteExitCode = 1
 }
 finally {
+    if ($null -eq $previousApexStateDir) {
+        Remove-Item Env:APEX_STATE_DIR -ErrorAction SilentlyContinue
+    } else {
+        $env:APEX_STATE_DIR = $previousApexStateDir
+    }
     if ($null -eq $previousGitConfigGlobal) {
         Remove-Item Env:GIT_CONFIG_GLOBAL -ErrorAction SilentlyContinue
     } else {

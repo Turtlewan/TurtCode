@@ -262,15 +262,16 @@ function New-ProductionDispatchResultFixture {
         [bool]$TreeMoved = $false,
         [AllowNull()][string]$Concerns = $null,
         [AllowNull()][string]$Porcelain = $null,
+        [AllowNull()][object]$ScopeExit = 0,
         [switch]$Abandon
     )
 
-    $scopeExit = if ($Abandon) { $null } else { 0 }
+    if ($Abandon) { $ScopeExit = $null }
     $criticalViolation = if ($Abandon) { $null } else { $false }
     Set-PendingDispatchResultEvent -TaskId 'event-task' -Repo $repo `
         -RunIdentity '0123456789abcdef0123456789abcdef' `
         -LogPath (Join-Path $stateRoot 'fixture.log') -LedgerStatus $Status `
-        -ReportStatus $ReportStatus -ScopeViolation $false -ScopeExit $scopeExit `
+        -ReportStatus $ReportStatus -ScopeViolation ($null -ne $ScopeExit -and $ScopeExit -ne 0) -ScopeExit $ScopeExit `
         -EncodingViolation $false -CriticalViolation $criticalViolation -ViolationDetail $null `
         -TreeMoved $TreeMoved -Final $Final -ConcernsText $Concerns -ScopeCheckText $null `
         -PorcelainText $Porcelain -ErrorText $null -EventPhase 'build'
@@ -299,7 +300,7 @@ function Assert-SchemaFixture {
 }
 
 function Invoke-EventCase {
-    param([Parameter(Mandatory)][ValidateSet('refusal74', 'garbage82', 'completion')][string]$Case)
+    param([Parameter(Mandatory)][ValidateSet('refusal74', 'garbage82', 'completion', 'completion-status-failure')][string]$Case)
 
     $before = if (Test-Path -LiteralPath $eventsRoot) {
         @([System.IO.Directory]::EnumerateFiles($eventsRoot, '*.event.json'))
@@ -404,14 +405,39 @@ switch ($Case) {
     'garbage82' {
         & $env:APEX_EVENT_TEST_DISPATCH -AbandonRunId 'zzz' -AbandonReason 'event smoke' -Attended
     }
-    'completion' {
-        $common.Authorized = @('src/a.py')
+    { $_ -in @('completion', 'completion-status-failure') } {
+        if ($Case -ceq 'completion-status-failure') {
+            $global:eventTestRealGit = @(Get-Command git.exe -CommandType Application)[0].Source
+            function git {
+                # Fail only the diagnostic status after the terminal ledger write. Scope status
+                # uses --untracked-files=all and must remain operational for this regression.
+                if (@($args) -ccontains '-uall') {
+                    $ledger = Join-Path $env:APEX_STATE_DIR 'progress\codex-run-ledger.jsonl'
+                    $terminal = @(Get-Content -LiteralPath $ledger | ForEach-Object { $_ | ConvertFrom-Json } |
+                        Where-Object { $_.row_kind -ceq 'dispatch' -and $_.task -ceq 'event-status-failure' -and $_.status -ceq 'done' })
+                    if (@($terminal).Count -gt 0) {
+                        $global:LASTEXITCODE = 42
+                        return '?? must-not-leak.py'
+                    }
+                }
+                & $global:eventTestRealGit @args
+            }
+            $common.Task = 'event-status-failure'
+        }
+        $common.Authorized = @('src/a.py', 'src/untracked/')
         $common.SkipBaselineCheck = $true
         $common.CodexExecutable = 'powershell.exe'
         $common.CodexExecutableArgumentPrefix = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $env:APEX_EVENT_TEST_FAKE)
         $common.CriticalFilesScript = $env:APEX_EVENT_TEST_CRITICAL
         $common.TreePinScript = $env:APEX_EVENT_TEST_TREEPIN
-        & $env:APEX_EVENT_TEST_DISPATCH @common
+        $previousExtraWrite = $env:FAKE_CODEX_EXTRA_WRITE
+        try {
+            $env:FAKE_CODEX_EXTRA_WRITE = 'src/untracked/leaf.py'
+            & $env:APEX_EVENT_TEST_DISPATCH @common
+            $completionExit = $LASTEXITCODE
+        }
+        finally { $env:FAKE_CODEX_EXTRA_WRITE = $previousExtraWrite }
+        exit $completionExit
     }
 }
 exit $LASTEXITCODE
@@ -445,6 +471,63 @@ exit $LASTEXITCODE
         Assert-SchemaFixture -Name 'event-dispatch-result-valid-smoke schema' -Event $completion.Event -DefName dispatch_result
         Assert-EventCase -Name 'event-dispatch-result-valid-smoke report preserved' `
             -Condition ([string]$completion.Event.final.status -ceq 'done') -Detail ([string]$completion.Event.final.status)
+        Assert-EventCase -Name 'event-dispatch-result-valid-smoke worktree repo' `
+            -Condition ([string]$completion.Event.repo -ceq $repo) -Detail ([string]$completion.Event.repo)
+        Assert-EventCase -Name 'event-dispatch-result-valid-smoke scope output captured' `
+            -Condition (-not [string]::IsNullOrWhiteSpace([string]$completion.Event.scope_check) -and
+                [string]$completion.Event.scope_check -cmatch '\[scope\]') -Detail ([string]$completion.Event.scope_check)
+        Assert-EventCase -Name 'event-dispatch-result-valid-smoke untracked leaf' `
+            -Condition ([string]$completion.Event.porcelain -cmatch '(?m)^\?\? src/untracked/leaf\.py\r?$') `
+            -Detail ([string]$completion.Event.porcelain)
+        Assert-EventCase -Name 'event-dispatch-result-valid-smoke clean scope mapping' `
+            -Condition ($null -eq $completion.Event.scope_exit -and
+                @($completion.Event.truncated) -cnotcontains 'scope_exit') -Detail ($completion.Event | ConvertTo-Json -Depth 8)
+        $completionRows = @(Get-Content -LiteralPath (Join-Path $stateRoot 'progress\codex-run-ledger.jsonl') |
+            ForEach-Object { $_ | ConvertFrom-Json } |
+            Where-Object { [string]$_.run_id -ceq [string]$completion.Event.run_id -and [string]$_.row_kind -ceq 'dispatch' })
+        Assert-EventCase -Name 'event-dispatch-result-valid-smoke raw ledger scope exit' `
+            -Condition (@($completionRows).Count -eq 1 -and $null -ne $completionRows[0].scope_exit -and
+                $completionRows[0].scope_exit -eq 0) -Detail ($completionRows | ConvertTo-Json -Depth 8)
+    }
+
+    $statusFailure = Invoke-EventCase -Case completion-status-failure
+    Assert-EventCase -Name 'event-status-failure preserves exit0' -Condition ($statusFailure.ExitCode -eq 0) -Detail $statusFailure.Output
+    Assert-EventCase -Name 'event-status-failure one file' -Condition (@($statusFailure.Files).Count -eq 1) -Detail ($statusFailure.Files -join ', ')
+    Assert-EventCase -Name 'event-status-failure one warning' `
+        -Condition (@([regex]::Matches($statusFailure.Output, '(?m)^\[dispatch\] WARNING: git status capture failed \(exit 42\);')).Count -eq 1) `
+        -Detail $statusFailure.Output
+    if ($null -ne $statusFailure.Event) {
+        Assert-SchemaFixture -Name 'event-status-failure schema' -Event $statusFailure.Event -DefName dispatch_result
+        Assert-EventCase -Name 'event-status-failure preserves terminal verdict' `
+            -Condition ($statusFailure.Event.status -ceq 'done' -and $statusFailure.Event.final.status -ceq 'done' -and
+                $statusFailure.Event.exit_code -eq 0) -Detail ($statusFailure.Event | ConvertTo-Json -Depth 8)
+        Assert-EventCase -Name 'event-status-failure empty truncated porcelain' `
+            -Condition ([string]::IsNullOrEmpty([string]$statusFailure.Event.porcelain) -and
+                @($statusFailure.Event.truncated) -ccontains 'porcelain') -Detail ($statusFailure.Event | ConvertTo-Json -Depth 8)
+        $statusFailureRows = @(Get-Content -LiteralPath (Join-Path $stateRoot 'progress\codex-run-ledger.jsonl') |
+            ForEach-Object { $_ | ConvertFrom-Json } |
+            Where-Object { $_.run_id -ceq $statusFailure.Event.run_id -and $_.row_kind -ceq 'dispatch' })
+        Assert-EventCase -Name 'event-status-failure ledger stays done' `
+            -Condition (@($statusFailureRows).Count -eq 1 -and $statusFailureRows[0].status -ceq 'done') `
+            -Detail ($statusFailureRows | ConvertTo-Json -Depth 8)
+    }
+
+    foreach ($fixture in @(
+            [pscustomobject]@{ Name = 'null'; Raw = $null; Expected = $null; Truncated = $false },
+            [pscustomobject]@{ Name = '0'; Raw = 0; Expected = $null; Truncated = $false },
+            [pscustomobject]@{ Name = '1'; Raw = 1; Expected = 65; Truncated = $false },
+            [pscustomobject]@{ Name = '65'; Raw = 65; Expected = 65; Truncated = $false },
+            [pscustomobject]@{ Name = '66'; Raw = 66; Expected = 66; Truncated = $false },
+            [pscustomobject]@{ Name = '2'; Raw = 2; Expected = $null; Truncated = $true })) {
+        $event = New-ProductionDispatchResultFixture -Status 'done' -ExitCode 0 `
+            -ReportStatus 'done' -Final (New-ProductionCompletionFinal -Status 'done') -ScopeExit $fixture.Raw
+        Assert-SchemaFixture -Name "event-scope-exit-$($fixture.Name) schema" -Event $event -DefName dispatch_result
+        Assert-EventCase -Name "event-scope-exit-$($fixture.Name) mapping" `
+            -Condition (Test-JsonValueEqual -Left $event.scope_exit -Right $fixture.Expected) `
+            -Detail "raw=$($fixture.Name); mapped=$($event.scope_exit)"
+        Assert-EventCase -Name "event-scope-exit-$($fixture.Name) truncation" `
+            -Condition ((@($event.truncated) -ccontains 'scope_exit') -eq $fixture.Truncated) `
+            -Detail (@($event.truncated) -join ', ')
     }
 
     # Enumerated refusal matrix: every build-phase-reachable exit plus 78's schema-only malformed-id shape.

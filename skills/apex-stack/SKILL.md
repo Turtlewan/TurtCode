@@ -1,7 +1,7 @@
 ---
 skill: apex-stack
-version: 1.2.3
-last_updated: 2026-07-29
+version: 1.2.4
+last_updated: 2026-10-05
 sources:
   - State of JS 2024 — stateofjs.com
   - Next.js Docs — nextjs.org/docs
@@ -127,8 +127,10 @@ option only if it wins on the criteria above; it sits alongside the others, neve
 1. **APEX ships no stack skills.** There is no global `apex-python` / `apex-nextjs` to bind — the
    domain layer was removed (ADR-036). A frontier coder knows the stack; what it cannot know is how
    *this repo* verifies itself.
-2. **The Verification Recipe's single home is the repo's `AGENTS.md`** (ADR-037). Write the exact
-   commands (install, lint, typecheck, test, build) there under `## Verify commands`. This is a
+2. **The Verification Recipe's single home is the repo's `AGENTS.md`** (ADR-037). Replace the marker
+   and entire stub with one fence directly under the exact heading `## Verify commands` (blank lines
+   only); write the exact commands (install, lint, typecheck, test, build) in it and put notes after
+   the closing fence. This is a
    **per-project fact**, not model knowledge — that is why it is written down at all.
    **It must be AGENTS.md, not status.md:** Codex reads AGENTS.md natively on every `codex exec` and
    **never sees status.md**. A recipe in status.md is invisible to the coder that runs it.
@@ -143,7 +145,7 @@ option only if it wins on the criteria above; it sits alongside the others, neve
 ## Hard blocks
 
 - Never default to a JS/TS stack by reflex — select on merit across ecosystems, weighing AI-buildability and verifiability (see *How to choose*). The JS option must *win*, not be assumed.
-- Never finish stack selection without writing the verify commands into the repo's `AGENTS.md` (or leaving the `<!-- apex:agents:verify -->` stub if the stack is genuinely TBD).
+- Never finish stack selection without writing the verify commands into the repo's `AGENTS.md`; if the stack is genuinely TBD, leave the `<!-- apex:agents:verify -->` marker and its stub in place (until the stack is chosen).
 - Never output a recommendation without naming the runner-up and why it lost.
 - Never recommend MongoDB for apps with relational data — PostgreSQL handles documents via JSONB
 - Never recommend a hosted auth provider (Clerk, Supabase Auth) without noting its pricing at 10k+ MAU

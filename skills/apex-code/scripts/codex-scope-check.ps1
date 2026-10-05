@@ -8,7 +8,7 @@
 #      Claude Code's permission floor. `--sandbox workspace-write` is repo-wide, not spec-wide.
 # The only observation point is the host, after the subprocess exits.
 #
-# ── WHY THIS SCRIPT NO LONGER REVERTS ANYTHING (2026-07-14) ────────────────────────────────────
+# -- WHY THIS SCRIPT NO LONGER REVERTS ANYTHING (2026-07-14) ------------------------------------
 # It used to auto-revert: delete untracked violations, `git checkout --` tracked ones. That rests on
 # one inference:
 #
@@ -45,7 +45,7 @@
 # suite GUARANTEES you will not see -- the coder writes the same corrupted bytes into the expected
 # string as into the source, so the assertion compares corrupt to corrupt and passes.
 #
-# ── THREAT MODEL: A CARELESS CODER, NOT A HOSTILE ONE ──────────────────────────────────────────
+# -- THREAT MODEL: A CARELESS CODER, NOT A HOSTILE ONE -----------------------------------------
 # This catches a coder that WANDERED outside its file list. It is not a security boundary against a
 # coder trying to EVADE it, and pretending otherwise would be the same theatre the rest of this
 # harness was built to end. Stated limits, so nobody trusts it for more than it does:
@@ -63,6 +63,19 @@
 #
 # The real defences against a coder acting in bad faith are elsewhere and are not this script's job:
 # --sandbox, the review gate, and a human reading the diff before it is committed.
+#
+# BUILD OUTPUTS GRAMMAR (committed AGENTS.md at the snapshot HEAD only):
+# Exact '## Build outputs' (0-3 leading spaces, trailing whitespace allowed), outside Markdown
+# fences; the first nonblank line must open one fence with empty or 'text' info, closed before
+# any notes. Prose is allowed only below that fence, before the next heading. An empty fence is
+# valid; at most 32 repo-relative directory prefixes, one per nonblank line. No **, ?, [], {}, !,
+# backslashes, absolute/drive paths, empty, '.', '..', or '.git' segments, leading/trailing '/', or '*' in
+# the final segment. '*' matches within one segment; matching is OrdinalIgnoreCase and never
+# excludes an ancestor. Duplicate headings or any invalid entry disable the entire declaration.
+# Exclusions are content-blind: declared + ignored + untracked + not host-curated. The ignored
+# precondition within a declared prefix may come from an untracked nested .gitignore or
+# .git/info/exclude. Every other ignored path stays checked. Untracked -uall ?? leaves require
+# full-content SHA-256 hashing in-process; this costs reading every untracked leaf's bytes.
 
 [CmdletBinding()]
 param(
@@ -164,15 +177,10 @@ function Get-DirtySet {
     # having seen nothing. Ignored entries appear in BOTH the snapshot and the check, so a
     # pre-existing node_modules/ is byte-identical and ignored as host state; only a NEW or CHANGED
     # ignored path shows up as a violation.
-    $out = Invoke-Git status --porcelain --ignored=traditional
-
-    # git's EXIT CODE is the verdict. Without this check a FAILED `git status` (corrupt index, locked
-    # .git, not a repo) returns nothing, every caller reads "no dirty paths", and the scope check and
-    # the encoding gate both report CLEAN on a tree they never actually looked at. A gate that fails
-    # open is worse than no gate, because it reads as a pass.
-    if ($LASTEXITCODE -ne 0) {
-        throw "git status failed in '$repo' (exit $LASTEXITCODE). Refusing to report a clean tree that was never read."
-    }
+    # Enumerate tracked paths and ?? leaves separately from collapsed !! directories. Combining
+    # --ignored=traditional with -uall would expand every ignored build/cache file too.
+    $out = @(Invoke-Git status --porcelain --untracked-files=all)
+    $out += @(Invoke-Git status --porcelain --ignored=traditional | Where-Object { $_.StartsWith('!! ') })
 
     $set = @{}
     foreach ($line in $out) {
@@ -293,9 +301,167 @@ function Get-IndexHash([string]$relPath) {
     return '-'
 }
 
-function Get-PathState([string]$relPath) {
+function Get-PathState([string]$relPath, [string]$Status) {
+    if ($Status -ceq '??') {
+        $full = Join-Path $repo $relPath
+        # Nested repositories can remain ?? containers even with -uall. Keep their recursive
+        # metadata digest; neither a container nor an untracked leaf has an index entry.
+        if ($relPath.EndsWith('/') -or (Test-Path -LiteralPath $full -PathType Container)) {
+            return "work:$(Get-ContentHash $relPath) index:-"
+        }
+        if (-not (Test-Path -LiteralPath $full -PathType Leaf)) { return 'work:- index:-' }
+        $sha = [System.Security.Cryptography.SHA256]::Create()
+        $stream = $null
+        try {
+            $stream = New-Object IO.FileStream($full, 'Open', 'Read', ([IO.FileShare]::ReadWrite -bor [IO.FileShare]::Delete))
+            $hex = [System.BitConverter]::ToString($sha.ComputeHash($stream)).Replace('-', '').ToLowerInvariant()
+            return "work:raw:$hex index:-"
+        } finally {
+            if ($stream) { $stream.Dispose() }
+            $sha.Dispose()
+        }
+    }
     return "work:$(Get-ContentHash $relPath) index:$(Get-IndexHash $relPath)"
 }
+
+# BEGIN build-outputs lockstep
+function ConvertFrom-BuildOutputsSection {
+    param([AllowEmptyString()][string]$Text)
+
+    $lines = @($Text -split '\r?\n')
+    $headings = New-Object System.Collections.Generic.List[int]
+    $insideFence = New-Object 'bool[]' $lines.Count
+    $fenceChar = ''
+    $fenceLength = 0
+    for ($i = 0; $i -lt $lines.Count; $i++) {
+        $insideFence[$i] = $fenceLength -gt 0
+        if ($fenceLength -gt 0) {
+            $closePattern = '^ {0,3}' + [regex]::Escape($fenceChar) + '{' + $fenceLength + ',}[ \t]*$'
+            if ($lines[$i] -match $closePattern) { $fenceLength = 0 }
+            continue
+        }
+        if ($lines[$i] -match '^ {0,3}(?<Fence>`{3,}|~{3,})(?<Info>.*)$') {
+            $fenceChar = $Matches['Fence'].Substring(0, 1)
+            $fenceLength = $Matches['Fence'].Length
+            continue
+        }
+        if ($lines[$i] -cmatch '^ {0,3}## Build outputs[ \t]*$') { $headings.Add($i) }
+    }
+
+    $entries = New-Object System.Collections.Generic.List[string]
+    $reason = $null
+    $errorLine = 0
+    if ($headings.Count -gt 1) {
+        $reason = 'duplicate exact heading'
+        $errorLine = $headings[1] + 1
+    } elseif ($headings.Count -eq 1) {
+        $heading = $headings[0]
+        $opened = $false
+        $closed = $false
+        $openingLine = $heading + 1
+        for ($i = $heading + 1; $i -lt $lines.Count; $i++) {
+            $line = $lines[$i]
+            $errorLine = $i + 1
+            if (-not $opened) {
+                if ([string]::IsNullOrWhiteSpace($line)) { continue }
+                if ($line -notmatch '^ {0,3}(?<Fence>`{3,}|~{3,})(?<Info>.*)$') {
+                    $reason = 'fence must be the first nonblank line after the heading'
+                    break
+                }
+                $fenceChar = $Matches['Fence'].Substring(0, 1)
+                $fenceLength = $Matches['Fence'].Length
+                $info = $Matches['Info'].Trim()
+                if ($info -cne '' -and $info -cne 'text') {
+                    $reason = "fence info must be empty or 'text'"
+                    break
+                }
+                $opened = $true
+                $openingLine = $i + 1
+                continue
+            }
+            if ($closed) {
+                if (-not $insideFence[$i] -and $line -match '^ {0,3}#{1,6}(?:[ \t]+|$)') { break }
+                if ($line -match '^ {0,3}(?:`{3,}|~{3,})') {
+                    $reason = 'only one fence is allowed before the next heading'
+                    break
+                }
+                continue
+            }
+            $closePattern = '^ {0,3}' + [regex]::Escape($fenceChar) + '{' + $fenceLength + ',}[ \t]*$'
+            if ($line -match $closePattern) { $closed = $true; continue }
+            $entry = $line.Trim()
+            if ($entry.Length -eq 0) { continue }
+            if ($entries.Count -ge 32) { $reason = 'more than 32 entries'; break }
+            if ($entry.Contains('**') -or $entry -match '[?\[\]{}!]' -or $entry.Contains('\')) {
+                $reason = 'unsupported wildcard or backslash'; break
+            }
+            if ($entry.StartsWith('/') -or $entry.EndsWith('/') -or $entry.Contains(':')) {
+                $reason = 'path must be repo-relative without leading/trailing slash or drive'; break
+            }
+            $segments = @($entry -split '/')
+            $invalidSegment = $false
+            foreach ($segment in $segments) {
+                if ($segment.Length -eq 0 -or $segment -ceq '.' -or $segment -ceq '..' -or
+                        [string]::Equals($segment, '.git', [System.StringComparison]::OrdinalIgnoreCase)) {
+                    $invalidSegment = $true; break
+                }
+            }
+            if ($invalidSegment) { $reason = 'empty, dot, parent, or .git segment'; break }
+            if ($segments[-1].Contains('*')) { $reason = "'*' is forbidden in the final segment"; break }
+            $entries.Add($entry)
+        }
+        if (-not $reason -and (-not $opened -or -not $closed)) {
+            $reason = 'missing or unclosed fence'
+            $errorLine = $openingLine
+        }
+    }
+    $warning = $null
+    if ($reason) {
+        $entries.Clear()
+        $warning = "AGENTS.md '## Build outputs' unparseable (line ${errorLine}: $reason); no build-output exclusions applied"
+    }
+    return [pscustomobject]@{ Entries = @($entries.ToArray()); Warning = $warning }
+}
+
+function Test-IsDeclaredBuildOutputPath {
+    param([string]$Path, [AllowEmptyCollection()][string[]]$Entries)
+
+    $pathSegments = @($Path -split '/')
+    foreach ($entry in @($Entries)) {
+        $patternSegments = @($entry -split '/')
+        if ($pathSegments.Count -lt $patternSegments.Count) { continue }
+        $matchesPrefix = $true
+        for ($i = 0; $i -lt $patternSegments.Count; $i++) {
+            # Match literals ordinally, including the literal pieces surrounding a single-segment
+            # '*'. Regex IgnoreCase alone uses culture-sensitive casing and is not this contract.
+            $pieces = @($patternSegments[$i] -split '\*')
+            $segment = $pathSegments[$i]
+            $position = 0
+            if (-not $segment.StartsWith($pieces[0], [System.StringComparison]::OrdinalIgnoreCase)) {
+                $matchesPrefix = $false; break
+            }
+            $position = $pieces[0].Length
+            if ($pieces.Count -eq 1) {
+                if ($position -ne $segment.Length) { $matchesPrefix = $false; break }
+                continue
+            }
+            for ($j = 1; $j -lt $pieces.Count - 1; $j++) {
+                $found = $segment.IndexOf($pieces[$j], $position, [System.StringComparison]::OrdinalIgnoreCase)
+                if ($found -lt 0) { $matchesPrefix = $false; break }
+                $position = $found + $pieces[$j].Length
+            }
+            if (-not $matchesPrefix) { break }
+            $lastPiece = $pieces[-1]
+            if (-not $segment.EndsWith($lastPiece, [System.StringComparison]::OrdinalIgnoreCase) -or
+                    $segment.Length - $lastPiece.Length -lt $position) {
+                $matchesPrefix = $false; break
+            }
+        }
+        if ($matchesPrefix) { return $true }
+    }
+    return $false
+}
+# END build-outputs lockstep
 
 # The snapshot lives OUTSIDE the worktree.
 #
@@ -326,7 +492,7 @@ if ($WrittenPathsFile -and
 
 # --------------------------------------------------------------------------- ENCODING SCAN
 # Codex-on-Windows double-encodes non-ASCII it writes into source: an em-dash goes in as U+2014 and
-# comes out as `â€"` (the UTF-8 bytes read back as CP1252, then re-encoded as UTF-8).
+# comes out as mojibake (UTF-8 read as CP1252, then re-encoded as UTF-8).
 #
 # WHY A MACHINE HAS TO DO THIS: **the test suite cannot catch it, by construction.** The coder writes
 # the SAME corrupted bytes into the expected string as into the source, so the assertion compares
@@ -339,7 +505,7 @@ if ($WrittenPathsFile -and
 # reads the paths and decides.
 #
 # NO OVERRIDE SWITCH. Every exemption written into this harness became a hole someone walked through.
-# A hit is a hit; if it is a false positive, that is a file with `â€` in it, which is worth a look.
+# A hit is a hit; even a false positive contains a mojibake signature worth inspecting.
 if ($EncodingScan) {
     # --- THE DETECTOR, derived from the encoding rather than from the one example we had ----------
     # Mojibake = UTF-8 bytes decoded as CP1252/Latin-1, then re-encoded as UTF-8. Read the byte
@@ -559,11 +725,12 @@ if ($Snapshot) {
     $states = [ordered]@{}
     $statuses = [ordered]@{}
     foreach ($p in $dirty.Keys) {
-        $states[$p] = Get-PathState $p
+        $states[$p] = Get-PathState $p ([string]$dirty[$p])
         $statuses[$p] = [string]$dirty[$p]
     }
 
     $state = [ordered]@{
+        format   = 2
         task     = $Task
         head     = (Invoke-Git rev-parse HEAD)
         dirty    = @($dirty.Keys)
@@ -571,7 +738,7 @@ if ($Snapshot) {
         statuses = $statuses
         takenUtc = (Invoke-Git log -1 --format=%cI)   # no Get-Date: keep it git-sourced
     }
-    $state | ConvertTo-Json -Depth 5 | Out-File -FilePath $snapPath -Encoding utf8
+    [System.IO.File]::WriteAllText($snapPath, ($state | ConvertTo-Json -Depth 5), [System.Text.UTF8Encoding]::new($false))
     Write-Host "[scope] snapshot for '$Task': HEAD=$($state.head.Substring(0,7)), $($dirty.Count) path(s) already dirty (host work)."
 
     # --- RE-DISPATCH HAZARD ---------------------------------------------------------------------
@@ -613,7 +780,11 @@ if (-not (Test-Path $snapPath)) {
     throw "No snapshot for task '$Task'. Run -Snapshot BEFORE dispatching, or the check cannot tell the coder's writes from the host's."
 }
 
-$snap = Get-Content $snapPath -Raw | ConvertFrom-Json
+$snap = Get-Content $snapPath -Raw -Encoding UTF8 | ConvertFrom-Json
+if (-not ($snap.PSObject.Properties.Name -ccontains 'format') -or
+        -not ($snap.format -is [int] -or $snap.format -is [long]) -or $snap.format -cne 2) {
+    throw "snapshot for '$Task' predates scope snapshot format 2 (leaf enumeration); re-run -Snapshot"
+}
 
 $preState = @{}
 if ($snap.PSObject.Properties.Name -contains 'states' -and $snap.states) {
@@ -638,6 +809,10 @@ foreach ($a in $Authorized) {
 }
 
 $nowDirty = Get-DirtySet
+$nowByNorm = @{}
+foreach ($p in $nowDirty.Keys) {
+    $nowByNorm[(Normalize $p)] = [pscustomobject]@{ Path = [string]$p; Status = [string]$nowDirty[$p] }
+}
 $violations = @()   # the coder wrote these, and they are not authorized
 $untouched = @()    # dirty before the dispatch AND byte-identical since: not the coder's
 
@@ -681,7 +856,7 @@ function Test-IsAuthorized([string]$n) {
 # to HEAD, removes it from `git status` entirely -- so the old loop saw nothing and exited 0 while
 # host work was destroyed. Absence is a change too.
 $allPaths = New-Object System.Collections.Generic.HashSet[string]
-foreach ($p in $nowDirty.Keys) { [void]$allPaths.Add((Normalize $p)) }
+foreach ($p in $nowByNorm.Keys) { [void]$allPaths.Add($p) }
 foreach ($p in $preDirty.Keys) { [void]$allPaths.Add($p) }
 
 # Lockstep coupling: mirrors tree-pin.ps1 $runtimeExclusions plus its match/root gate. Unlike
@@ -714,9 +889,9 @@ function Test-IsRuntimeMarkerFile([string]$n) {
 
     $full = Join-Path $repo $n
     if (Test-Path -LiteralPath $full -PathType Leaf) {
-        foreach ($k in $nowDirty.Keys) {
-            $rawNowPath = ([string]$k) -replace '\\', '/'
-            if ((Normalize $k) -eq $n -and $rawNowPath.EndsWith('/')) { return $false }
+        if ($nowByNorm.ContainsKey($n)) {
+            $rawNowPath = ([string]$nowByNorm[$n].Path) -replace '\\', '/'
+            if ($rawNowPath.EndsWith('/')) { return $false }
         }
         return $true
     }
@@ -725,7 +900,7 @@ function Test-IsRuntimeMarkerFile([string]$n) {
     foreach ($d in @($snap.dirty)) {
         $rawSnapshotPath = ([string]$d) -replace '\\', '/'
         if ((Normalize $d) -eq $n -and -not $rawSnapshotPath.EndsWith('/') -and
-                $preState.ContainsKey($n) -and ([string]$preState[$n]) -match '^work:[0-9a-f]+ index:') {
+                $preState.ContainsKey($n) -and ([string]$preState[$n]) -match '^work:(?:raw:)?[0-9a-f]+ index:') {
             return $true
         }
     }
@@ -776,6 +951,16 @@ function Test-IsDerivedCachePath([string]$NormalizedPath) {
 }
 
 $applyDerivedCacheExclusions = $true
+$applyDeclaredBuildOutputExclusions = $true
+
+function Test-IsIgnoredUntrackedTransition([string]$n) {
+    $wasPresentAtSnapshot = $preDirty.ContainsKey($n)
+    $isPresentNow = $nowByNorm.ContainsKey($n)
+    $ignoredNow = $isPresentNow -and $nowByNorm[$n].Status -ceq '!!'
+    return ((-not $wasPresentAtSnapshot -and $ignoredNow) -or
+        ($wasPresentAtSnapshot -and $preStatus.ContainsKey($n) -and $preStatus[$n] -ceq '!!' -and
+            ($ignoredNow -or -not $isPresentNow)))
+}
 
 $curatedFiles = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
 $curatedDirs = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
@@ -805,10 +990,27 @@ try {
     Write-Host "[scope] WARNING: runtime inventory could not be built, so nothing was excluded." -ForegroundColor Yellow
 }
 
+# Fetch through this script's fail-closed adapter, outside the shared pure-function block. A
+# failed lookup is not an absent file; disable only this class and keep all other checks running.
+$declaredBuildOutputs = @()
+try {
+    $agentsAtHead = @(Invoke-Git ls-tree --full-tree --name-only $snap.head '--' AGENTS.md)
+    if ($agentsAtHead -ccontains 'AGENTS.md') {
+        $agentsText = [string]::Join("`n", [string[]]@(Invoke-Git show "$($snap.head):AGENTS.md"))
+        $declaration = ConvertFrom-BuildOutputsSection -Text $agentsText
+        $declaredBuildOutputs = @($declaration.Entries)
+        if ($declaration.Warning) { Write-Host "[scope] WARNING: $($declaration.Warning)" -ForegroundColor Yellow }
+    }
+} catch {
+    $applyDeclaredBuildOutputExclusions = $false
+    Write-Host "[scope] WARNING: AGENTS.md build-output declarations unavailable ($($_.Exception.Message)); declared class disabled" -ForegroundColor Yellow
+}
+
 $collectWritten = [bool]$WrittenPathsFile
 $writtenSet = $null
 $runtimeExcludedCount = 0
 $derivedCacheExcludedCount = 0
+$declaredBuildOutputExcludedCount = 0
 if ($collectWritten) {
     # Lockstep sibling: the non-collecting branch differs only by omitting writtenSet accumulation;
     # keep its GONE/untouched/isDirty classification line-for-line identical to this branch.
@@ -818,35 +1020,24 @@ if ($collectWritten) {
             $runtimeExcludedCount++
             continue
         }
-        if ($applyDerivedCacheExclusions -and (Test-IsDerivedCachePath $n) -and -not (Test-IsHostCurated $n)) {
-            $wasPresentAtSnapshot = $preDirty.ContainsKey($n)
-            $isPresentNow = $false
-            $statusNowForExclusion = $null
-            foreach ($k in $nowDirty.Keys) {
-                if ((Normalize $k) -eq $n) {
-                    $isPresentNow = $true
-                    $statusNowForExclusion = [string]$nowDirty[$k]
-                    break
-                }
-            }
-            if ((-not $wasPresentAtSnapshot -and $isPresentNow -and $statusNowForExclusion -eq '!!') -or
-                    ($wasPresentAtSnapshot -and $preStatus.ContainsKey($n) -and $preStatus[$n] -eq '!!' -and
-                        (($isPresentNow -and $statusNowForExclusion -eq '!!') -or -not $isPresentNow))) {
+        if ($applyDerivedCacheExclusions -and -not (Test-IsHostCurated $n) -and (Test-IsIgnoredUntrackedTransition $n)) {
+            if (Test-IsDerivedCachePath $n) {
                 $derivedCacheExcludedCount++
+                continue
+            }
+            if ($applyDeclaredBuildOutputExclusions -and (Test-IsDeclaredBuildOutputPath -Path $n -Entries $declaredBuildOutputs)) {
+                $declaredBuildOutputExcludedCount++
                 continue
             }
         }
         if (Test-IsAuthorized $n) {
             $wasDirty = $preDirty.ContainsKey($n)
-            $isDirty = $false
-            foreach ($k in $nowDirty.Keys) {
-                if ((Normalize $k) -eq $n) { $isDirty = $true; break }
-            }
+            $isDirty = $nowByNorm.ContainsKey($n)
 
             if ($wasDirty -and -not $isDirty) {
                 [void]$writtenSet.Add($n)
             } elseif ($isDirty -and -not ($preDirty.ContainsKey($n) -and $preState.ContainsKey($n) -and
-                    (Get-PathState $n) -eq $preState[$n])) {
+                    (Get-PathState $n $nowByNorm[$n].Status) -ceq $preState[$n])) {
                 [void]$writtenSet.Add($n)
             }
             continue
@@ -854,11 +1045,9 @@ if ($collectWritten) {
         if (Test-IsStatePath $n) { continue }
 
         $wasDirty = $preDirty.ContainsKey($n)
-        $isDirty = $false
+        $isDirty = $nowByNorm.ContainsKey($n)
         $statusNow = '??'
-        foreach ($k in $nowDirty.Keys) {
-            if ((Normalize $k) -eq $n) { $isDirty = $true; $statusNow = $nowDirty[$k]; break }
-        }
+        if ($isDirty) { $statusNow = $nowByNorm[$n].Status }
 
         if ($wasDirty -and -not $isDirty) {
             # It was dirty before the dispatch and is not dirty now: something reverted or deleted host
@@ -873,7 +1062,7 @@ if ($collectWritten) {
         }
 
         if ($wasDirty -and $preState.ContainsKey($n)) {
-            if ((Get-PathState $n) -eq $preState[$n]) {
+            if ((Get-PathState $n $statusNow) -ceq $preState[$n]) {
                 # Byte-identical since the snapshot, working tree AND index. The coder was never in here:
                 # it is host work (typically an uncommitted earlier wave, or docs/status.md).
                 $untouched += $n
@@ -894,21 +1083,13 @@ if ($collectWritten) {
             $runtimeExcludedCount++
             continue
         }
-        if ($applyDerivedCacheExclusions -and (Test-IsDerivedCachePath $n) -and -not (Test-IsHostCurated $n)) {
-            $wasPresentAtSnapshot = $preDirty.ContainsKey($n)
-            $isPresentNow = $false
-            $statusNowForExclusion = $null
-            foreach ($k in $nowDirty.Keys) {
-                if ((Normalize $k) -eq $n) {
-                    $isPresentNow = $true
-                    $statusNowForExclusion = [string]$nowDirty[$k]
-                    break
-                }
-            }
-            if ((-not $wasPresentAtSnapshot -and $isPresentNow -and $statusNowForExclusion -eq '!!') -or
-                    ($wasPresentAtSnapshot -and $preStatus.ContainsKey($n) -and $preStatus[$n] -eq '!!' -and
-                        (($isPresentNow -and $statusNowForExclusion -eq '!!') -or -not $isPresentNow))) {
+        if ($applyDerivedCacheExclusions -and -not (Test-IsHostCurated $n) -and (Test-IsIgnoredUntrackedTransition $n)) {
+            if (Test-IsDerivedCachePath $n) {
                 $derivedCacheExcludedCount++
+                continue
+            }
+            if ($applyDeclaredBuildOutputExclusions -and (Test-IsDeclaredBuildOutputPath -Path $n -Entries $declaredBuildOutputs)) {
+                $declaredBuildOutputExcludedCount++
                 continue
             }
         }
@@ -916,11 +1097,9 @@ if ($collectWritten) {
         if (Test-IsStatePath $n) { continue }
 
         $wasDirty = $preDirty.ContainsKey($n)
-        $isDirty = $false
+        $isDirty = $nowByNorm.ContainsKey($n)
         $statusNow = '??'
-        foreach ($k in $nowDirty.Keys) {
-            if ((Normalize $k) -eq $n) { $isDirty = $true; $statusNow = $nowDirty[$k]; break }
-        }
+        if ($isDirty) { $statusNow = $nowByNorm[$n].Status }
 
         if ($wasDirty -and -not $isDirty) {
             # It was dirty before the dispatch and is not dirty now: something reverted or deleted host
@@ -934,7 +1113,7 @@ if ($collectWritten) {
         }
 
         if ($wasDirty -and $preState.ContainsKey($n)) {
-            if ((Get-PathState $n) -eq $preState[$n]) {
+            if ((Get-PathState $n $statusNow) -ceq $preState[$n]) {
                 # Byte-identical since the snapshot, working tree AND index. The coder was never in here:
                 # it is host work (typically an uncommitted earlier wave, or docs/status.md).
                 $untouched += $n
@@ -951,6 +1130,9 @@ if ($runtimeExcludedCount -gt 0) {
 }
 if ($derivedCacheExcludedCount -gt 0) {
     Write-Host "[scope] $derivedCacheExcludedCount derived-cache path(s) excluded (ignored + untracked + exact-list; every other ignored path is still checked)."
+}
+if ($declaredBuildOutputExcludedCount -gt 0) {
+    Write-Host "[scope] $declaredBuildOutputExcludedCount declared build-output path(s) excluded (AGENTS.md '## Build outputs' at HEAD; ignored + untracked + declared; every other ignored path is still checked)."
 }
 
 if ($WrittenPathsFile) {

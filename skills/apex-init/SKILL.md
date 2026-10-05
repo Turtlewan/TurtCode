@@ -1,7 +1,7 @@
 ---
 skill: apex-init
-version: 1.7.2
-last_updated: 2026-07-29
+version: 1.7.3
+last_updated: 2026-10-05
 sources:
   - APEX Design Specification 2026-05-24
   - GSD (Get Shit Done) — github.com/gsd-build/get-shit-done
@@ -49,8 +49,8 @@ After the answers:
   (`## Verify commands`) — that is the recipe's only home (ADR-037).
 - User wants a recommendation (or is unsure) → **invoke `apex-stack`** before scaffolding;
   it selects merit-based across ecosystems, then writes the verify commands into AGENTS.md.
-- User explicitly defers the decision → scaffold with stack "TBD", leave the
-  `<!-- apex:agents:verify -->` stub in AGENTS.md, and add "Stack selection (apex-stack)" to
+- User explicitly defers the decision → scaffold with stack "TBD"; leave the
+  `<!-- apex:agents:verify -->` marker and its stub in place (until the stack is chosen), and add "Stack selection (apex-stack)" to
   ROADMAP.md phase 1 — it must run before the first build spec.
 
 ## Step 2: Create directory structure
@@ -115,8 +115,10 @@ during bootstrap.
 **AGENTS.md — Codex build instructions (ADR-026).** Seed `AGENTS.md` in the project root from
 `~/.claude/skills/apex-orchestrate/templates/AGENTS-template.md`. The universal sections (the
 build-a-spec workflow + hard rules) are verbatim. Fill **What this repo is** from PROJECT.md, and the
-**Verify commands** from the chosen stack's real commands — install, lint, typecheck, test, build
-(leave the `<!-- apex:agents:verify -->` stub if the stack is TBD). **AGENTS.md is the recipe's only
+**Verify commands** from the chosen stack's real commands — install, lint, typecheck, test, build.
+Replace the marker and entire stub with one fence directly under the exact heading `## Verify commands`
+(blank lines only), and put notes after the closing fence. If the stack is TBD, leave the
+`<!-- apex:agents:verify -->` marker and its stub in place (until the stack is chosen). **AGENTS.md is the recipe's only
 home (ADR-037)** — Codex reads it natively and never sees status.md. Leave **Project layout** + **Conventions** as
 `<!-- apex:agents:stub -->` blocks — planning fills them as code takes shape. AGENTS.md is the
 Codex-facing projection of the project's build context (commands + hard-blocks + structure); it tracks

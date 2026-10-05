@@ -7,9 +7,10 @@ $testRoot = Join-Path ([System.IO.Path]::GetTempPath()) ("apex-tree-pin-test-$PI
 $failures = New-Object System.Collections.Generic.List[string]
 $restoreGitConfigGlobal = $false
 $savedGitConfigGlobal = $null
+$savedApexStateDir = [Environment]::GetEnvironmentVariable('APEX_STATE_DIR', 'Process')
 
 function Assert-Equal([string]$Name, $Expected, $Actual) {
-    if ($Expected -eq $Actual) {
+    if ($Expected -ceq $Actual) {
         Write-Host "PASS: $Name" -ForegroundColor Green
     } else {
         $failures.Add("$Name -- expected '$Expected', got '$Actual'")
@@ -114,6 +115,43 @@ function Invoke-TreePin([string[]]$Arguments) {
     }
 }
 
+function Get-BuildOutputsBlockBytes([string]$Path) {
+    $text = [System.Text.Encoding]::UTF8.GetString([System.IO.File]::ReadAllBytes($Path))
+    $block = [regex]::Match($text, '(?ms)^# BEGIN build-outputs lockstep\r?\n.*?^# END build-outputs lockstep')
+    if (-not $block.Success) { throw "Missing build-outputs lockstep block in $Path" }
+    return ,([System.Text.Encoding]::UTF8.GetBytes($block.Value))
+}
+
+function Assert-BuildOutputsLockstep([string]$TreePinPath, [string]$ScopePath) {
+    $pinBytes = Get-BuildOutputsBlockBytes $TreePinPath
+    $scopeBytes = Get-BuildOutputsBlockBytes $ScopePath
+    if ([Convert]::ToBase64String($pinBytes) -cne [Convert]::ToBase64String($scopeBytes)) {
+        throw 'Build-outputs lockstep blocks differ byte-for-byte'
+    }
+}
+
+function New-BuildOutputFixture([string]$Name, [string]$AgentsText) {
+    $fixture = New-TestFixture $Name '.gitignore' "src/*/bin/`nsrc/*/obj/`n"
+    Write-Utf8File (Join-Path $fixture.Root 'AGENTS.md') $AgentsText
+    Add-FixtureCommit $fixture @('AGENTS.md') 'Declare fixture build outputs'
+    return $fixture
+}
+
+function New-AgentsFetchFailureShim([string]$Name, [string]$FailCommand) {
+    $shimRoot = Join-Path $testRoot $Name
+    New-Item -ItemType Directory -Path $shimRoot | Out-Null
+    $gitPath = (Get-Command git.exe -ErrorAction Stop).Source
+    $failLine = if ($FailCommand -ceq 'ls-tree') {
+        'if "%~3"=="ls-tree" if "%~4"=="--full-tree" if "%~5"=="--name-only" if "%~8"=="AGENTS.md" exit /b 42'
+    } else {
+        'if "%~3"=="show" if "%~4"=="HEAD:AGENTS.md" exit /b 42'
+    }
+    [System.IO.File]::WriteAllLines((Join-Path $shimRoot 'git.cmd'), [string[]]@(
+        '@echo off', $failLine, ('"{0}" %*' -f $gitPath), 'exit /b %ERRORLEVEL%'
+    ), [System.Text.Encoding]::ASCII)
+    return $shimRoot
+}
+
 function Get-PinPath([string]$Root, [string]$Label, [string]$PinDirectory) {
     $worktreeFull = (Resolve-Path -LiteralPath $Root).Path
     $sha = [System.Security.Cryptography.SHA256]::Create()
@@ -127,6 +165,16 @@ function Get-PinPath([string]$Root, [string]$Label, [string]$PinDirectory) {
 
 try {
     New-Item -ItemType Directory -Path $testRoot | Out-Null
+
+    $savedGitConfigGlobal = [Environment]::GetEnvironmentVariable('GIT_CONFIG_GLOBAL', 'Process')
+    $restoreGitConfigGlobal = $true
+    $isolatedGlobalIgnore = Join-Path $testRoot 'empty-global-ignore'
+    $isolatedGlobalConfig = Join-Path $testRoot 'isolated-global.gitconfig'
+    Write-Utf8File $isolatedGlobalIgnore ''
+    $isolatedGlobalIgnoreForConfig = $isolatedGlobalIgnore -replace '\\', '/'
+    Write-Utf8File $isolatedGlobalConfig "[core]`n    excludesFile = $isolatedGlobalIgnoreForConfig`n"
+    $env:GIT_CONFIG_GLOBAL = $isolatedGlobalConfig
+    $env:APEX_STATE_DIR = Join-Path $testRoot 'state'
 
     $rootOne = Join-Path $testRoot 'root-one'
     $rootTwo = Join-Path $testRoot 'root-two'
@@ -321,14 +369,6 @@ try {
 
     # Synced runtime markers are filtered only when they are ignored regular files under the
     # configured runtime root. Isolate the fixtures from any user-level global excludes first.
-    $savedGitConfigGlobal = [Environment]::GetEnvironmentVariable('GIT_CONFIG_GLOBAL', 'Process')
-    $restoreGitConfigGlobal = $true
-    $isolatedGlobalIgnore = Join-Path $testRoot 'empty-global-ignore'
-    $isolatedGlobalConfig = Join-Path $testRoot 'isolated-global.gitconfig'
-    Write-Utf8File $isolatedGlobalIgnore ''
-    $isolatedGlobalIgnoreForConfig = $isolatedGlobalIgnore -replace '\\', '/'
-    Write-Utf8File $isolatedGlobalConfig "[core]`n    excludesFile = $isolatedGlobalIgnoreForConfig`n"
-    $env:GIT_CONFIG_GLOBAL = $isolatedGlobalConfig
 
     $fixture = New-TestFixture 'synced-marker-rewrites' '.gitignore' "/skills/synced/`n/skills/synced-foo/`n"
     Write-Utf8File (Join-Path $fixture.Root 'skills/apex/SKILL.md') "# APEX skill`n"
@@ -493,6 +533,156 @@ try {
     $result = Invoke-TreePin (@('-Verify') + $argsForCase)
     Assert-Equal 'manifest-named directory moves the tree' 69 $result.ExitCode
 
+    # Read the sibling WORKING-TREE source; no commit/ref/SHA lookup substitutes for this file.
+    $scopePath = Join-Path $PSScriptRoot 'codex-scope-check.ps1'
+    Assert-BuildOutputsLockstep $scriptPath $scopePath
+    Assert-True 'build-output marker blocks are byte-equal to sibling working-tree scope checker' $true
+    $scratchPin = Join-Path $testRoot 'mutated-tree-pin.ps1'
+    Copy-Item -LiteralPath $scriptPath -Destination $scratchPin
+    $scratchText = [System.IO.File]::ReadAllText($scratchPin).Replace('duplicate exact heading', 'mutated exact heading')
+    Write-Utf8File $scratchPin $scratchText
+    $mutationRejected = $false
+    try { Assert-BuildOutputsLockstep $scratchPin $scopePath } catch { $mutationRejected = $true }
+    Assert-True 'lockstep check rejects a mutated scratch copy' $mutationRejected
+
+    # Execute only the shared pure functions to inspect parser results without invoking tree-pin.
+    $pureBlock = [System.Text.Encoding]::UTF8.GetString((Get-BuildOutputsBlockBytes $scriptPath))
+    . ([scriptblock]::Create($pureBlock))
+    $fence = '```'
+    $validAgents = "# Fixture`n## Build outputs`n$fence`nsrc/*/bin`nsrc/*/obj`n$fence`n"
+    $templatePath = Join-Path (Split-Path -Parent (Split-Path -Parent $PSScriptRoot)) 'apex-orchestrate/templates/AGENTS-template.md'
+    $templateDeclaration = ConvertFrom-BuildOutputsSection -Text ([System.IO.File]::ReadAllText($templatePath))
+    Assert-Equal 'real AGENTS template has zero build-output entries' 0 @($templateDeclaration.Entries).Count
+    Assert-True 'real AGENTS template has no build-output warning' ([string]::IsNullOrEmpty($templateDeclaration.Warning))
+    $exampleAgents = "# Fixture`n~~~~markdown`n## Build outputs`n$fence`nsrc/*/obj`n$fence`n~~~~`n"
+    $exampleDeclaration = ConvertFrom-BuildOutputsSection -Text $exampleAgents
+    Assert-Equal 'fenced-example heading has zero entries' 0 @($exampleDeclaration.Entries).Count
+    Assert-True 'fenced-example heading has no warning' ([string]::IsNullOrEmpty($exampleDeclaration.Warning))
+
+    foreach ($declared in @($true, $false)) {
+        $name = if ($declared) { 'declared-ignored-obj' } else { 'undeclared-ignored-obj' }
+        $agentsText = if ($declared) { $validAgents } else { '# No declaration' }
+        $fixture = New-BuildOutputFixture $name $agentsText
+        Write-Utf8File (Join-Path $fixture.Root 'src/App/App.cs') "tracked source`n"
+        Add-FixtureCommit $fixture @('src/App/App.cs') 'Track project source'
+        Write-Utf8File (Join-Path $fixture.Root 'src/App/obj/output.txt') 'before'
+        $argsForCase = Get-FixtureArgs $fixture $fixture.Root
+        $result = Invoke-TreePin (@('-Pin') + $argsForCase)
+        Assert-Equal "$name pin exits 0" 0 $result.ExitCode
+        Write-Utf8File (Join-Path $fixture.Root 'src/App/obj/output.txt') 'longer output after pin'
+        $result = Invoke-TreePin (@('-Verify') + $argsForCase)
+        $expected = if ($declared) { 0 } else { 69 }
+        Assert-Equal "$name write verification" $expected $result.ExitCode
+    }
+
+    $fixture = New-BuildOutputFixture 'new-project' $validAgents
+    Write-Utf8File (Join-Path $fixture.Root 'src/New/App.cs') 'untracked source'
+    Write-Utf8File (Join-Path $fixture.Root 'src/New/bin/output.txt') 'before'
+    $projectStatus = @(& git -C $fixture.Root status --porcelain --ignored=traditional)
+    if ($LASTEXITCODE -ne 0) { throw 'git status failed for new-project fixture' }
+    Assert-True 'new project is a collapsed question-mark directory' ($projectStatus -ccontains '?? src/')
+    Assert-True 'new project has an actual ignored bin row' ($projectStatus -ccontains '!! src/New/bin/')
+    $argsForCase = Get-FixtureArgs $fixture $fixture.Root
+    $result = Invoke-TreePin (@('-Pin') + $argsForCase)
+    Assert-Equal 'new project pin exits 0' 0 $result.ExitCode
+    Write-Utf8File (Join-Path $fixture.Root 'src/New/bin/output.txt') 'longer ignored output'
+    $result = Invoke-TreePin (@('-Verify') + $argsForCase)
+    Assert-Equal 'declared ignored bin write inside collapsed question-mark directory verifies 0' 0 $result.ExitCode
+    Write-Utf8File (Join-Path $fixture.Root 'src/New/App.cs') 'changed source with more bytes'
+    $result = Invoke-TreePin (@('-Verify') + $argsForCase)
+    Assert-Equal 'source write inside collapsed question-mark directory verifies 69' 69 $result.ExitCode
+
+    $fixture = New-BuildOutputFixture 'tracked-bin' $validAgents
+    Write-Utf8File (Join-Path $fixture.Root 'src/App/bin/run.ps1') 'tracked executable'
+    Add-FixtureCommit $fixture @('src/App/bin/run.ps1') 'Track bin executable' -Force
+    $argsForCase = Get-FixtureArgs $fixture $fixture.Root
+    $result = Invoke-TreePin (@('-Pin') + $argsForCase)
+    Assert-Equal 'tracked bin pin exits 0' 0 $result.ExitCode
+    Write-Utf8File (Join-Path $fixture.Root 'src/App/bin/run.ps1') 'changed tracked executable'
+    $result = Invoke-TreePin (@('-Verify') + $argsForCase)
+    Assert-Equal 'tracked bin edit verifies 69 despite declaration' 69 $result.ExitCode
+
+    # The declaration must be committed, and only ignored rows qualify for exclusion.
+    $fixture = New-BuildOutputFixture 'uncommitted-declaration' '# No declaration'
+    Write-Utf8File (Join-Path $fixture.Root 'AGENTS.md') $validAgents
+    Write-Utf8File (Join-Path $fixture.Root 'src/App/obj/output.txt') 'before'
+    $argsForCase = Get-FixtureArgs $fixture $fixture.Root
+    $result = Invoke-TreePin (@('-Pin') + $argsForCase)
+    Assert-Equal 'uncommitted declaration pin exits 0' 0 $result.ExitCode
+    Write-Utf8File (Join-Path $fixture.Root 'src/App/obj/output.txt') 'longer output'
+    $result = Invoke-TreePin (@('-Verify') + $argsForCase)
+    Assert-Equal 'working-tree-only declaration does not exclude ignored output' 69 $result.ExitCode
+
+    $fixture = New-TestFixture 'unignored-bin' 'AGENTS.md' $validAgents
+    Write-Utf8File (Join-Path $fixture.Root 'src/App/bin/run.ps1') 'unignored source'
+    $argsForCase = Get-FixtureArgs $fixture $fixture.Root
+    $result = Invoke-TreePin (@('-Pin') + $argsForCase)
+    Assert-Equal 'unignored bin pin exits 0' 0 $result.ExitCode
+    Write-Utf8File (Join-Path $fixture.Root 'src/App/bin/run.ps1') 'changed unignored source'
+    $result = Invoke-TreePin (@('-Verify') + $argsForCase)
+    Assert-Equal 'declared but unignored bin edit verifies 69' 69 $result.ExitCode
+
+    $malformedAgents = "## Build outputs`n$fence`nsrc/*/obj`n**/bin`n$fence`n"
+    $duplicateAgents = $validAgents + "## Build outputs`n$fence`nsrc/*/obj`n$fence`n"
+    foreach ($case in @(
+            [pscustomobject]@{ Name = 'malformed'; Text = $malformedAgents; Warn = $true },
+            [pscustomobject]@{ Name = 'duplicate'; Text = $duplicateAgents; Warn = $true },
+            [pscustomobject]@{ Name = 'fenced-example'; Text = $exampleAgents; Warn = $false })) {
+        $declaration = ConvertFrom-BuildOutputsSection -Text $case.Text
+        Assert-Equal "$($case.Name) parser applies no exclusions" 0 @($declaration.Entries).Count
+        $fixture = New-BuildOutputFixture $case.Name $case.Text
+        Write-Utf8File (Join-Path $fixture.Root 'src/App/App.cs') 'source'
+        Add-FixtureCommit $fixture @('src/App/App.cs') 'Track source'
+        Write-Utf8File (Join-Path $fixture.Root 'src/App/obj/output.txt') 'before'
+        $argsForCase = Get-FixtureArgs $fixture $fixture.Root
+        $result = Invoke-TreePin @('-Digest', '-Worktree', $fixture.Root)
+        Assert-Equal "$($case.Name) Digest exits 0" 0 $result.ExitCode
+        Assert-True "$($case.Name) Digest prints only one 64-hex digest" ($result.Output -cmatch '\A[0-9a-f]{64}\z')
+        $result = Invoke-TreePin (@('-Pin') + $argsForCase)
+        Assert-Equal "$($case.Name) Pin exits 0" 0 $result.ExitCode
+        $warningCount = if ($case.Warn) { 1 } else { 0 }
+        Assert-Equal "$($case.Name) Pin warning count" $warningCount ([regex]::Matches($result.Output, '\[tree-pin\] WARNING:').Count)
+        Write-Utf8File (Join-Path $fixture.Root 'src/App/obj/output.txt') 'longer output after pin'
+        $result = Invoke-TreePin (@('-Verify') + $argsForCase)
+        Assert-Equal "$($case.Name) ignored output write verifies 69" 69 $result.ExitCode
+        Assert-Equal "$($case.Name) Verify warning count" $warningCount ([regex]::Matches($result.Output, '\[tree-pin\] WARNING:').Count)
+    }
+
+    # A committed-AGENTS fetch failure must throw; no valid pin/digest may escape.
+    $fetchFixture = New-BuildOutputFixture 'agents-fetch-failure' $validAgents
+    foreach ($fetchCommand in @('ls-tree', 'show')) {
+        $shimRoot = New-AgentsFetchFailureShim ('shim-' + $fetchCommand) $fetchCommand
+        $savedPath = $env:PATH
+        try {
+            $env:PATH = $shimRoot + [System.IO.Path]::PathSeparator + $savedPath
+            foreach ($mode in @('-Pin', '-Verify', '-Digest')) {
+                $result = Invoke-TreePin (@($mode) + (Get-FixtureArgs $fetchFixture $fetchFixture.Root))
+                Assert-True "$fetchCommand committed AGENTS fetch failure throws for $mode" ($result.ExitCode -ne 0 -and $result.ExitCode -ne 69)
+                Assert-True "$fetchCommand fetch failure reports native exit 42 for $mode" ($result.Output -match 'git exited with status 42')
+            }
+            Assert-Equal "$fetchCommand fetch failure creates no pin" 0 @(Get-ChildItem -LiteralPath $fetchFixture.Pins -File).Count
+        } finally { $env:PATH = $savedPath }
+    }
+
+    # PinAlso roots must load their own committed declarations.
+    $declaredRoot = New-BuildOutputFixture 'multi-declared' $validAgents
+    $undeclaredRoot = New-BuildOutputFixture 'multi-undeclared' '# No declaration'
+    foreach ($fixture in @($declaredRoot, $undeclaredRoot)) {
+        Write-Utf8File (Join-Path $fixture.Root 'src/App/App.cs') 'source'
+        Add-FixtureCommit $fixture @('src/App/App.cs') 'Track source'
+        Write-Utf8File (Join-Path $fixture.Root 'src/App/obj/output.txt') 'before'
+    }
+    $multiBuildArgs = @('-Worktree', $declaredRoot.Root, '-PinAlso', $undeclaredRoot.Root,
+        '-Label', 'multi-build', '-PinDirectory', $declaredRoot.Pins)
+    $result = Invoke-TreePin (@('-Pin') + $multiBuildArgs)
+    Assert-Equal 'multi-root build declarations Pin exits 0' 0 $result.ExitCode
+    Write-Utf8File (Join-Path $declaredRoot.Root 'src/App/obj/output.txt') 'longer declared output'
+    $result = Invoke-TreePin (@('-Verify') + $multiBuildArgs)
+    Assert-Equal 'multi-root declared output write verifies 0' 0 $result.ExitCode
+    Write-Utf8File (Join-Path $undeclaredRoot.Root 'src/App/obj/output.txt') 'longer undeclared output'
+    $result = Invoke-TreePin (@('-Verify') + $multiBuildArgs)
+    Assert-Equal 'additional root undeclared output write verifies 69' 69 $result.ExitCode
+
     # Digest is a compute-only, single-tree interface: one bare digest and no pin artifact.
     $fixture = New-TestFixture 'digest-contract' 'tracked.txt' "digest fixture`n"
     $digestArgs = @(
@@ -600,6 +790,7 @@ try {
     $failures.Add("suite error: $($_.Exception.Message)")
     Write-Host "FAIL: suite error: $($_.Exception.Message)" -ForegroundColor Red
 } finally {
+    [Environment]::SetEnvironmentVariable('APEX_STATE_DIR', $savedApexStateDir, 'Process')
     if ($restoreGitConfigGlobal) {
         if ($null -eq $savedGitConfigGlobal) {
             Remove-Item Env:GIT_CONFIG_GLOBAL -ErrorAction SilentlyContinue

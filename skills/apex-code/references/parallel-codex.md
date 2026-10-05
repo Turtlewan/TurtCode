@@ -49,14 +49,87 @@ task's log path so they can `tail -f` each one in parallel (the host reads only 
 recipe + teardown → `references/codex-observability.md`.
 
 ## Integrate (NOT `git merge` — hard block)
-**First commit the worktree to its task branch.** Coder output is uncommitted; `git checkout <branch> -- <files>` reads the branch TIP, so an uncommitted worktree integrates as a no-op. After the task's own verify passes, the integrator stages **path-scoped** with `git add -- <this task's authorized paths, worktree-relative>` (run **inside that worktree**; explicitly listed paths DO stage newly created files, so no `-A` is needed — and `-A` would absorb out-of-scope residue, defeating the D8 porcelain check). **If the worktree's gitignore excludes those paths** — as `~/.claude`'s blanket `*` does — use `git add -f -- <paths>`; force-add **only the name-listed authorized files**, never a directory or a glob. Then commit to `codex/<spec>-<task-id>` with message `build(<spec>): task <task-id>`. Only then integrate path-scoped into the main tree. **Deletions cannot be integrated this way (D7):** `git checkout <branch> -- <path>` cannot remove a file that is absent at the branch tip, so for every file the spec marks `Operation: delete` the integrator stages the removal on the integration branch directly with `git rm <path>` instead. The integrator here is the **host, acting as mechanics** under the wave plan (ADR-046 D1): executing the staging, the commit, and the path-scoped checkout exactly as directed is *within* host mechanics; deciding which tasks integrate, in what order, or whether a result passes is not. Builders still never commit — this commit is the host's, not the coder's.
+**Primary procedure: Engine integration.** After each task's own verify passes, the Engine uses
+`Copy-EngineTaskFiles` in `scripts/engine-git.ps1` to copy the task worktree's bytes, then
+`Stage-EngineWave` to stage the declared paths. `Restore-EngineWave` restores the wave base on
+rollback, including removing paths absent at base and verifying restored index/filtered working
+hashes. These helpers are operation-aware (`create`, `modify`, `delete`) and path-safe: they refuse
+escaping paths, directories, reparse points, and unsafe commit entries. Copy verifies source and
+destination **raw SHA-256** equality. A create must be absent at base; modify/delete must exist at
+base; a delete must be absent in the task worktree before the Engine removes the integration file.
+Any failed check aborts integration. The Engine consumes uncommitted task files; no task-branch
+commit is needed for byte copy.
 
-Tasks in a wave write disjoint files, so bring each task's changes into the main tree with
-`git checkout codex/<spec>-<task-id> -- <that task's files>`. Then run the recipe (AGENTS.md → `## Verify commands`) **on the integrated main tree** — this integrated-wave pass is the authoritative one. It does not replace the per-task pass each coder ran inside its own worktree; both cadences apply (per task in isolation during build, once integrated at integration). Ownership is split (ADR-046 D1). The host EXECUTES the recipe as mechanics from the orchestrator's wave plan and returns the raw results; the ORCHESTRATOR owns the pass/fail adjudication and the routing that follows. A merge
-conflict means the wave was mis-grouped (non-disjoint files) → fork.
+**Current limitation:** Engine integration parks repos whose `## Build outputs` verify creates
+ignored directories until **`engine-build-output-residue`** ships. Use the attended manual fallback
+below for those repos; declaring the outputs does not yet exempt them from the Engine residue scan.
+
+**Manual fallback is attended HOST Bash only**, executed as mechanics under the orchestrator's
+wave plan (ADR-046 D1), never by a coder or an unattended build. Integrate tasks serially with this
+one procedure; use the pinned wave base, exact task paths and declared operations:
+
+1. After task verification, the HOST stages only that task's named authorized paths **inside its
+   worktree**, using `git add -- <paths>` (or `git add -f -- <paths>` for explicitly named ignored
+   files, never a directory/glob or `-A`), and commits to `codex/<spec>-<task-id>` with message
+   `build(<spec>): task <task-id>`. Builders still never commit. Verify that the branch records the
+   task result and its authorized paths are clean; a diff from an uncommitted branch tip is a no-op.
+2. Validate repo-relative literal file paths in both trees and the base/task commits: no traversal,
+   directory, symlink/reparse point, submodule or unsafe ancestor. Require disjoint task path sets;
+   quote every path, use `--`, and set `GIT_LITERAL_PATHSPECS=1` for the Bash commands below.
+   Precheck **each main path**: for modify/delete, `git hash-object --path "$p" "$p"` must equal
+   the blob at `"$base:$p"`; for create, the path must be absent at base, in the main worktree and
+   in the index. Require the main index's existing entry to equal the base blob for modify/delete.
+   Abort on any mismatch rather than overwriting host changes.
+3. From the integration tree, set `base` to the pinned wave base, `branch` to
+   `codex/<spec>-<task-id>`, and Bash array `non_delete_paths` to exactly this task's create/modify
+   paths. Record the filtered hash of each task file with
+   `git -C "$task_worktree" hash-object --path "$p" "$p"`; it must equal the task branch blob.
+   **Immediately before each task apply, including any deletion via `git rm`,** capture the
+   staged set as BEFORE. With Bash `set -e` and `set -o pipefail`, run:
+
+   ```bash
+   set -e
+   set -o pipefail
+   export GIT_LITERAL_PATHSPECS=1
+   BEFORE=$(git diff --cached --name-only --no-renames "$base")
+   if ((${#non_delete_paths[@]})); then
+     git diff --binary "$base" "$branch" -- "${non_delete_paths[@]}" | git apply --check --index
+     git diff --binary "$base" "$branch" -- "${non_delete_paths[@]}" | git apply --index
+   fi
+   ```
+
+   Both pipes must exit 0; abort on either failure. The array must exclude declared deletions.
+   Before **each** `git rm -- "$p"` for `Operation: delete`, assert that the base contains a
+   regular blob at that path and that the path is absent in **both the task branch and task
+   worktree** (including dangling links). If it remains present there, **abort before `git rm`**;
+   a declaration alone is insufficient (the same absence check as `Copy-EngineTaskFiles` and
+   ADR-046 D7/D8). Then use `git rm -- "$p"` to integrate that declared deletion.
+4. **Immediately after that task**, including all its deletions, capture AFTER:
+
+   ```bash
+   AFTER=$(git diff --cached --name-only --no-renames "$base")
+   ```
+
+   Treat BEFORE and AFTER as exact path sets: assert **AFTER minus BEFORE equals exactly that
+   task's full path set** (create, modify and delete), and **BEFORE minus AFTER is empty** (no
+   removals from the prior staged set). Abort on extra, missing or removed paths; do not defer
+   these assertions to the end of the wave. For line-based capture, refuse newline-containing
+   paths and decode Git-quoted names before comparing identities.
+5. Postcheck each non-delete main file: `git hash-object --path "$p" "$p"` must equal the recorded
+   task file's filtered hash; verify the index blob matches too. These are **filtered** hashes,
+   including with `core.autocrlf=true`, not raw-byte comparisons. Deleted paths must remain absent
+   in the main worktree and index. Abort on any mismatch. Raw `git show <sha>:<p> > <p>` is **not
+   equivalent**: it bypasses working-tree conversion and indexed-apply checks.
+
+Run the recipe (AGENTS.md → `## Verify commands`) **on the integrated main tree** — this
+integrated-wave pass is authoritative. It does not replace each coder's isolated per-task pass.
+The HOST executes the recipe as mechanics and returns raw results; the ORCHESTRATOR owns pass/fail
+adjudication and routing. An apply conflict or overlapping paths means the wave was mis-grouped
+→ fork. Rollback restore outside the Engine routes through the owner's `!` handback; do not use
+path checkout or an agent-issued worktree `git restore` to bypass the destructive-command guard.
 
 ## Teardown
-Teardown is permitted **only** under the D8 carve-out (ADR-046) — you created this worktree/branch, integration is complete, and **both** checks below pass. Teardown is permitted only after the verification defined in **ADR-046 § D8** (`~/apex/docs/technical/adr/ADR-046-doctrine-audit-resolutions.md`): `git worktree remove <path>` requires a clean worktree, and `git branch -D codex/<spec>-<task-id>` additionally requires an empty path-scoped branch diff, so branch deletion follows the approved per-spec integration commit. Ancestry checks are not valid evidence. **ADR-046 § D8 is the single canonical home of that algorithm — read it there; it is deliberately not restated here.** Any non-empty result, or any other branch, is a hard block. **And this is doctrine-level authorization, not a mechanical bypass:** `hooks/lib/destructive-detect.js` intercepts `git branch -d/-D` — and the path-scoped `git checkout … -- …` integration form — denying it or requiring confirmation per its own rules. The scoped mechanical allowance is the queued retro P5(c) hook change, out of scope here; until it ships, a permitted teardown executes via the user's `!` one-liner handback. If removal fails on Windows sandbox-SID-owned cache dirs, follow the **Windows sandbox** bullet under SKILL.md § Codex dispatch before retrying.
+Teardown is permitted **only** under the D8 carve-out (ADR-046) — you created this worktree/branch, integration is complete, and **both** checks below pass. Teardown is permitted only after the verification defined in **ADR-046 § D8** (`~/apex/docs/technical/adr/ADR-046-doctrine-audit-resolutions.md`): `git worktree remove <path>` requires a clean worktree, and `git branch -D codex/<spec>-<task-id>` additionally requires an empty path-scoped branch diff, so branch deletion follows the approved per-spec integration commit. Ancestry checks are not valid evidence. **ADR-046 § D8 is the single canonical home of that algorithm — read it there; it is deliberately not restated here.** Any non-empty result, or any other branch, is a hard block. **And this is doctrine-level authorization, not a mechanical bypass:** `hooks/lib/destructive-detect.js` intercepts `git branch -d/-D`, denying it or requiring confirmation per its own rules. The queued retro P5(c) mechanical allowance is **teardown only**; its integration allowance is retired. Until it ships, a permitted teardown executes via the owner's `!` one-liner handback. If removal fails on Windows sandbox-SID-owned cache dirs, follow the **Windows sandbox** bullet under SKILL.md § Codex dispatch before retrying.
 
 ## Failure / fallback (ADR-027 unchanged)
 A subprocess that exits non-zero / rate-limited → that task falls back to Sonnet 5 (fresh `model: sonnet` worker — ADR-032 as amended by A1, session-79b; quota-out skips the remaining effort rungs — the Codex pool is dead). A
@@ -69,8 +142,8 @@ back the remaining sub-wave tasks to Sonnet 5 (sequential — A1/ADR-045; Opus k
 
 Load when the trigger is **"build specs"** (a batch build over `docs/changes/*.md`), not a single-spec
 build. This widens the pool above from "independent tasks within one spec's wave" to "independent tasks
-across multiple ready specs." Everything above (worktree-per-task, `git checkout` integrate, teardown,
-fallback) is reused.
+across multiple ready specs." Everything above (worktree-per-task, Engine byte copy / attended Bash
+indexed-apply integration, teardown, fallback) is reused.
 
 ## One shared cap — the load-bearing safety rule
 Cross-spec parallelism draws from the **same** `max_parallel_codex` pool as within-spec parallelism — it
@@ -86,9 +159,9 @@ only if BOTH hold:
 **Dependency-independence is NOT file-disjointness.** Two specs with no prerequisite edge can still
 modify the same file — real cases: two "carrier" specs both adding fields to `ports/types.py`, or any
 two specs in the same package both re-exporting into its `__init__.py`. Integration is
-`git checkout <branch> -- <file>` (overwrite, never `git merge` — hard block), so two concurrent specs
-writing one file **silently clobber**. So **file overlap is an implicit serialization edge**: put the
-overlapping specs in different waves (the later one rebased after the earlier integrates). Do not invent
+the Engine byte-copy / attended Bash `git apply --index` procedure above, never `git merge` (hard
+block); concurrent writes to one file violate its base/path checks. So **file overlap is an implicit
+serialization edge**: put overlapping specs in different waves (the later one rebased after the earlier integrates). Do not invent
 a new spec tag — these two existing fields are sufficient.
 
 **Conservative paths.** A spec whose `## Files to Change` lists a directory or a fuzzy path ("the ingest

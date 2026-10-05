@@ -367,11 +367,25 @@ function findGitSubcommand(tokens) {
   var i = 1;
   while (i < tokens.length) {
     var t = tokens[i];
+    var value = null;
     if (valueConsumingShort.has(t) || valueConsumingLong.has(t)) {
-      i += 2;
-      continue;
+      i += 1;
+      value = tokens[i] || '';
+    } else if (/^(?:-c|-C|--git-dir|--work-tree|--namespace|--super-prefix)=/.test(t)) {
+      value = t.slice(t.indexOf('=') + 1);
     }
-    if (t.startsWith('--git-dir=') || t.startsWith('--work-tree=') || t.startsWith('--namespace=') || t.startsWith('--super-prefix=')) {
+    if (value !== null) {
+      // Whitespace tokenization can split a quoted global-option value across words.
+      var quoteIndex = value.search(/['"]/);
+      if (quoteIndex >= 0) {
+        var quote = value.charAt(quoteIndex);
+        if (value.indexOf(quote, quoteIndex + 1) < 0) {
+          do {
+            i += 1;
+          } while (i < tokens.length && tokens[i].indexOf(quote) < 0);
+          if (i >= tokens.length) return { malformed: true };
+        }
+      }
       i += 1;
       continue;
     }
@@ -387,6 +401,7 @@ function findGitSubcommand(tokens) {
 function isDestructiveGit(tokens) {
   var sub = findGitSubcommand(tokens);
   if (!sub) return false;
+  if (sub.malformed) return true;
   var command = sub.command;
   var rest = sub.rest;
 
@@ -412,6 +427,46 @@ function isDestructiveGit(tokens) {
       if (t === '--force') return true;
       return t.startsWith('-') && !t.startsWith('--') && t.slice(1).indexOf('f') >= 0;
     });
+  }
+
+  if (command === 'restore') {
+    var staged = false;
+    var worktree = false;
+    var sourceValue = false;
+    for (var restoreIndex = 0; restoreIndex < rest.length; restoreIndex++) {
+      var restoreArg = rest[restoreIndex];
+      if (restoreArg === '--') break;
+      // Shell parsing leaves quote placeholders, whose contents may hide mode switches.
+      if (/['"]/.test(restoreArg)) return true;
+      // Raw shell escapes, expansions, and splats can hide mode switches or source values.
+      if (/[\\$`]/.test(restoreArg) || restoreArg.charAt(0) === '@') return true;
+      if (sourceValue) {
+        sourceValue = false;
+        continue;
+      }
+
+      var negated = restoreArg.indexOf('--no-') === 0;
+      var restoreOption = negated ? '--' + restoreArg.slice(5) : restoreArg;
+      if (/^--w(o(r(k(t(r(e(e)?)?)?)?)?)?)?$/.test(restoreOption)) {
+        worktree = !negated;
+      } else if (/^--st(a(g(e(d)?)?)?)?$/.test(restoreOption)) {
+        staged = !negated;
+      } else if (/^--so(u(r(c(e)?)?)?)?(=|$)/.test(restoreArg)) {
+        sourceValue = restoreArg.indexOf('=') < 0;
+      } else if (/^-[^-]/.test(restoreArg)) {
+        for (var restoreChar = 1; restoreChar < restoreArg.length; restoreChar++) {
+          var restoreFlag = restoreArg.charAt(restoreChar);
+          if (restoreFlag === 's') {
+            // Everything after -s is its inline source value, not another switch.
+            sourceValue = restoreChar === restoreArg.length - 1;
+            break;
+          }
+          if (restoreFlag === 'S') staged = true;
+          if (restoreFlag === 'W') worktree = true;
+        }
+      }
+    }
+    return worktree || !staged;
   }
 
   if (command === 'clean') {

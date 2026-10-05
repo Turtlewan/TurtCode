@@ -96,6 +96,160 @@ function Invoke-Git {
     return $output
 }
 
+# BEGIN build-outputs lockstep
+function ConvertFrom-BuildOutputsSection {
+    param([AllowEmptyString()][string]$Text)
+
+    $lines = @($Text -split '\r?\n')
+    $headings = New-Object System.Collections.Generic.List[int]
+    $insideFence = New-Object 'bool[]' $lines.Count
+    $fenceChar = ''
+    $fenceLength = 0
+    for ($i = 0; $i -lt $lines.Count; $i++) {
+        $insideFence[$i] = $fenceLength -gt 0
+        if ($fenceLength -gt 0) {
+            $closePattern = '^ {0,3}' + [regex]::Escape($fenceChar) + '{' + $fenceLength + ',}[ \t]*$'
+            if ($lines[$i] -match $closePattern) { $fenceLength = 0 }
+            continue
+        }
+        if ($lines[$i] -match '^ {0,3}(?<Fence>`{3,}|~{3,})(?<Info>.*)$') {
+            $fenceChar = $Matches['Fence'].Substring(0, 1)
+            $fenceLength = $Matches['Fence'].Length
+            continue
+        }
+        if ($lines[$i] -cmatch '^ {0,3}## Build outputs[ \t]*$') { $headings.Add($i) }
+    }
+
+    $entries = New-Object System.Collections.Generic.List[string]
+    $reason = $null
+    $errorLine = 0
+    if ($headings.Count -gt 1) {
+        $reason = 'duplicate exact heading'
+        $errorLine = $headings[1] + 1
+    } elseif ($headings.Count -eq 1) {
+        $heading = $headings[0]
+        $opened = $false
+        $closed = $false
+        $openingLine = $heading + 1
+        for ($i = $heading + 1; $i -lt $lines.Count; $i++) {
+            $line = $lines[$i]
+            $errorLine = $i + 1
+            if (-not $opened) {
+                if ([string]::IsNullOrWhiteSpace($line)) { continue }
+                if ($line -notmatch '^ {0,3}(?<Fence>`{3,}|~{3,})(?<Info>.*)$') {
+                    $reason = 'fence must be the first nonblank line after the heading'
+                    break
+                }
+                $fenceChar = $Matches['Fence'].Substring(0, 1)
+                $fenceLength = $Matches['Fence'].Length
+                $info = $Matches['Info'].Trim()
+                if ($info -cne '' -and $info -cne 'text') {
+                    $reason = "fence info must be empty or 'text'"
+                    break
+                }
+                $opened = $true
+                $openingLine = $i + 1
+                continue
+            }
+            if ($closed) {
+                if (-not $insideFence[$i] -and $line -match '^ {0,3}#{1,6}(?:[ \t]+|$)') { break }
+                if ($line -match '^ {0,3}(?:`{3,}|~{3,})') {
+                    $reason = 'only one fence is allowed before the next heading'
+                    break
+                }
+                continue
+            }
+            $closePattern = '^ {0,3}' + [regex]::Escape($fenceChar) + '{' + $fenceLength + ',}[ \t]*$'
+            if ($line -match $closePattern) { $closed = $true; continue }
+            $entry = $line.Trim()
+            if ($entry.Length -eq 0) { continue }
+            if ($entries.Count -ge 32) { $reason = 'more than 32 entries'; break }
+            if ($entry.Contains('**') -or $entry -match '[?\[\]{}!]' -or $entry.Contains('\')) {
+                $reason = 'unsupported wildcard or backslash'; break
+            }
+            if ($entry.StartsWith('/') -or $entry.EndsWith('/') -or $entry.Contains(':')) {
+                $reason = 'path must be repo-relative without leading/trailing slash or drive'; break
+            }
+            $segments = @($entry -split '/')
+            $invalidSegment = $false
+            foreach ($segment in $segments) {
+                if ($segment.Length -eq 0 -or $segment -ceq '.' -or $segment -ceq '..' -or
+                        [string]::Equals($segment, '.git', [System.StringComparison]::OrdinalIgnoreCase)) {
+                    $invalidSegment = $true; break
+                }
+            }
+            if ($invalidSegment) { $reason = 'empty, dot, parent, or .git segment'; break }
+            if ($segments[-1].Contains('*')) { $reason = "'*' is forbidden in the final segment"; break }
+            $entries.Add($entry)
+        }
+        if (-not $reason -and (-not $opened -or -not $closed)) {
+            $reason = 'missing or unclosed fence'
+            $errorLine = $openingLine
+        }
+    }
+    $warning = $null
+    if ($reason) {
+        $entries.Clear()
+        $warning = "AGENTS.md '## Build outputs' unparseable (line ${errorLine}: $reason); no build-output exclusions applied"
+    }
+    return [pscustomobject]@{ Entries = @($entries.ToArray()); Warning = $warning }
+}
+
+function Test-IsDeclaredBuildOutputPath {
+    param([string]$Path, [AllowEmptyCollection()][string[]]$Entries)
+
+    $pathSegments = @($Path -split '/')
+    foreach ($entry in @($Entries)) {
+        $patternSegments = @($entry -split '/')
+        if ($pathSegments.Count -lt $patternSegments.Count) { continue }
+        $matchesPrefix = $true
+        for ($i = 0; $i -lt $patternSegments.Count; $i++) {
+            # Match literals ordinally, including the literal pieces surrounding a single-segment
+            # '*'. Regex IgnoreCase alone uses culture-sensitive casing and is not this contract.
+            $pieces = @($patternSegments[$i] -split '\*')
+            $segment = $pathSegments[$i]
+            $position = 0
+            if (-not $segment.StartsWith($pieces[0], [System.StringComparison]::OrdinalIgnoreCase)) {
+                $matchesPrefix = $false; break
+            }
+            $position = $pieces[0].Length
+            if ($pieces.Count -eq 1) {
+                if ($position -ne $segment.Length) { $matchesPrefix = $false; break }
+                continue
+            }
+            for ($j = 1; $j -lt $pieces.Count - 1; $j++) {
+                $found = $segment.IndexOf($pieces[$j], $position, [System.StringComparison]::OrdinalIgnoreCase)
+                if ($found -lt 0) { $matchesPrefix = $false; break }
+                $position = $found + $pieces[$j].Length
+            }
+            if (-not $matchesPrefix) { break }
+            $lastPiece = $pieces[-1]
+            if (-not $segment.EndsWith($lastPiece, [System.StringComparison]::OrdinalIgnoreCase) -or
+                    $segment.Length - $lastPiece.Length -lt $position) {
+                $matchesPrefix = $false; break
+            }
+        }
+        if ($matchesPrefix) { return $true }
+    }
+    return $false
+}
+# END build-outputs lockstep
+
+# Fetch each root through this script's fail-closed adapter; a failed lookup is not an absent file.
+function Get-DeclaredBuildOutputs([string]$Root) {
+    $entries = @()
+    $agentsAtHead = @(Invoke-Git $Root ls-tree --full-tree --name-only HEAD '--' AGENTS.md)
+    if ($agentsAtHead -ccontains 'AGENTS.md') {
+        $agentsText = [string]::Join("`n", [string[]]@(Invoke-Git $Root show HEAD:AGENTS.md))
+        $declaration = ConvertFrom-BuildOutputsSection -Text $agentsText
+        $entries = @($declaration.Entries)
+        if (($Pin -or $Verify) -and $declaration.Warning) {
+            Write-Host "[tree-pin] WARNING: $($declaration.Warning)" -ForegroundColor Yellow
+        }
+    }
+    return ,$entries
+}
+
 # A DIRECTORY is hashed by its recursive contents, never written off as unhashable.
 #
 # git COLLAPSES an untracked directory into one porcelain entry: `?? newdir/`. Returning a constant
@@ -117,7 +271,8 @@ function Test-IsRuntimeMarker([string]$NormalizedPath) {
     return $false
 }
 
-function Get-PathDigest([string]$Root, [string]$relPath, [bool]$SkipRuntimeMarkers = $false) {
+function Get-PathDigest([string]$Root, [string]$relPath, [bool]$SkipRuntimeMarkers = $false,
+        [string[]]$DeclaredIgnoredRows = @()) {
     $full = Join-Path $Root $relPath
 
     if (Test-Path -LiteralPath $full -PathType Container) {
@@ -132,6 +287,16 @@ function Get-PathDigest([string]$Root, [string]$relPath, [bool]$SkipRuntimeMarke
                 $skippedRuntimeMarkers++
                 continue
             }
+            # Only actual declared !! rows can hide files in a collapsed ?? directory.
+            $isDeclaredIgnored = $false
+            foreach ($ignoredRow in @($DeclaredIgnoredRows)) {
+                if ($rel.Equals($ignoredRow, [System.StringComparison]::OrdinalIgnoreCase) -or
+                        $rel.StartsWith($ignoredRow + '/', [System.StringComparison]::OrdinalIgnoreCase)) {
+                    $isDeclaredIgnored = $true
+                    break
+                }
+            }
+            if ($isDeclaredIgnored) { continue }
             $parts.Add("$rel|$($file.Length)|$($file.LastWriteTimeUtc.Ticks)")
         }
         # A subtree we could not read must not fingerprint identically to one we could.
@@ -201,7 +366,16 @@ function Get-TreeFingerprint([string]$Root, [bool]$ApplyRuntimeExclusions) {
     $head = Invoke-Git $Root rev-parse HEAD
     $lines += "HEAD $head"
 
+    $declaredBuildOutputs = Get-DeclaredBuildOutputs $Root
     $status = Invoke-Git $Root status --porcelain --ignored=traditional
+    $declaredIgnoredRows = @(foreach ($entry in @($status)) {
+        if ($entry.StartsWith('!! ')) {
+            $ignoredPath = ($entry.Substring(3).Trim().Trim('"') -replace '\\', '/').TrimEnd('/')
+            if (Test-IsDeclaredBuildOutputPath -Path $ignoredPath -Entries $declaredBuildOutputs) {
+                $ignoredPath
+            }
+        }
+    })
     # Mirrored by codex-scope-check.ps1's -Check runtime-path exclusion; keep both lists in sync.
     # Scope-check discriminates on ref presence (index OR HEAD, so host-curated paths stay checked),
     # rather than the `!!` status class used here.
@@ -274,7 +448,12 @@ function Get-TreeFingerprint([string]$Root, [bool]$ApplyRuntimeExclusions) {
             }
             if ($isToolCache) { continue }
         }
-        $work = Get-PathDigest $Root $path ($ApplyRuntimeExclusions -and $xy -eq '!!')
+        if ($xy -ceq '!!' -and (Test-IsDeclaredBuildOutputPath -Path $normalizedPath -Entries $declaredBuildOutputs)) {
+            continue
+        }
+        $directoryExclusions = @()
+        if ($xy -ceq '??') { $directoryExclusions = $declaredIgnoredRows }
+        $work = Get-PathDigest $Root $path ($ApplyRuntimeExclusions -and $xy -eq '!!') $directoryExclusions
         if ($null -eq $work) { continue }
         $lines += "$xy $path work:$work index:$(Get-IndexDigest $Root $path)"
     }

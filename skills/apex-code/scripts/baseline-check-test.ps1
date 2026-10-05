@@ -48,10 +48,18 @@ function New-RawRepo($name, $agentsText) {
     if ($null -ne $agentsText) { Write-File (Join-Path $repo 'AGENTS.md') $agentsText }
     return $repo
 }
-function Invoke-Checker($repo, [switch]$Preflight) {
+function Invoke-Checker($repo, [switch]$Preflight, [switch]$CaptureOutput) {
     $mode = if ($Preflight) { '-Preflight' } else { '-Full' }
-    & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $checker $mode -Worktree $repo *> $null
-    return $LASTEXITCODE
+    $savedEap = $ErrorActionPreference
+    try {
+        $ErrorActionPreference = 'Continue'
+        $output = @(& powershell.exe -NoProfile -ExecutionPolicy Bypass -File $checker $mode -Worktree $repo 2>&1)
+        $code = $LASTEXITCODE
+    } finally { $ErrorActionPreference = $savedEap }
+    if ($CaptureOutput) {
+        return [pscustomobject]@{ ExitCode = $code; Output = ($output -join "`n") }
+    }
+    return $code
 }
 
 Write-Host "`n=== apex-baseline-check.ps1 ===" -ForegroundColor Cyan
@@ -111,6 +119,33 @@ $emptyPreflight = New-RawRepo 'preflight-empty' (@(
 Check 'empty Preflight block -> exit 3' ((Invoke-Checker $emptyPreflight -Preflight) -eq 3) 'no runnable preflight command'
 
 # Heading search ignores fenced examples; malformed and ambiguous recipe fences fail closed.
+$templatePath = Join-Path $PSScriptRoot '..\..\apex-orchestrate\templates\AGENTS-template.md'
+$templateText = [System.IO.File]::ReadAllText($templatePath)
+$filledSection = @(
+    '## Verify commands', '', $fence, 'echo ok>marker.txt', $fence,
+    'Notes: this prose belongs below the closing fence.', '', ''
+) -join "`n"
+$filledTemplate = [regex]::Replace($templateText, '(?ms)^## Verify commands\r?\n.*?(?=^## )', $filledSection)
+$filledRepo = New-RawRepo 'template-filled' $filledTemplate
+$filledResult = Invoke-Checker $filledRepo -CaptureOutput
+Check 'filled real template runs adjacent recipe' (($filledResult.ExitCode -eq 0) -and
+    (Test-Path -LiteralPath (Join-Path $filledRepo 'marker.txt'))) 'one command, notes below -> 0 + marker'
+$unfilledResult = Invoke-Checker (New-RawRepo 'template-unfilled' $templateText) -CaptureOutput
+Check 'unfilled real template -> exit 3' ($unfilledResult.ExitCode -eq 3) 'marker and stub fail closed'
+$suffixHeading = '   ## Verify commands (deprecated)'
+$suffixRepo = New-RawRepo 'suffix-only' (@('# AGENTS', '', $suffixHeading, $fence, 'echo decoy>marker.txt', $fence) -join "`n")
+$suffixResult = Invoke-Checker $suffixRepo -CaptureOutput
+$expectedDiagnostic = "[baseline] NO_RECIPE -- found near-miss heading at line 3: '$suffixHeading'; the heading must be exactly '## Verify commands'"
+Check 'suffix-only heading -> 4 + line diagnostic' (($suffixResult.ExitCode -eq 4) -and
+    (@($suffixResult.Output -split "`n") -ccontains $expectedDiagnostic) -and
+    -not (Test-Path -LiteralPath (Join-Path $suffixRepo 'marker.txt'))) 'line 3, exact heading guidance, no command'
+$fencedSuffix = New-RawRepo 'suffix-fenced' (@(
+    '# AGENTS', '## Example', $fence, $suffixHeading, 'echo decoy>marker.txt', $fence
+) -join "`n")
+$fencedResult = Invoke-Checker $fencedSuffix -CaptureOutput
+Check 'fenced suffix -> 4 without near-miss diagnostic' (($fencedResult.ExitCode -eq 4) -and
+    $fencedResult.Output -notmatch 'found near-miss heading' -and
+    -not (Test-Path -LiteralPath (Join-Path $fencedSuffix 'marker.txt'))) 'fenced example stays silent'
 $decoyRepo = New-RawRepo 'decoy-heading' (@(
     '# AGENTS', '## Example', $fence, '## Verify commands', 'echo decoy>decoy-marker.txt', $fence,
     '## Verify commands', $fence, 'echo real>real-marker.txt', $fence

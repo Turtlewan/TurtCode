@@ -8,9 +8,13 @@ propagation gap.
 
 ## Per-section instructions
 
-- **`§ Verify commands`** (replace the `<!-- apex:agents:verify -->` stub): the union of every
-  repo's own verify commands (AGENTS.md IS their home — ADR-037), verbatim runnable commands **including
-  the install/setup step** (`uv sync`, `npm ci`, …). If the stack is still TBD, leave the marker.
+- **`## Verify commands`**: replace the marker and entire stub with one fence directly under the exact heading
+  `## Verify commands` (blank lines only), containing the union of every repo's own verify commands
+  (AGENTS.md IS their home — ADR-037) as verbatim runnable commands, **including the install/setup
+  step** (`uv sync`, `npm ci`, …). Put notes after the closing fence. If the stack is still TBD,
+  leave the marker and its stub in place.
+- **`## Build outputs`**: list every repo-relative ignored output directory the verify commands generate,
+  both root and nested; never `**`. Leave its adjacent fence empty if verify creates none.
 - **`§ Project layout`** (replace its `<!-- apex:agents:stub -->`): the module map — each
   top-level package/dir + one line on what it owns — and the architecture shape in one line
   (e.g. "ports & adapters; domain logic never imports adapters"). Only fill once code exists.

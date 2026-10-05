@@ -1,61 +1,125 @@
-# Regression for the build-dispatch pre-launch HANG (session 9): codex-scope-check.ps1 -Snapshot
-# fingerprinted a dirty DIRECTORY by spawning `git hash-object` PER FILE, so an ignored node_modules
-# /.venv/target (tens of thousands of files, collapsed to one `git status --ignored` entry) spawned
-# tens of thousands of git processes and never returned -- wedging every build dispatch before launch.
-# The fix aggregates file metadata in one enumeration. This test proves a large untracked directory
-# is snapshotted FAST (the old per-file-subprocess path would blow the bound), and the fingerprint is
-# the metadata form.
+# Regression for the build-dispatch pre-launch hang: keep both the 600-leaf ?? case (full-content
+# SHA-256 in-process) and the committed-.gitignore 600-file !! collapsed-directory case (recursive
+# metadata digest). Neither may spawn git per untracked/cache file; both must detect an internal
+# rename and snapshot in <15s. The ignored case retains the path-sensitive directory fingerprint.
 
-$ErrorActionPreference = 'Continue'
+$ErrorActionPreference = 'Stop'
 $scope = Join-Path $PSScriptRoot 'codex-scope-check.ps1'
-$parent = Join-Path $env:TEMP ("snapscale-" + [guid]::NewGuid().ToString('N').Substring(0,8))
-$repo = Join-Path $parent 'repo'; $state = Join-Path $parent 'state'
-New-Item -ItemType Directory -Force -Path $repo | Out-Null
-New-Item -ItemType Directory -Force -Path $state | Out-Null
-
-Push-Location $repo
-git init -q; git config user.email 't@t.t'; git config user.name 't'
-'x=1' | Out-File -Encoding ascii app.py
-git add -A; git commit -q -m init
-# A large untracked directory -- 600 files. Under the OLD per-file `git hash-object` this is 600
-# subprocess spawns (~30-60s+); the metadata aggregate does it in well under a second.
-$big = Join-Path $repo 'buildcache'
-New-Item -ItemType Directory -Force -Path $big | Out-Null
-for ($i = 0; $i -lt 600; $i++) { [System.IO.File]::WriteAllText((Join-Path $big "f$i.tmp"), "data$i") }
-Pop-Location
-
+$tempRoot = [System.IO.Path]::GetFullPath((Join-Path $env:LOCALAPPDATA 'Temp'))
+$parent = Join-Path $tempRoot ('snapscale-' + [guid]::NewGuid().ToString('N'))
+$previousGitConfigGlobal = $env:GIT_CONFIG_GLOBAL
+$previousApexStateDir = $env:APEX_STATE_DIR
 $fail = 0
-function Check($label, $cond, $detail) {
-    $mark = if ($cond) { 'ok  ' } else { 'FAIL' }; $col = if ($cond) { 'Green' } else { 'Red' }
-    if (-not $cond) { $script:fail++ }
-    Write-Host ("  {0}  {1,-44} {2}" -f $mark, $label, $detail) -ForegroundColor $col
+$suiteExit = 1
+
+function Check($Label, [bool]$Condition, $Detail) {
+    $mark = if ($Condition) { 'ok  ' } else { 'FAIL' }
+    $color = if ($Condition) { 'Green' } else { 'Red' }
+    if (-not $Condition) { $script:fail++ }
+    Write-Host ("  {0}  {1} -- {2}" -f $mark, $Label, $Detail) -ForegroundColor $color
 }
 
-Write-Host "`n=== snapshot scale (no per-file git subprocess) ===" -ForegroundColor Cyan
-$sw = [System.Diagnostics.Stopwatch]::StartNew()
-& powershell.exe -NoProfile -ExecutionPolicy Bypass -File $scope -Snapshot -Worktree $repo -Task 'scale' -StateDirectory $state *> $null
-$snapExit = $LASTEXITCODE
-$sw.Stop()
-$secs = [math]::Round($sw.Elapsed.TotalSeconds, 1)
-Check 'snapshot of a 600-file untracked dir completes' ($snapExit -eq 0) "exit=$snapExit"
-Check 'and does so FAST (< 15s; old path would not)' ($sw.Elapsed.TotalSeconds -lt 15) "took ${secs}s"
+function Invoke-Git {
+    param([Parameter(ValueFromRemainingArguments = $true)][string[]]$GitArgs)
+    $previous = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
+    $launchException = $null
+    $output = @()
+    try {
+        $global:LASTEXITCODE = -987654
+        try { $output = @(& git -C $repo @GitArgs 2>&1) }
+        catch { $launchException = $_.Exception }
+        $exitCode = $LASTEXITCODE
+    } finally { $ErrorActionPreference = $previous }
+    if ($launchException -or $exitCode -ne 0) {
+        throw "Fixture git $($GitArgs -join ' ') failed (exit $exitCode): $launchException $($output -join ' ')"
+    }
+    return ,$output
+}
 
-# Unchanged tree -> in scope (before == after, so the new hash is stable and comparable).
-& powershell.exe -NoProfile -ExecutionPolicy Bypass -File $scope -Check -Worktree $repo -Task 'scale' -Authorized @('app.py') -StateDirectory $state *> $null
-Check 'unchanged tree is in scope (0)' ($LASTEXITCODE -eq 0) "check exit=$LASTEXITCODE"
+function Invoke-Scope {
+    param([string]$Mode, [string]$Task)
+    $previous = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
+    try {
+        $global:LASTEXITCODE = -987654
+        $output = @(& powershell.exe -NoProfile -ExecutionPolicy Bypass -File $scope $Mode -Worktree $repo -Task $Task -StateDirectory $state 2>&1)
+        $exitCode = $LASTEXITCODE
+    } finally { $ErrorActionPreference = $previous }
+    return [pscustomobject]@{ ExitCode = $exitCode; Output = ($output -join [Environment]::NewLine) }
+}
 
-# DETERMINISTIC path-sensitivity (not timing-dependent): rename a file inside the unauthorized dir. A
-# rename preserves count, total size, and mtime, so an aggregate fingerprint MISSES it and passes --
-# the exact hole a first version of this fix had. The path-inclusive fingerprint sees the directory
-# change and flags an out-of-scope write (exit 65). Fails against an aggregate-only implementation.
-Rename-Item (Join-Path $big 'f0.tmp') (Join-Path $big 'renamed0.tmp')
-& powershell.exe -NoProfile -ExecutionPolicy Bypass -File $scope -Check -Worktree $repo -Task 'scale' -Authorized @('app.py') -StateDirectory $state *> $null
-# Non-zero = the change was DETECTED (a real scope violation), not silently passed as clean-0. That is
-# the property the aggregate fingerprint lost; path-inclusive restores it.
-Check 'a RENAME inside the dir is detected (not clean)' ($LASTEXITCODE -ne 0) "check exit=$LASTEXITCODE"
+try {
+    New-Item -ItemType Directory -Force -Path $parent | Out-Null
+    $env:APEX_STATE_DIR = Join-Path $parent 'apex-state'
+    $env:GIT_CONFIG_GLOBAL = Join-Path $parent 'gitconfig'
+    $ignoreFile = Join-Path $parent 'global-ignore'
+    [System.IO.File]::WriteAllText($ignoreFile, '', [System.Text.UTF8Encoding]::new($false))
+    [System.IO.File]::WriteAllText($env:GIT_CONFIG_GLOBAL,
+        ("[core]`n    excludesFile = {0}`n" -f ($ignoreFile -replace '\\', '/')),
+        [System.Text.UTF8Encoding]::new($false))
 
-try { Remove-Item -Recurse -Force $parent -ErrorAction SilentlyContinue } catch {}
-Write-Host ""
-if ($script:fail -gt 0) { Write-Host "$($script:fail) check(s) FAILED" -ForegroundColor Red; exit 1 }
-Write-Host "ALL SNAPSHOT-SCALE TESTS PASS." -ForegroundColor Green
+    Write-Host "`n=== snapshot scale (600 ?? leaves and 600-file collapsed !! directory) ===" -ForegroundColor Cyan
+    foreach ($kind in @('untracked', 'ignored')) {
+        $repo = Join-Path $parent ($kind + '-repo')
+        $state = Join-Path $parent ($kind + '-state')
+        New-Item -ItemType Directory -Force -Path $repo | Out-Null
+        Invoke-Git init -q | Out-Null
+        Invoke-Git config user.email 'scale-test@example.invalid' | Out-Null
+        Invoke-Git config user.name 'Snapshot Scale Test' | Out-Null
+        [System.IO.File]::WriteAllText((Join-Path $repo 'app.py'), "x=1`n", [System.Text.Encoding]::ASCII)
+        if ($kind -ceq 'ignored') {
+            [System.IO.File]::WriteAllText((Join-Path $repo '.gitignore'), "/buildcache/`n", [System.Text.Encoding]::ASCII)
+        }
+        Invoke-Git add -A | Out-Null
+        Invoke-Git commit -q -m init | Out-Null
+        $big = Join-Path $repo 'buildcache'
+        New-Item -ItemType Directory -Force -Path $big | Out-Null
+        for ($i = 0; $i -lt 600; $i++) {
+            [System.IO.File]::WriteAllText((Join-Path $big "f$i.tmp"), "data$i")
+        }
+
+        $sw = [System.Diagnostics.Stopwatch]::StartNew()
+        $snapshot = Invoke-Scope -Mode '-Snapshot' -Task $kind
+        $sw.Stop()
+        Check "$kind snapshot completes" ($snapshot.ExitCode -eq 0) $snapshot.Output
+        Check "$kind snapshot <15s" ($sw.Elapsed.TotalSeconds -lt 15) ("{0:N2}s" -f $sw.Elapsed.TotalSeconds)
+        if ($snapshot.ExitCode -ne 0) { continue }
+
+        $snapshotPath = Join-Path $state ("scope-$kind.snapshot.json")
+        $snapshotText = [System.IO.File]::ReadAllText($snapshotPath)
+        $snap = $snapshotText | ConvertFrom-Json
+        if ($kind -ceq 'untracked') {
+            $rawLeaves = @($snap.states.PSObject.Properties | Where-Object { $_.Value -match '^work:raw:[0-9a-f]{64} index:-$' })
+            Check '600 ?? leaves have in-process raw hashes' (@($snap.dirty).Count -eq 600 -and $rawLeaves.Count -eq 600) ("{0} paths, {1} raw hashes" -f @($snap.dirty).Count, $rawLeaves.Count)
+        } else {
+            Check '600 ignored files stay one !! directory row' (@($snap.dirty).Count -eq 1 -and $snap.statuses.'buildcache/' -ceq '!!' -and $snap.states.'buildcache/' -match '^work:dir:[0-9a-f]{64} index:-$') ([string]$snap.states.'buildcache/')
+        }
+
+        $unchanged = Invoke-Scope -Mode '-Check' -Task $kind
+        Check "$kind unchanged tree is in scope" ($unchanged.ExitCode -eq 0) $unchanged.Output
+        # A successful Check consumes evidence; restore it before testing the deterministic rename.
+        [System.IO.File]::WriteAllText($snapshotPath, $snapshotText, [System.Text.UTF8Encoding]::new($false))
+        Rename-Item -LiteralPath (Join-Path $big 'f0.tmp') -NewName 'renamed0.tmp'
+        $renamed = Invoke-Scope -Mode '-Check' -Task $kind
+        Check "$kind rename inside directory is detected" ($renamed.ExitCode -eq 1 -and $renamed.Output -match 'buildcache') $renamed.Output
+    }
+    $suiteExit = if ($fail -eq 0) { 0 } else { 1 }
+} catch {
+    Write-Host "FATAL: $($_.Exception.Message)" -ForegroundColor Red
+    $suiteExit = 1
+} finally {
+    if ($null -eq $previousGitConfigGlobal) { Remove-Item Env:GIT_CONFIG_GLOBAL -ErrorAction SilentlyContinue }
+    else { $env:GIT_CONFIG_GLOBAL = $previousGitConfigGlobal }
+    if ($null -eq $previousApexStateDir) { Remove-Item Env:APEX_STATE_DIR -ErrorAction SilentlyContinue }
+    else { $env:APEX_STATE_DIR = $previousApexStateDir }
+    $cleanupTarget = [System.IO.Path]::GetFullPath($parent)
+    if (-not $cleanupTarget.StartsWith($tempRoot.TrimEnd('\') + '\', [System.StringComparison]::OrdinalIgnoreCase)) {
+        throw "Unsafe fixture cleanup target: $cleanupTarget"
+    }
+    if (Test-Path -LiteralPath $cleanupTarget) { Remove-Item -LiteralPath $cleanupTarget -Recurse -Force }
+}
+
+if ($suiteExit -ne 0) { Write-Host "$fail snapshot-scale check(s) failed." -ForegroundColor Red; exit 1 }
+Write-Host 'ALL SNAPSHOT-SCALE TESTS PASS.' -ForegroundColor Green
 exit 0

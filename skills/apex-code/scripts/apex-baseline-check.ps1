@@ -10,6 +10,14 @@
 # uses Windows PowerShell, and `cmd`/`bat`/an unlabeled fence uses cmd.exe. Each non-empty,
 # non-comment recipe line is passed whole to that shell; lines are never split on `&&`.
 #
+# Recipe grammar:
+# - Heading: exactly `## Verify commands` or `## Preflight commands`, with 0-3 leading spaces
+#   and trailing whitespace only.
+# - The first nonblank line after the heading must open a triple-backtick fence with info
+#   ''|cmd|bat|powershell|pwsh|bash|sh. Only one fenced block is allowed before the next heading.
+# - Each nonblank fenced line that does not start with `#` after trimming is one command.
+# - The fence must close; prose is allowed only after the closing fence.
+#
 # SECURITY: this executes the repo-declared commands on the host, with the caller's privileges,
 # OUTSIDE any sandbox. That is the same trust the host already places in AGENTS.md's recipe
 # (apex-code runs it directly today); the hook only makes it non-skippable. AGENTS.md is trusted,
@@ -267,6 +275,22 @@ $lines = [System.IO.File]::ReadAllLines($agentsPath)
 $recipe = Get-RecipeBlock -Lines $lines -CandidateHeadings $candidateHeadings
 if (-not $recipe.HeadingFound) {
     Write-Host "[baseline] NO_RECIPE -- AGENTS.md has none of the requested recipe headings: $($candidateHeadings -join ', ')." -ForegroundColor DarkGray
+    # Use the same whole-document fence transitions as Get-RecipeBlock so fenced examples stay
+    # silent. This diagnostic does not relax the exact heading match or select a recipe.
+    $fenceOpen = $false
+    for ($i = 0; $i -lt @($lines).Count; $i++) {
+        $line = $lines[$i]
+        if ($line -match '^\s{0,3}```(?<Info>.*)$') {
+            $fenceOpen = -not $fenceOpen
+            continue
+        }
+        if (-not $fenceOpen -and $line -match '^\s{0,3}##\s*(Verify|Preflight) commands\b.+') {
+            $candidate = $Matches[1] + ' commands'
+            # A valid heading for another mode with trailing whitespace is not a near miss.
+            if ($line -match ('^\s{0,3}##\s*' + [regex]::Escape($candidate) + '\s*$')) { continue }
+            Write-Host "[baseline] NO_RECIPE -- found near-miss heading at line $($i + 1): '$line'; the heading must be exactly '## $candidate'" -ForegroundColor DarkGray
+        }
+    }
     exit $EXIT_NO_RECIPE
 }
 

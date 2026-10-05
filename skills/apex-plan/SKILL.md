@@ -1,7 +1,7 @@
 ---
 skill: apex-plan
-version: 2.7.0
-last_updated: 2026-10-02
+version: 2.7.1
+last_updated: 2026-10-05
 sources:
   - docs/technical/adr/ADR-010-multi-pass-review.md
   - docs/technical/adr/ADR-011-instinct-loop-no-engine.md
@@ -52,8 +52,9 @@ One line, or "clean":
    `docs/changes/done/`** (ADR-014).
 4. Scope-gated stubs still stubbed while a spec in their scope is in play: `data-model.md`
    (ADR-008) Â· `app-flow.md` (ADR-013) Â· `design-brief.md` (ADR-017).
-5. Repo-root **`AGENTS.md`** still stubbed while â‰¥1 spec sits in `docs/changes/` â€” **Codex builds
-   read AGENTS.md, not these skills** (ADR-031/037).
+5. Repo-root **`AGENTS.md`** still stubbed while â‰¥1 spec sits in `docs/changes/`, or its exact
+   `## Verify commands` heading lacks the adjacent populated fence â€” **Codex builds read AGENTS.md,
+   not these skills** (ADR-031/037).
 
 ### Drain the handoff â€” inbox-zero, this session
 
@@ -366,7 +367,8 @@ As the deterministic backstop to the prose Files-to-Change / Coverage / structur
                     inline" fails.
 [ ] Overview      â€” if architecture changed, overview.md updated + de-stubbed; decisions link to ADRs.
 [ ] App-flow      â€” every UI spec names the app-flow screen(s)/journey it implements (ADR-013).
-[ ] AGENTS.md     â€” populated per references/agents-md-population.md at first spec-ready, and
+[ ] AGENTS.md     â€” marker and entire stub replaced and exact heading + adjacent fence retained per
+                    references/agents-md-population.md at first spec-ready, and
                     whenever a spec changes layout, conventions, or the verify commands (ADR-031/037).
 ```
 

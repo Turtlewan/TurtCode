@@ -1,7 +1,7 @@
 ---
 skill: apex-code
-version: 2.19.0
-last_updated: 2026-10-02
+version: 2.20.0
+last_updated: 2026-10-05
 sources:
   - docs/technical/adr/ADR-027-codex-primary-opus-fallback-deepseek-archived.md
   - docs/technical/adr/ADR-028-parallel-codex-dispatch.md
@@ -147,7 +147,10 @@ Four things are load-bearing, and each has already broken a real build when done
    — *proven not to work*: Codex has been given that rule, in those words, and written outside it
    anyway. **Exit 65 = out-of-scope writes, still sitting in the tree. Exit 66 = the `-Authorized`
    list itself is wrong** (the task wrote several files and none is on it — fix the spec, not the
-   coder).
+   coder). See AGENTS.md's optional **`## Build outputs`** for committed declarations of ignored,
+   untracked verify outputs; undeclared or tracked paths remain checked. Engine integration still
+   parks on ignored output directories until `engine-build-output-residue` ships — use the attended
+   HOST Bash fallback in `references/parallel-codex.md` for those repos.
 3. **Durability** — run ledger, no-output watchdog, `-Adopt` recovery after a host crash.
 4. **The verdict.** The wrapper reads the coder's own `.final` report and **fails on `blocked`**.
    Hand-rolled, you get an exit code — and the exit code lies: Codex exits **0** while its report
