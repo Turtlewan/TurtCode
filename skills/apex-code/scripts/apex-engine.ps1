@@ -7,6 +7,9 @@ param(
     [string]$CriticalFilesConfirmedNote,
     [string]$WorktreeRoot,
     [string]$Resume,
+    [string]$ReviewVerdict,
+    [string]$ReviewDigest,
+    [string]$ReviewRecord,
     [string]$Teardown,
     [switch]$Discard,
     [string]$WrapperPath,
@@ -34,6 +37,15 @@ $script:EngineWorktreeRootBound = $PSBoundParameters.ContainsKey('WorktreeRoot')
 $script:EngineWrapperBound = $PSBoundParameters.ContainsKey('WrapperPath')
 $script:EngineCodexBound = $PSBoundParameters.ContainsKey('CodexExecutable')
 $script:EngineCodexPrefixBound = $PSBoundParameters.ContainsKey('CodexExecutableArgumentPrefix')
+$script:EngineReviewVerdictBound = $PSBoundParameters.ContainsKey('ReviewVerdict')
+$script:EngineReviewDigestBound = $PSBoundParameters.ContainsKey('ReviewDigest')
+$script:EngineReviewRecordBound = $PSBoundParameters.ContainsKey('ReviewRecord')
+$script:EngineReviewFlagsPresent = $false
+$script:EngineReviewFlagsConsumed = $false
+$script:EngineReviewRecordPath = $null
+$script:EngineReviewRecordSha256 = $null
+$script:EngineResumeEntryStatus = $null
+$script:EngineResumeEntryDiagnosis = $null
 $script:EngineLockStream = $null
 $script:EngineLockPath = $null
 $script:EngineRetryDelaySeconds = 60
@@ -356,8 +368,17 @@ function Get-RunnerAllFiles {
 
 function Get-RunnerDigest {
     param([string]$Path)
+    $bytes = [IO.File]::ReadAllBytes($Path)
+    if (($bytes.Length -ge 4 -and $bytes[0] -eq 0xFF -and $bytes[1] -eq 0xFE -and $bytes[2] -eq 0x00 -and $bytes[3] -eq 0x00) -or
+            ($bytes.Length -ge 4 -and $bytes[0] -eq 0x00 -and $bytes[1] -eq 0x00 -and $bytes[2] -eq 0xFE -and $bytes[3] -eq 0xFF) -or
+            ($bytes.Length -ge 2 -and $bytes[0] -eq 0xFF -and $bytes[1] -eq 0xFE) -or
+            ($bytes.Length -ge 2 -and $bytes[0] -eq 0xFE -and $bytes[1] -eq 0xFF)) {
+        throw 'UTF-16 and UTF-32 byte-order marks are not valid UTF-8.'
+    }
     $strict = New-Object Text.UTF8Encoding($false, $true)
-    Get-EngineSha256 -Text ([IO.File]::ReadAllText($Path, $strict))
+    $offset = 0
+    if ($bytes.Length -ge 3 -and $bytes[0] -eq 0xEF -and $bytes[1] -eq 0xBB -and $bytes[2] -eq 0xBF) { $offset = 3 }
+    Get-EngineSha256 -Text ($strict.GetString($bytes, $offset, $bytes.Length - $offset))
 }
 
 function Test-RunnerPidLive {
@@ -961,7 +982,141 @@ function Invoke-RunnerWave {
     return $false
 }
 
+function Get-RunnerReviewTreeDigest {
+    param([int]$WaveNumber)
+    $worktree = [string]$script:EngineState.integration.worktree
+    try { $liveHead = Invoke-RunnerGitText $worktree 'rev-parse' 'HEAD' }
+    catch { return [pscustomobject]@{ ok = $false; reason = "integration HEAD unavailable: $($_.Exception.Message)"; digest = $null } }
+    if ($liveHead -cne [string]$script:EngineState.integration.tip) {
+        return [pscustomobject]@{ ok = $false; reason = 'integration HEAD differs from recorded tip'; digest = $null }
+    }
+    $result = Invoke-RunnerScript $script:EngineTreePinScript ([string[]]@('-Digest', '-Worktree', $worktree))
+    if ($result.exit_code -ne 0) {
+        $reason = "tree-pin exit $($result.exit_code)"
+        if (-not [string]::IsNullOrWhiteSpace([string]$result.output)) { $reason += ": $($result.output.Trim())" }
+        return [pscustomobject]@{ ok = $false; reason = $reason; digest = $null }
+    }
+    $digest = ([string]$result.output).Trim()
+    if ($digest -cnotmatch '^[0-9a-f]{64}$') {
+        return [pscustomobject]@{ ok = $false; reason = 'tree-pin returned a malformed digest'; digest = $null }
+    }
+    return [pscustomobject]@{ ok = $true; reason = $null; digest = $digest }
+}
+
+function Set-RunnerReviewVerdictRefused {
+    param([int]$WaveNumber, [string]$Reason)
+    $script:EngineState.status = [string]$script:EngineResumeEntryStatus
+    $script:EngineState.diagnosis = $script:EngineResumeEntryDiagnosis
+    Add-RunnerTransition 'review-verdict-refused' "wave ${WaveNumber}: $Reason"
+    Save-RunnerState
+}
+
+function Invoke-RunnerReviewGate {
+    param([Parameter(Mandatory)][object]$Wave)
+    if ([string]$script:EngineState.plan.spec.risk -cne 'high') { return 'clean' }
+
+    $waveNumber = [int]$Wave.number
+    $runtime = Get-RunnerWaveRuntime $waveNumber
+    $review = $null
+    if ($null -ne $runtime -and $runtime.PSObject.Properties['review']) { $review = $runtime.review }
+    if ($null -ne $review -and [string]$review.status -ceq 'clean') { return 'clean' }
+
+    $live = Get-RunnerReviewTreeDigest $waveNumber
+    if (-not $live.ok) {
+        Set-RunnerParked "review digest unavailable for wave ${waveNumber}: $($live.reason)" $null
+        return 'parked'
+    }
+
+    if ($null -eq $review) {
+        $base = $null
+        if ($null -ne $runtime -and $runtime.PSObject.Properties['commit_intent'] -and
+                $runtime.commit_intent.PSObject.Properties['base']) {
+            $base = [string]$runtime.commit_intent.base
+        }
+        if (-not $base) {
+            try { $base = Invoke-RunnerGitText ([string]$script:EngineState.integration.worktree) 'rev-parse' "$($script:EngineState.integration.tip)^" }
+            catch {
+                Set-RunnerParked "review digest unavailable for wave ${waveNumber}: review base unavailable" $null
+                return 'parked'
+            }
+        }
+        $files = [string[]]@($Wave.tasks | ForEach-Object { @($_.files | ForEach-Object { [string]$_.path }) })
+        $review = [pscustomobject][ordered]@{
+            status = 'awaiting'; base = $base; head = [string]$script:EngineState.integration.tip
+            tree_digest = [string]$live.digest; files = $files; requested_at = Get-RunnerUtc; verdicts = @()
+        }
+        $runtime = Get-RunnerWaveRuntime $waveNumber -Create
+        $runtime | Add-Member -NotePropertyName review -NotePropertyValue $review
+        $script:EngineState.status = 'awaiting-review'; $script:EngineState.diagnosis = $null
+        Add-RunnerTransition 'awaiting-review' "$waveNumber/$($live.digest)"
+        Save-RunnerState
+        return 'paused'
+    }
+
+    if ([string]$live.digest -cne [string]$review.tree_digest) {
+        Set-RunnerParked "integration tree moved while wave $waveNumber awaited review (verdict void)" $null
+        return 'parked'
+    }
+
+    $useVerdict = $script:EngineReviewFlagsPresent -and -not $script:EngineReviewFlagsConsumed
+    if (-not $useVerdict) {
+        if ([string]$review.status -ceq 'rejected') {
+            $script:EngineState.status = 'parked'
+            $script:EngineState.diagnosis = "resume requires -ReviewVerdict clean bound to $($review.tree_digest), or -Teardown -Discard"
+            Save-RunnerState
+            return 'parked'
+        }
+        $script:EngineState.status = 'awaiting-review'; $script:EngineState.diagnosis = $null
+        Save-RunnerState
+        return 'paused'
+    }
+
+    $script:EngineReviewFlagsConsumed = $true
+    if ([string]$ReviewDigest -cne [string]$review.tree_digest) {
+        Set-RunnerReviewVerdictRefused $waveNumber 'supplied digest does not match the recorded review digest'
+        return 'refused'
+    }
+    foreach ($prior in @($review.verdicts)) {
+        if ([string]$prior.record_sha256 -ceq [string]$script:EngineReviewRecordSha256) {
+            Set-RunnerReviewVerdictRefused $waveNumber 'review record SHA-256 was already used for this wave'
+            return 'refused'
+        }
+    }
+
+    $verdict = [pscustomobject][ordered]@{
+        verdict = [string]$ReviewVerdict; digest = [string]$ReviewDigest
+        record_path = [string]$script:EngineReviewRecordPath
+        record_sha256 = [string]$script:EngineReviewRecordSha256; at = Get-RunnerUtc
+    }
+    $review.verdicts = @($review.verdicts) + $verdict
+    if ([string]$ReviewVerdict -ceq 'reject') {
+        $review.status = 'rejected'
+        Set-RunnerParked "wave $waveNumber review rejected (record $($script:EngineReviewRecordPath))" $null
+        return 'parked'
+    }
+    $review.status = 'clean'
+    $script:EngineState.status = 'running'; $script:EngineState.diagnosis = $null
+    Save-RunnerState
+    return 'clean'
+}
+
 function Invoke-RunnerHandoff {
+    if ([string]$script:EngineState.plan.spec.risk -ceq 'high') {
+        $finalReview = $null
+        foreach ($wave in @($script:EngineState.plan.waves)) {
+            $runtime = Get-RunnerWaveRuntime ([int]$wave.number)
+            if ($null -eq $runtime -or -not $runtime.PSObject.Properties['review'] -or
+                    [string]$runtime.review.status -cne 'clean') {
+                Set-RunnerParked "wave $($wave.number) is not cleanly reviewed; hand-off refused" $null
+                return $false
+            }
+            $finalReview = $runtime.review
+        }
+        if ($null -eq $finalReview -or [string]$finalReview.head -cne [string]$script:EngineState.integration.tip) {
+            Set-RunnerParked 'final reviewed tip differs from integration tip; hand-off refused' $null
+            return $false
+        }
+    }
     $script:EngineState.handoff.status = 'running'
     if (-not $script:EngineState.handoff.started_at) { $script:EngineState.handoff.started_at = Get-RunnerUtc }
     Add-RunnerTransition 'handoff-started' $null; Save-RunnerState
@@ -982,7 +1137,7 @@ function Invoke-RunnerHandoff {
     $result = Invoke-EngineHandoff -Repo $script:EngineState.repo -IntegrationWorktree $script:EngineState.integration.worktree `
         -BaseSha $script:EngineState.base_sha -Files (Get-RunnerAllFiles) `
         -JournaledPaths ([string[]]@($script:EngineState.handoff.journaled_paths)) -OnFileJournaled $callback `
-        -StateDirectory (Split-Path -Parent $script:EngineStatePath)
+        -StateDirectory (Split-Path -Parent $script:EngineStatePath) -ExpectedTip $script:EngineState.integration.tip
     if (-not $result.ok) {
         $script:EngineState.handoff.status = 'partial'; $script:EngineState.handoff.mismatch_path = $result.mismatch_path
         $script:EngineState.handoff.recovery_patch = $result.recovery_patch; $script:EngineState.status = 'partial'
@@ -1008,8 +1163,60 @@ function Write-RunnerSummary {
     Write-Host "Wrapper spec: $($script:EngineState.spec.name)"
     Write-Host "Ledger: $($script:EngineLedgerPath)"
     if ($script:EngineState.diagnosis) { Write-Host "Diagnosis: $($script:EngineState.diagnosis)" }
-    Write-Host 'Next: Critic review, docs/owner commit, then -Teardown <runId>.'
+    if ([string]$script:EngineState.status -ceq 'awaiting-review') {
+        $awaitingWave = $null; $awaitingReview = $null
+        foreach ($wave in @($script:EngineState.plan.waves)) {
+            $runtime = Get-RunnerWaveRuntime ([int]$wave.number)
+            if ($null -ne $runtime -and $runtime.PSObject.Properties['review'] -and
+                    [string]$runtime.review.status -ceq 'awaiting') {
+                $awaitingWave = $wave; $awaitingReview = $runtime.review; break
+            }
+        }
+        if ($null -ne $awaitingReview) {
+            Write-Host "Awaiting review: wave $($awaitingWave.number)"
+            Write-Host "Review diff: $($awaitingReview.base)..$($awaitingReview.head)"
+            Write-Host "Review digest: $($awaitingReview.tree_digest)"
+        }
+        Write-Host "Next: Opus Critic on that diff, then -Resume $($script:EngineState.run_id) -ReviewVerdict clean|reject -ReviewDigest <hex> -ReviewRecord <abs path>"
+    } elseif ([string]$script:EngineState.status -ceq 'parked') {
+        $hasRejectedReview = $false
+        foreach ($wave in @($script:EngineState.plan.waves)) {
+            $runtime = Get-RunnerWaveRuntime ([int]$wave.number)
+            if ($null -ne $runtime -and $runtime.PSObject.Properties['review'] -and
+                    [string]$runtime.review.status -ceq 'rejected') {
+                $hasRejectedReview = $true; break
+            }
+        }
+        if ($hasRejectedReview) {
+            Write-Host "Next: fix via an adjusted spec, then -Resume $($script:EngineState.run_id) -ReviewVerdict clean -ReviewDigest <digest> -ReviewRecord <new abs path>, or -Teardown $($script:EngineState.run_id) -Discard"
+        } else { Write-Host 'Next: Critic review, docs/owner commit, then -Teardown <runId>.' }
+    } else {
+        Write-Host 'Next: Critic review, docs/owner commit, then -Teardown <runId>.'
+    }
     Write-Host "Run: $($script:EngineState.status)"
+}
+
+function Invoke-RunnerMainLoop {
+    foreach ($wave in @($script:EngineState.plan.waves)) {
+        $pending = @($wave.tasks | Where-Object { (Get-RunnerTaskState $_.id).status -cne 'integrated' })
+        if ($pending.Count -gt 0 -and -not (Invoke-RunnerWave $wave)) { Write-RunnerSummary; return 1 }
+
+        $reviewOutput = @(Invoke-RunnerReviewGate -Wave $wave)
+        $reviewResult = $null
+        if ($reviewOutput.Count -eq 1 -and $null -ne $reviewOutput[0]) { $reviewResult = [string]$reviewOutput[0] }
+        if ($reviewOutput.Count -eq 1 -and $reviewResult -ceq 'clean') { continue }
+        if ($reviewOutput.Count -eq 1 -and $reviewResult -ceq 'paused') { Write-RunnerSummary; return 2 }
+        if ($reviewOutput.Count -eq 1 -and @('parked', 'refused') -ccontains $reviewResult) { Write-RunnerSummary; return 1 }
+
+        Set-RunnerParked "review gate returned unexpected result for wave $($wave.number)" $null
+        Write-RunnerSummary
+        return 1
+    }
+    if ($script:EngineState.handoff.status -cne 'complete') {
+        if (-not (Invoke-RunnerHandoff)) { Write-RunnerSummary; return 1 }
+    } else { $script:EngineState.status = 'complete'; Save-RunnerState }
+    Write-RunnerSummary
+    return 0
 }
 
 function Invoke-RunnerTeardown {
@@ -1045,7 +1252,7 @@ function Invoke-RunnerTeardown {
             -Spec ([pscustomobject]@{ name = $script:EngineState.spec.name; run_id = $RunId }) `
             -Files (Get-RunnerAllFiles) -IntegrationTip $script:EngineState.integration.tip
         if (-not $proof.ok) { throw 'Complete teardown proof failed.' }
-    } elseif (-not $Discard) { throw 'Partial, parked, paused, or refused teardown requires -Discard.' }
+    } elseif (-not $Discard) { throw 'Partial, parked, paused, awaiting-review, or refused teardown requires -Discard.' }
     $branches = @(); $worktrees = @()
     if ($script:EngineState.integration.branch) { $branches += [string]$script:EngineState.integration.branch }
     if ($script:EngineState.integration.worktree) { $worktrees += [string]$script:EngineState.integration.worktree }
@@ -1219,7 +1426,35 @@ function Initialize-RunnerResume {
     $owner = Open-RunnerRunLock $runDirectory
     $script:EngineState = Get-Content -LiteralPath $script:EngineStatePath -Raw | ConvertFrom-Json
     if ([string]$script:EngineState.run_id -cne $RunId) { throw 'State run_id does not match its directory.' }
-    if ([string]$script:EngineState.status -notin @('running', 'partial', 'parked', 'paused')) { throw "Run status cannot be resumed: $($script:EngineState.status)" }
+    if ([string]$script:EngineState.status -notin @('running', 'partial', 'parked', 'paused', 'awaiting-review')) {
+        Write-Host "Engine refused: Run status cannot be resumed: $($script:EngineState.status)"
+        return $false
+    }
+    if ($script:EngineReviewFlagsPresent) {
+        if ([string]$script:EngineState.plan.spec.risk -cne 'high') {
+            Write-Host 'Engine refused: Review verdict flags require a high-risk run.'
+            return $false
+        }
+        $pendingReview = $null
+        foreach ($wave in @($script:EngineState.plan.waves)) {
+            $states = @($wave.tasks | ForEach-Object { Get-RunnerTaskState ([string]$_.id) })
+            if (@($states | Where-Object { [string]$_.status -cne 'integrated' }).Count -gt 0) { continue }
+            $runtime = Get-RunnerWaveRuntime ([int]$wave.number)
+            if ($null -ne $runtime -and $runtime.PSObject.Properties['review'] -and
+                    [string]$runtime.review.status -ceq 'clean') { continue }
+            if ($null -ne $runtime -and $runtime.PSObject.Properties['review'] -and
+                    @('awaiting', 'rejected') -ccontains [string]$runtime.review.status) {
+                $pendingReview = $runtime.review
+            }
+            break
+        }
+        if ($null -eq $pendingReview) {
+            Write-Host 'Engine refused: Review verdict flags require a review-pending integrated wave.'
+            return $false
+        }
+    }
+    $script:EngineResumeEntryStatus = [string]$script:EngineState.status
+    $script:EngineResumeEntryDiagnosis = $script:EngineState.diagnosis
     $script:EngineState.engine_owner = $owner; Save-RunnerState
     if (-not $script:EngineWorktreeRootBound) { $script:EngineWorktreeRoot = Get-RunnerPath ([string]$script:EngineState.worktree_root) }
     if (-not $script:EngineWrapperBound) { $script:EngineWrapper = Get-RunnerPath ([string]$script:EngineState.wrapper_path) }
@@ -1258,6 +1493,34 @@ try {
     foreach ($candidate in @($Resume, $Teardown)) {
         if ($candidate -and $candidate -cnotmatch '^[0-9a-f]{32}$') { throw 'Resume/Teardown run IDs must be 32 lowercase hexadecimal characters.' }
     }
+    $reviewFlagsBound = @($script:EngineReviewVerdictBound, $script:EngineReviewDigestBound,
+        $script:EngineReviewRecordBound)
+    $reviewFlagCount = @($reviewFlagsBound | Where-Object { $_ }).Count
+    if ($reviewFlagCount -ne 0 -and $reviewFlagCount -ne 3) {
+        throw '-ReviewVerdict, -ReviewDigest, and -ReviewRecord must be supplied together.'
+    }
+    if ($reviewFlagCount -eq 3) {
+        if (-not $Resume) { throw 'Review verdict flags are valid only with -Resume.' }
+        if ([string]$ReviewVerdict -cne 'clean' -and [string]$ReviewVerdict -cne 'reject') {
+            throw "-ReviewVerdict must be exactly 'clean' or 'reject'"
+        }
+        if ([string]$ReviewDigest -cnotmatch '^[0-9a-f]{64}$') { throw '-ReviewDigest must be 64 lowercase hexadecimal characters.' }
+        $reviewRecordInput = [string]$ReviewRecord
+        $isDriveAbsolute = $reviewRecordInput -cmatch '^[A-Za-z]:[\\/]'
+        $isUncAbsolute = $reviewRecordInput -cmatch '^\\\\[^\\]+\\[^\\]+'
+        try { $reviewRecordFullPath = [IO.Path]::GetFullPath($reviewRecordInput) }
+        catch { throw '-ReviewRecord must be an absolute normalized path.' }
+        if ((-not $isDriveAbsolute -and -not $isUncAbsolute) -or
+                $reviewRecordInput.Replace('/', '\') -cne $reviewRecordFullPath.Replace('/', '\')) {
+            throw '-ReviewRecord must be an absolute normalized path.'
+        }
+        if (-not (Test-Path -LiteralPath $reviewRecordInput -PathType Leaf)) { throw '-ReviewRecord must name an existing file.' }
+        $script:EngineReviewRecordPath = Get-RunnerPath $reviewRecordInput
+        if (-not (Test-RunnerOutsideWorktree $script:EngineReviewRecordPath)) { throw '-ReviewRecord must be outside every Git worktree.' }
+        try { $script:EngineReviewRecordSha256 = Get-RunnerDigest $script:EngineReviewRecordPath }
+        catch { throw "-ReviewRecord must be strict UTF-8: $($_.Exception.Message)" }
+        $script:EngineReviewFlagsPresent = $true
+    }
     if (-not $StateRoot) {
         if ($env:APEX_STATE_DIR) { $StateRoot = $env:APEX_STATE_DIR }
         else { $StateRoot = Join-Path $env:LOCALAPPDATA 'apex' }
@@ -1280,15 +1543,7 @@ try {
     $ready = if ($Resume) { Initialize-RunnerResume $Resume } else { Initialize-RunnerNewState }
     if (-not $ready) { Write-RunnerSummary; exit 1 }
 
-    foreach ($wave in @($script:EngineState.plan.waves)) {
-        $pending = @($wave.tasks | Where-Object { (Get-RunnerTaskState $_.id).status -cne 'integrated' })
-        if ($pending.Count -gt 0 -and -not (Invoke-RunnerWave $wave)) { Write-RunnerSummary; exit 1 }
-    }
-    if ($script:EngineState.handoff.status -cne 'complete') {
-        if (-not (Invoke-RunnerHandoff)) { Write-RunnerSummary; exit 1 }
-    } else { $script:EngineState.status = 'complete'; Save-RunnerState }
-    Write-RunnerSummary
-    exit 0
+    exit (Invoke-RunnerMainLoop)
 } catch {
     if ($null -ne $script:EngineState) {
         if ($Teardown) {

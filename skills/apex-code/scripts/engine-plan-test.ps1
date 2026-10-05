@@ -119,6 +119,7 @@ function New-SpecText {
         [string]$Assumptions = '- The fixture environment is available.',
         [string]$Specialist = "### Security`nKeep fixture writes scoped.`n`n### Accessibility`n(none)",
         [switch]$NoSpec,
+        [switch]$OmitRisk,
         [string]$SpecIdentity,
         [switch]$NoManifest,
         [switch]$DuplicateManifest
@@ -129,7 +130,7 @@ function New-SpecText {
         if ([string]::IsNullOrEmpty($SpecIdentity)) { $SpecIdentity = $Name }
         [void]$front.Add('spec: ' + $SpecIdentity)
     }
-    if ($null -ne $Risk) { [void]$front.Add('risk: ' + $Risk) }
+    if (-not $OmitRisk -and $null -ne $Risk) { [void]$front.Add('risk: ' + $Risk) }
     if (-not [string]::IsNullOrEmpty($CoderModel)) { [void]$front.Add('coder_model: ' + $CoderModel) }
     if ($null -ne $CoderEffort) { [void]$front.Add('coder_effort: ' + $CoderEffort) }
     if ($null -ne $MaxParallelCodex) { [void]$front.Add('max_parallel_codex: ' + $MaxParallelCodex) }
@@ -310,14 +311,24 @@ catch { `$strictPreserved = `$true }
             -not (Invoke-Plan $traversal).allowed -and -not (Invoke-Plan $mismatch).allowed -and
             -not (Invoke-Plan $uppercase).allowed
     }
-    Assert-Case 'frontmatter and Intent risk grammar' {
-        $frontHigh = New-Fixture -SpecOptions @{ Risk = 'high' }
+    Assert-Case 'risk high grammar' {
+        $frontHigh = Invoke-Plan (New-Fixture -SpecOptions @{ Risk = 'high' })
+        $frontHighIntent = Invoke-Plan (New-Fixture -SpecOptions @{ Risk = 'high'; Intent = '- **Intent:** This line declares RISK: HIGH for execution.' })
+        $mediumIntent = Invoke-Plan (New-Fixture -SpecOptions @{ Risk = 'medium'; Intent = '- **Intent:** This line declares RISK: HIGH for execution.' })
+        $absentIntent = Invoke-Plan (New-Fixture -SpecOptions @{ OmitRisk = $true; Intent = '- **Intent:** This line declares RISK: HIGH for execution.' })
         $empty = New-Fixture -SpecOptions @{ Risk = '' }
         $other = New-Fixture -SpecOptions @{ Risk = 'critical' }
-        $intentHigh = New-Fixture -SpecOptions @{ Intent = '- **Intent:** This line declares RISK: HIGH for execution.' }
+        $nearFront = New-Fixture -SpecOptions @{ Risk = 'highly' }
+        $titleFront = New-Fixture -SpecOptions @{ Risk = 'High' }
+        $upperFront = New-Fixture -SpecOptions @{ Risk = 'HIGH' }
         $near = New-Fixture -SpecOptions @{ Intent = '- **Intent:** This mentions risk: highly without declaring it.' }
-        return -not (Invoke-Plan $frontHigh).allowed -and -not (Invoke-Plan $empty).allowed -and
-            -not (Invoke-Plan $other).allowed -and -not (Invoke-Plan $intentHigh).allowed -and (Invoke-Plan $near).allowed
+        return $frontHigh.allowed -and $frontHigh.spec.risk -ceq 'high' -and
+            $frontHighIntent.allowed -and $frontHighIntent.spec.risk -ceq 'high' -and
+            -not $mediumIntent.allowed -and $mediumIntent.refusal -ceq 'Intent declares risk: high but frontmatter risk is not high' -and
+            -not $absentIntent.allowed -and $absentIntent.refusal -ceq 'Intent declares risk: high but frontmatter risk is not high' -and
+            -not (Invoke-Plan $empty).allowed -and -not (Invoke-Plan $other).allowed -and
+            -not (Invoke-Plan $nearFront).allowed -and -not (Invoke-Plan $titleFront).allowed -and
+            -not (Invoke-Plan $upperFront).allowed -and (Invoke-Plan $near).allowed
     }
     Assert-Case 'Non-goals risk token does not refuse' {
         $fixture = New-Fixture -SpecOptions @{ Intent = "- **Intent:** Build safely.`n- **Non-goals:** risk: high execution is excluded." }

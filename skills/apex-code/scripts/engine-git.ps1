@@ -510,6 +510,7 @@ function Invoke-EngineHandoff {
         [Parameter(Mandatory = $true)][string]$Repo,
         [Parameter(Mandatory = $true)][string]$IntegrationWorktree,
         [Parameter(Mandatory = $true)][string]$BaseSha,
+        [Parameter(Mandatory = $true)][string]$ExpectedTip,
         [Parameter(Mandatory = $true)][object[]]$Files,
         [string[]]$JournaledPaths = @(),
         [Parameter(Mandatory = $true)][scriptblock]$OnFileJournaled,
@@ -521,6 +522,9 @@ function Invoke-EngineHandoff {
     $tipResult = Invoke-EngineGit $integrationRoot @('rev-parse', 'HEAD')
     Assert-EngineGitResult $tipResult 'Read integration tip for hand-off'
     $tip = $tipResult.text
+    if ($tip -cne $ExpectedTip) {
+        throw "integration HEAD $tip differs from reviewed tip $ExpectedTip; hand-off refused"
+    }
     $completed = New-Object System.Collections.ArrayList
     $journalSet = New-Object 'Collections.Generic.HashSet[string]' ([StringComparer]::OrdinalIgnoreCase)
     $records = New-Object System.Collections.ArrayList

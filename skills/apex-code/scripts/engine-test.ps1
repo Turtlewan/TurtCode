@@ -119,14 +119,16 @@ function New-TestSpec {
     param(
         [string]$Repo, [string]$Path, [switch]$Critical, [switch]$Single,
         [string]$FirstId = '1', [string]$SecondId = '2',
-        [ValidateSet('low', 'medium', 'high', 'xhigh', 'max', 'ultra')][string]$Effort = 'medium'
+        [ValidateSet('low', 'medium', 'high', 'xhigh', 'max', 'ultra')][string]$Effort = 'medium',
+        [string]$Risk = 'medium', [switch]$TwoWave
     )
     $emDash = [string][char]0x2014
     $firstPath = if ($Critical) { '.github/workflows/build.yml' } else { 'src/a.py' }
     $firstOp = if ($Critical) { 'create' } else { 'modify' }
     $omitSecond = $Critical -or $Single
     $secondTask = if ($omitSecond) { '' } else { "- [ ] **Task $SecondId** - Create the second fixture file. $emDash files: src/b.py $emDash done when: the second fixture file exists." }
-    $secondManifest = if ($omitSecond) { '' } else { ", { `"id`": `"$SecondId`", `"repo`": `"main`", `"files`": [{ `"path`": `"src/b.py`", `"op`": `"create`" }], `"depends_on`": [] }" }
+    $secondDepends = if ($TwoWave) { '["1"]' } else { '[]' }
+    $secondManifest = if ($omitSecond) { '' } else { ", { `"id`": `"$SecondId`", `"repo`": `"main`", `"files`": [{ `"path`": `"src/b.py`", `"op`": `"create`" }], `"depends_on`": $secondDepends }" }
     $secondAcceptance = if ($omitSecond) { '' } else { "- [ ] Task $SecondId - second file is executable -> verify: run the fixture command." }
     $name = [IO.Path]::GetFileNameWithoutExtension($Path)
     $repoJson = (Convert-TestPath $Repo).Replace('\', '\\').Replace('"', '\"')
@@ -135,7 +137,7 @@ function New-TestSpec {
 spec: $name
 status: approved
 autonomy_level: L2
-risk: medium
+risk: $Risk
 coder_model: gpt-5.6-sol
 coder_effort: $Effort
 max_parallel_codex: 2
@@ -171,7 +173,7 @@ max_parallel_codex: 2
 - [ ] **Task $FirstId** - Change the first fixture file. $emDash files: $firstPath $emDash done when: the first fixture file is changed.
 $secondTask
 ## Wave plan
-- Tasks 1 and 2 are parallel.
+$(if ($TwoWave) { '- Wave 1: Task 1. Wave 2: Task 2.' } else { '- Tasks 1 and 2 are parallel.' })
 
 ## Permissions
 - The manifest paths may be changed.
@@ -396,16 +398,40 @@ function Get-TestOnlyState {
     Get-Content -LiteralPath $files[0].FullName -Raw | ConvertFrom-Json
 }
 
+function Get-TestOnlyStateFile {
+    param([string]$Root)
+    $files = @(Get-ChildItem -LiteralPath $Root -Filter engine-state.json -Recurse -File -ErrorAction SilentlyContinue)
+    if ($files.Count -ne 1) { return $null }
+    return $files[0]
+}
+
+function Get-TestFileSha256 {
+    param([string]$Path)
+    if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) { return $null }
+    return (Get-FileHash -LiteralPath $Path -Algorithm SHA256).Hash.ToLowerInvariant()
+}
+
+function Test-NoWaveReview {
+    param([AllowNull()][object]$State)
+    if ($null -eq $State -or -not $State.PSObject.Properties['wave_runtime']) { return $true }
+    foreach ($property in $State.wave_runtime.PSObject.Properties) {
+        if ($property.Value.PSObject.Properties['review']) { return $false }
+    }
+    return $true
+}
+
 function Invoke-TestScenario {
     param(
         [string]$Name, [string]$Scenario = 'done', [string]$Effort = 'medium',
         [switch]$Single, [string]$FirstId = '1', [string]$SecondId = '2',
+        [string]$Risk = 'medium', [switch]$TwoWave,
         [AllowNull()][string]$BaselinePath, [AllowNull()][string]$TreePinPath,
         [AllowNull()][string]$CriticalPath
     )
     $repoPath = New-TestRepo "$Name-repo"
     $specPath = Join-Path $testRoot "$Name.md"
-    New-TestSpec $repoPath $specPath -Single:$Single -FirstId $FirstId -SecondId $SecondId -Effort $Effort
+    New-TestSpec $repoPath $specPath -Single:$Single -FirstId $FirstId -SecondId $SecondId -Effort $Effort `
+        -Risk $Risk -TwoWave:$TwoWave
     $statePath = Join-Path $testRoot "$Name-state"
     $worktrees = Join-Path $testRoot "$Name-worktrees"
     $oldScenario = $env:ENGINE_TEST_FAKE_SCENARIO
@@ -640,6 +666,427 @@ try {
     } catch { $v1Compatible = $false; $v1CompatibilityError = $_.Exception.Message }
     Assert-Test 'v1 schema compatibility' $v1Compatible $v1CompatibilityError
 
+    # High-risk review pauses use the production tree-pin unless a case explicitly selects one of
+    # the two digest-failure stubs below.
+    Remove-Item Env:APEX_ENGINE_TEST_TREE_PIN_PATH -ErrorAction SilentlyContinue
+    $realTreePin = Join-Path $PSScriptRoot 'tree-pin.ps1'
+    $reviewRecordOne = Join-Path $testRoot 'review-one.txt'
+    $reviewRecordTwo = Join-Path $testRoot 'review-two.txt'
+    Write-TestText $reviewRecordOne "owner review one`n"
+    Write-TestText $reviewRecordTwo "owner review two`n"
+
+    $highTwoWave = Invoke-TestScenario -Name 'high-two-wave' -Risk high -TwoWave
+    $highTwoWaveFile = Get-TestOnlyStateFile $highTwoWave.state_root
+    $highPause = Get-TestOnlyState $highTwoWave.state_root
+    $highReviewOne = $highPause.wave_runtime.'1'.review
+    $highSchemaOk = $true; $highSchemaError = ''
+    try { Test-Structure $highPause (Get-Content $schemaPath -Raw | ConvertFrom-Json) }
+    catch { $highSchemaOk = $false; $highSchemaError = $_.Exception.Message }
+    $reviewPin = Invoke-RunnerScript $realTreePin ([string[]]@('-Digest', '-Worktree', [string]$highPause.integration.worktree))
+    $integrationCommitCount = [int](Invoke-TestGit $highPause.integration.worktree @('rev-list', '--count', "$($highPause.base_sha)..$($highPause.integration.tip)"))[-1]
+    $mainAAtPause = [IO.File]::ReadAllText((Join-Path $highTwoWave.repo 'src\a.py'))
+    $pauseLines = @($highTwoWave.result.output -split "`r?`n")
+    $pauseTail = (($pauseLines | Select-Object -Last 15) -join "`n")
+    $plainTransitionsBefore = @($highPause.transitions).Count
+    $plainDispatchBefore = [int]$highPause.counters.dispatches
+    $plainHighResume = Invoke-TestEngine @('-Resume', $highPause.run_id, '-StateRoot', $highTwoWave.state_root)
+    $highPlain = Get-TestOnlyState $highTwoWave.state_root
+    $plainNewTransitions = @($highPlain.transitions | Select-Object -Skip $plainTransitionsBefore)
+    Assert-Test 'risk high pause after wave' `
+        ($highTwoWave.result.code -eq 2 -and $highPause.status -ceq 'awaiting-review' -and
+            $highReviewOne.tree_digest -cmatch '^[0-9a-f]{64}$' -and $reviewPin.exit_code -eq 0 -and
+            [string]$reviewPin.output.Trim() -ceq [string]$highReviewOne.tree_digest -and
+            $integrationCommitCount -eq 1 -and @($highPause.tasks[1].attempts).Count -eq 0 -and
+            $mainAAtPause -notmatch 'fake-one' -and -not (Test-Path (Join-Path $highTwoWave.repo 'src\b.py')) -and
+            $highSchemaOk -and $plainHighResume.code -eq 2 -and $highPlain.status -ceq 'awaiting-review' -and
+            $highPlain.counters.dispatches -eq $plainDispatchBefore -and @($plainNewTransitions).Count -eq 1 -and
+            [string]$plainNewTransitions[0].kind -ceq 'resumed' -and
+            $pauseTail -match "Awaiting review: wave 1" -and
+            $pauseTail -match [regex]::Escape("Review diff: $($highReviewOne.base)..$($highReviewOne.head)") -and
+            $pauseTail -match [regex]::Escape("Review digest: $($highReviewOne.tree_digest)") -and
+            $pauseTail -match 'Next: Opus Critic on that diff' -and
+            $pauseTail -notmatch 'Next: Critic review, docs/owner commit') `
+        "initial=$($highTwoWave.result.output); resume=$($plainHighResume.output); schema=$highSchemaError"
+
+    $cleanWaveOne = Invoke-TestEngine @('-Resume', $highPlain.run_id, '-StateRoot', $highTwoWave.state_root,
+        '-ReviewVerdict', 'clean', '-ReviewDigest', $highReviewOne.tree_digest, '-ReviewRecord', $reviewRecordOne)
+    $waveTwoPause = Get-TestOnlyState $highTwoWave.state_root
+    $waveTwoReview = $waveTwoPause.wave_runtime.'2'.review
+    $waveTwoMainBeforeClean = Test-Path (Join-Path $highTwoWave.repo 'src\b.py')
+    $waveTwoDispatches = [int]$waveTwoPause.counters.dispatches
+    $waveTwoTransitions = @($waveTwoPause.transitions).Count
+    $wrongWaveDigest = Invoke-TestEngine @('-Resume', $waveTwoPause.run_id, '-StateRoot', $highTwoWave.state_root,
+        '-ReviewVerdict', 'clean', '-ReviewDigest', $highReviewOne.tree_digest, '-ReviewRecord', $reviewRecordTwo)
+    $waveTwoRefused = Get-TestOnlyState $highTwoWave.state_root
+    $waveTwoRefusalKinds = @($waveTwoRefused.transitions | Select-Object -Skip $waveTwoTransitions | ForEach-Object { [string]$_.kind })
+    Write-TestText $reviewRecordTwo "owner review two revised`n"
+    $cleanWaveTwo = Invoke-TestEngine @('-Resume', $waveTwoRefused.run_id, '-StateRoot', $highTwoWave.state_root,
+        '-ReviewVerdict', 'clean', '-ReviewDigest', $waveTwoReview.tree_digest, '-ReviewRecord', $reviewRecordTwo)
+    $twoWaveDone = Get-TestOnlyState $highTwoWave.state_root
+    Assert-Test 'review clean continues to next wave' `
+        ($cleanWaveOne.code -eq 2 -and $waveTwoPause.status -ceq 'awaiting-review' -and
+            [string]$waveTwoPause.wave_runtime.'1'.review.status -ceq 'clean' -and
+            [string]$waveTwoReview.status -ceq 'awaiting' -and @($waveTwoPause.tasks[1].attempts).Count -eq 1 -and
+            -not $waveTwoMainBeforeClean -and
+            $wrongWaveDigest.code -eq 1 -and $waveTwoRefused.status -ceq 'awaiting-review' -and
+            ($waveTwoRefusalKinds -join ',') -ceq 'resumed,review-verdict-refused' -and
+            $waveTwoRefused.counters.dispatches -eq $waveTwoDispatches -and
+            $cleanWaveTwo.code -eq 0 -and $twoWaveDone.status -ceq 'complete' -and
+            (Test-Path (Join-Path $highTwoWave.repo 'src\b.py'))) `
+        "wave1=$($cleanWaveOne.output); wrong=$($wrongWaveDigest.output); wave2=$($cleanWaveTwo.output)"
+
+    $originalReviewGate = ${function:Invoke-RunnerReviewGate}
+    $originalRunnerWave = ${function:Invoke-RunnerWave}
+    $originalRunnerHandoff = ${function:Invoke-RunnerHandoff}
+    $savedEngineState = $script:EngineState; $savedEngineStatePath = $script:EngineStatePath
+    $script:UnexpectedWaveCalls = 0; $script:UnexpectedHandoffCalls = 0
+    function Invoke-RunnerReviewGate { param($Wave) 'clean'; 'leaked-output' }
+    function Invoke-RunnerWave { param($Wave) $script:UnexpectedWaveCalls++; return $true }
+    function Invoke-RunnerHandoff { $script:UnexpectedHandoffCalls++; return $true }
+    try {
+        $unexpectedGateState = ($twoWaveDone | ConvertTo-Json -Depth 100) | ConvertFrom-Json
+        $unexpectedGateState.status = 'running'; $unexpectedGateState.handoff.status = 'pending'
+        $unexpectedGateState.tasks[1].status = 'pending'
+        $unexpectedGateAttempts = @($unexpectedGateState.tasks[1].attempts).Count
+        $script:EngineState = $unexpectedGateState; $script:EngineStatePath = $null
+        $unexpectedGateExit = Invoke-RunnerMainLoop
+    } finally {
+        Set-Item -LiteralPath Function:Invoke-RunnerReviewGate -Value $originalReviewGate
+        Set-Item -LiteralPath Function:Invoke-RunnerWave -Value $originalRunnerWave
+        Set-Item -LiteralPath Function:Invoke-RunnerHandoff -Value $originalRunnerHandoff
+        $script:EngineState = $savedEngineState; $script:EngineStatePath = $savedEngineStatePath
+    }
+    Assert-Test 'unexpected review gate result parks before next wave' `
+        ($unexpectedGateExit -eq 1 -and $unexpectedGateState.status -ceq 'parked' -and
+            [string]$unexpectedGateState.diagnosis -ceq 'review gate returned unexpected result for wave 1' -and
+            $script:UnexpectedWaveCalls -eq 0 -and $script:UnexpectedHandoffCalls -eq 0 -and
+            @($unexpectedGateState.tasks[1].attempts).Count -eq $unexpectedGateAttempts) `
+        "exit=$unexpectedGateExit; diagnosis=$($unexpectedGateState.diagnosis); waveCalls=$($script:UnexpectedWaveCalls); handoffCalls=$($script:UnexpectedHandoffCalls)"
+
+    $binding = Invoke-TestScenario -Name 'review-binding' -Risk high -Single
+    $bindingFile = Get-TestOnlyStateFile $binding.state_root
+    $bindingPause = Get-TestOnlyState $binding.state_root
+    $bindingDigest = [string]$bindingPause.wave_runtime.'1'.review.tree_digest
+    $bindingEntryDiagnosis = $bindingPause.diagnosis
+    $bindingTransitions = @($bindingPause.transitions).Count
+    $bindingDispatches = [int]$bindingPause.counters.dispatches
+    $wrongDigest = '0' * 64
+    if ($wrongDigest -ceq $bindingDigest) { $wrongDigest = '1' * 64 }
+    $wrongBinding = Invoke-TestEngine @('-Resume', $bindingPause.run_id, '-StateRoot', $binding.state_root,
+        '-ReviewVerdict', 'clean', '-ReviewDigest', $wrongDigest, '-ReviewRecord', $reviewRecordOne)
+    $afterWrongBinding = Get-TestOnlyState $binding.state_root
+    $bindingKinds = @($afterWrongBinding.transitions | Select-Object -Skip $bindingTransitions | ForEach-Object { [string]$_.kind })
+    $movedPath = Join-Path $afterWrongBinding.integration.worktree 'review-untracked.txt'
+    Write-TestText $movedPath "moves the tree`n"
+    $movedBinding = Invoke-TestEngine @('-Resume', $afterWrongBinding.run_id, '-StateRoot', $binding.state_root,
+        '-ReviewVerdict', 'clean', '-ReviewDigest', $bindingDigest, '-ReviewRecord', $reviewRecordOne)
+    $afterMovedBinding = Get-TestOnlyState $binding.state_root
+    Remove-Item -LiteralPath $movedPath -Force
+    $restoredBinding = Invoke-TestEngine @('-Resume', $afterMovedBinding.run_id, '-StateRoot', $binding.state_root)
+    $afterRestoredBinding = Get-TestOnlyState $binding.state_root
+
+    $digestFailureStub = Join-Path $testRoot 'review-digest-failure.ps1'
+    Write-TestText $digestFailureStub @"
+param([switch]`$Pin, [switch]`$Verify, [switch]`$Digest, [string]`$Worktree, [string]`$Label, [string]`$PinDirectory)
+if (`$Digest -and (Split-Path -Leaf `$Worktree) -like '*-integration') { Write-Host 'digest fixture failed'; exit 23 }
+`$forward = @('-Worktree', `$Worktree)
+if (`$Pin) { `$forward = @('-Pin') + `$forward }
+if (`$Verify) { `$forward = @('-Verify') + `$forward }
+if (`$Digest) { `$forward = @('-Digest') + `$forward }
+if (`$Label) { `$forward += @('-Label', `$Label) }
+if (`$PinDirectory) { `$forward += @('-PinDirectory', `$PinDirectory) }
+& powershell.exe -NoProfile -ExecutionPolicy Bypass -File '$realTreePin' @forward
+exit `$LASTEXITCODE
+"@
+    $digestMalformedStub = Join-Path $testRoot 'review-digest-malformed.ps1'
+    Write-TestText $digestMalformedStub @"
+param([switch]`$Pin, [switch]`$Verify, [switch]`$Digest, [string]`$Worktree, [string]`$Label, [string]`$PinDirectory)
+if (`$Digest -and (Split-Path -Leaf `$Worktree) -like '*-integration') { Write-Host 'not-a-digest'; exit 0 }
+`$forward = @('-Worktree', `$Worktree)
+if (`$Pin) { `$forward = @('-Pin') + `$forward }
+if (`$Verify) { `$forward = @('-Verify') + `$forward }
+if (`$Digest) { `$forward = @('-Digest') + `$forward }
+if (`$Label) { `$forward += @('-Label', `$Label) }
+if (`$PinDirectory) { `$forward += @('-PinDirectory', `$PinDirectory) }
+& powershell.exe -NoProfile -ExecutionPolicy Bypass -File '$realTreePin' @forward
+exit `$LASTEXITCODE
+"@
+    $digestFailure = Invoke-TestScenario -Name 'review-digest-failure' -Risk high -Single -TreePinPath $digestFailureStub
+    $digestMalformed = Invoke-TestScenario -Name 'review-digest-malformed' -Risk high -Single -TreePinPath $digestMalformedStub
+    $directHeadState = ($afterRestoredBinding | ConvertTo-Json -Depth 100) | ConvertFrom-Json
+    $directHeadState.wave_runtime.'1'.PSObject.Properties.Remove('review')
+    $directHeadState.status = 'running'; $directHeadState.integration.tip = [string]$directHeadState.base_sha
+    $script:EngineState = $directHeadState; $script:EngineStatePath = $null
+    $script:EngineTreePinScript = $realTreePin
+    $env:APEX_ENGINE_TEST_IMPORT_ONLY = '1'
+    try { $directHeadResult = Invoke-RunnerReviewGate -Wave $directHeadState.plan.waves[0] }
+    finally { Remove-Item Env:APEX_ENGINE_TEST_IMPORT_ONLY -ErrorAction SilentlyContinue }
+    Assert-Test 'review digest binding' `
+        ($wrongBinding.code -eq 1 -and $afterWrongBinding.status -ceq 'awaiting-review' -and
+            $afterWrongBinding.diagnosis -eq $bindingEntryDiagnosis -and
+            ($bindingKinds -join ',') -ceq 'resumed,review-verdict-refused' -and
+            $afterWrongBinding.counters.dispatches -eq $bindingDispatches -and
+            $movedBinding.code -eq 1 -and $afterMovedBinding.status -ceq 'parked' -and
+            $afterMovedBinding.diagnosis -match 'integration tree moved while wave 1 awaited review' -and
+            [string]$afterMovedBinding.wave_runtime.'1'.review.tree_digest -ceq $bindingDigest -and
+            $restoredBinding.code -eq 2 -and $afterRestoredBinding.status -ceq 'awaiting-review' -and
+            [string]$afterRestoredBinding.wave_runtime.'1'.review.tree_digest -ceq $bindingDigest -and
+            $digestFailure.result.code -eq 1 -and $digestFailure.state.diagnosis -match 'review digest unavailable for wave 1: tree-pin exit 23' -and
+            -not $digestFailure.state.wave_runtime.'1'.PSObject.Properties['review'] -and
+            $digestMalformed.result.code -eq 1 -and $digestMalformed.state.diagnosis -match 'review digest unavailable for wave 1: tree-pin returned a malformed digest' -and
+            -not $digestMalformed.state.wave_runtime.'1'.PSObject.Properties['review'] -and
+            $directHeadResult -ceq 'parked' -and $directHeadState.diagnosis -match 'review digest unavailable for wave 1: integration HEAD differs' -and
+            -not $directHeadState.wave_runtime.'1'.PSObject.Properties['review']) `
+        "wrong=$($wrongBinding.output); moved=$($movedBinding.output); restored=$($restoredBinding.output); failure=$($digestFailure.result.output); malformed=$($digestMalformed.result.output); direct=$($directHeadState.diagnosis)"
+
+    Remove-Item Env:APEX_ENGINE_TEST_TREE_PIN_PATH -ErrorAction SilentlyContinue
+    $movedTip = Invoke-TestScenario -Name 'review-moved-tip' -Risk high -Single
+    $movedTipFile = Get-TestOnlyStateFile $movedTip.state_root
+    $movedTipBefore = Get-TestOnlyState $movedTip.state_root
+    $movedTipReviewJson = $movedTipBefore.wave_runtime.'1'.review | ConvertTo-Json -Depth 20 -Compress
+    $movedTipMainHash = Get-TestFileSha256 (Join-Path $movedTip.repo 'src\a.py')
+    $extraPath = Join-Path $movedTipBefore.integration.worktree 'extra.txt'
+    Write-TestText $extraPath "extra integration commit`n"
+    $movedParent = (Invoke-TestGit $movedTipBefore.integration.worktree @('rev-parse', 'HEAD'))[-1]
+    [void](Set-TestCommit $movedTipBefore.integration.worktree @('extra.txt') $movedParent)
+    $movedTipResume = Invoke-TestEngine @('-Resume', $movedTipBefore.run_id, '-StateRoot', $movedTip.state_root,
+        '-ReviewVerdict', 'clean', '-ReviewDigest', $movedTipBefore.wave_runtime.'1'.review.tree_digest,
+        '-ReviewRecord', $reviewRecordOne)
+    $movedTipAfter = Get-TestOnlyState $movedTip.state_root
+    Assert-Test 'review resume refuses moved tip' `
+        ($movedTipResume.code -eq 1 -and $movedTipAfter.status -ceq 'parked' -and
+            $movedTipAfter.diagnosis -match 'integration branch tip mismatch' -and
+            (($movedTipAfter.wave_runtime.'1'.review | ConvertTo-Json -Depth 20 -Compress) -ceq $movedTipReviewJson) -and
+            $movedTipAfter.handoff.status -notin @('running', 'complete') -and
+            (Get-TestFileSha256 (Join-Path $movedTip.repo 'src\a.py')) -ceq $movedTipMainHash) `
+        $movedTipResume.output
+
+    $rejectCase = Invoke-TestScenario -Name 'review-reject' -Risk high -Single
+    $rejectPause = Get-TestOnlyState $rejectCase.state_root
+    $rejectDigest = [string]$rejectPause.wave_runtime.'1'.review.tree_digest
+    Write-TestText $reviewRecordOne "reject owner record`n"
+    $rejectRun = Invoke-TestEngine @('-Resume', $rejectPause.run_id, '-StateRoot', $rejectCase.state_root,
+        '-ReviewVerdict', 'reject', '-ReviewDigest', $rejectDigest, '-ReviewRecord', $reviewRecordOne)
+    $afterReject = Get-TestOnlyState $rejectCase.state_root
+    $rejectDispatches = [int]$afterReject.counters.dispatches
+    $plainRejectRun = Invoke-TestEngine @('-Resume', $afterReject.run_id, '-StateRoot', $rejectCase.state_root)
+    $plainRejected = Get-TestOnlyState $rejectCase.state_root
+    $reusedEntryDiagnosis = [string]$plainRejected.diagnosis
+    $reusedTransitionCount = @($plainRejected.transitions).Count
+    $reusedRecordRun = Invoke-TestEngine @('-Resume', $plainRejected.run_id, '-StateRoot', $rejectCase.state_root,
+        '-ReviewVerdict', 'clean', '-ReviewDigest', $rejectDigest, '-ReviewRecord', $reviewRecordOne)
+    $afterReused = Get-TestOnlyState $rejectCase.state_root
+    $reusedKinds = @($afterReused.transitions | Select-Object -Skip $reusedTransitionCount | ForEach-Object { [string]$_.kind })
+    Write-TestText $reviewRecordTwo "clean owner decision for open findings`n"
+    $cleanRejected = Invoke-TestEngine @('-Resume', $afterReused.run_id, '-StateRoot', $rejectCase.state_root,
+        '-ReviewVerdict', 'clean', '-ReviewDigest', $rejectDigest, '-ReviewRecord', $reviewRecordTwo)
+    $afterCleanRejected = Get-TestOnlyState $rejectCase.state_root
+    Assert-Test 'review reject parks' `
+        ($rejectRun.code -eq 1 -and $afterReject.status -ceq 'parked' -and
+            $rejectRun.output -match [regex]::Escape("Next: fix via an adjusted spec, then -Resume $($rejectPause.run_id) -ReviewVerdict clean -ReviewDigest <digest> -ReviewRecord <new abs path>, or -Teardown $($rejectPause.run_id) -Discard") -and
+            [string]$afterReject.wave_runtime.'1'.review.status -ceq 'rejected' -and
+            @($afterReject.wave_runtime.'1'.review.verdicts).Count -eq 1 -and
+            $plainRejectRun.code -eq 1 -and $plainRejected.status -ceq 'parked' -and
+            $plainRejected.diagnosis -match 'resume requires -ReviewVerdict clean bound to' -and
+            $plainRejected.counters.dispatches -eq $rejectDispatches -and
+            $reusedRecordRun.code -eq 1 -and $afterReused.status -ceq 'parked' -and
+            [string]$afterReused.diagnosis -ceq $reusedEntryDiagnosis -and
+            ($reusedKinds -join ',') -ceq 'resumed,review-verdict-refused' -and
+            @($afterReused.wave_runtime.'1'.review.verdicts).Count -eq 1 -and
+            $cleanRejected.code -eq 0 -and $afterCleanRejected.status -ceq 'complete' -and
+            [string]$afterCleanRejected.wave_runtime.'1'.review.status -ceq 'clean' -and
+            @($afterCleanRejected.wave_runtime.'1'.review.verdicts).Count -eq 2) `
+        "reject=$($rejectRun.output); plain=$($plainRejectRun.output); reused=$($reusedRecordRun.output); clean=$($cleanRejected.output)"
+
+    $crashRepo = New-TestRepo 'review-crash-repo'
+    $crashSpec = Join-Path $testRoot 'review-crash.md'
+    New-TestSpec $crashRepo $crashSpec -Single -Risk high
+    $crashStateRoot = Join-Path $testRoot 'review-crash-state'
+    $crashWorktrees = Join-Path $testRoot 'review-crash-worktrees'
+    $env:APEX_ENGINE_TEST_CRASH_AFTER_WAVE_COMMIT = '1'
+    try {
+        $crashRun = Invoke-TestEngineSplat @{
+            SpecPath = $crashSpec; Repo = $crashRepo; StateRoot = $crashStateRoot; WorktreeRoot = $crashWorktrees
+            CodexExecutable = 'powershell.exe'; CodexExecutableArgumentPrefix = $prefix
+        } 'review-crash'
+    } finally { Remove-Item Env:APEX_ENGINE_TEST_CRASH_AFTER_WAVE_COMMIT -ErrorAction SilentlyContinue }
+    $crashFile = Get-TestOnlyStateFile $crashStateRoot
+    $crashBefore = Get-TestOnlyState $crashStateRoot
+    $crashHashBefore = Get-TestFileSha256 $crashFile.FullName
+    $crashFlagRefusal = Invoke-TestEngine @('-Resume', $crashBefore.run_id, '-StateRoot', $crashStateRoot,
+        '-ReviewVerdict', 'clean', '-ReviewDigest', ('a' * 64), '-ReviewRecord', $reviewRecordOne)
+    $crashHashAfter = Get-TestFileSha256 $crashFile.FullName
+    $crashResume = Invoke-TestEngine @('-Resume', $crashBefore.run_id, '-StateRoot', $crashStateRoot)
+    $crashAfter = Get-TestOnlyState $crashStateRoot
+    Assert-Test 'review survives crash-window adoption' `
+        ($crashRun.code -eq 1 -and $crashFlagRefusal.code -eq 1 -and $crashHashBefore -ceq $crashHashAfter -and
+            $crashResume.code -eq 2 -and $crashAfter.status -ceq 'awaiting-review' -and
+            @($crashAfter.transitions | Where-Object { [string]$_.kind -ceq 'wave-commit-adopted' }).Count -eq 1 -and
+            $crashAfter.handoff.status -ceq 'pending') `
+        "crash=$($crashRun.output); flags=$($crashFlagRefusal.output); resume=$($crashResume.output)"
+
+    $lowCase = Invoke-TestScenario -Name 'review-low' -Risk low -Single
+    $lowFile = Get-TestOnlyStateFile $lowCase.state_root
+    $lowState = Get-TestOnlyState $lowCase.state_root
+    $mediumFlagRoot = Join-Path $testRoot 'review-medium-flags-state'
+    $mediumFlagDirectory = Join-Path $mediumFlagRoot $state.run_id
+    [void][IO.Directory]::CreateDirectory($mediumFlagDirectory)
+    $mediumFlagFile = Join-Path $mediumFlagDirectory 'engine-state.json'
+    $mediumFlagState = ($state | ConvertTo-Json -Depth 100) | ConvertFrom-Json
+    $mediumFlagState.status = 'paused'; $mediumFlagState.diagnosis = 'medium review flag fixture'
+    $mediumFlagState.state_path = $mediumFlagFile
+    Write-TestText $mediumFlagFile ($mediumFlagState | ConvertTo-Json -Depth 100)
+    $mediumHashBefore = Get-TestFileSha256 $mediumFlagFile
+    $lowFlags = Invoke-TestEngine @('-Resume', $mediumFlagState.run_id, '-StateRoot', $mediumFlagRoot,
+        '-ReviewVerdict', 'clean', '-ReviewDigest', ('b' * 64), '-ReviewRecord', $reviewRecordOne)
+    $mediumHashAfter = Get-TestFileSha256 $mediumFlagFile
+    Assert-Test 'low-medium no pause' `
+        ($lowCase.result.code -eq 0 -and $lowState.status -ceq 'complete' -and (Test-NoWaveReview $lowState) -and
+            $state.status -ceq 'complete' -and (Test-NoWaveReview $state) -and
+            $lowFlags.code -eq 1 -and $lowFlags.output -match 'high-risk run' -and $mediumHashBefore -ceq $mediumHashAfter) `
+        $lowFlags.output
+    $completeHashBefore = Get-TestFileSha256 $lowFile.FullName
+    $completeResume = Invoke-TestEngine @('-Resume', $lowState.run_id, '-StateRoot', $lowCase.state_root)
+    $completeHashAfter = Get-TestFileSha256 $lowFile.FullName
+    Assert-Test 'non-mutating resume refusal' `
+        ($completeResume.code -eq 1 -and $completeResume.output -match 'Run status cannot be resumed: complete' -and
+            $completeHashBefore -ceq $completeHashAfter -and (Get-TestOnlyState $lowCase.state_root).status -ceq 'complete') `
+        $completeResume.output
+
+    $validationState = Get-TestOnlyState $binding.state_root
+    $validationFile = Get-TestOnlyStateFile $binding.state_root
+    $insideRecord = Join-Path $validationState.integration.worktree 'inside-review.txt'
+    Write-TestText $insideRecord "inside`n"
+    $invalidUtf8Record = Join-Path $testRoot 'invalid-review.bin'
+    [IO.File]::WriteAllBytes($invalidUtf8Record, [byte[]]@(0xC3, 0x28))
+    $utf16LeRecord = Join-Path $testRoot 'utf16le-review.txt'
+    [IO.File]::WriteAllBytes($utf16LeRecord, [byte[]]@(0xFF, 0xFE, 0x72, 0x00, 0x65, 0x00, 0x76, 0x00, 0x69, 0x00, 0x65, 0x00, 0x77, 0x00))
+    $missingRecord = Join-Path $testRoot 'missing-review.txt'
+    $validationArguments = @(
+        [string[]]@('-Resume', $validationState.run_id, '-StateRoot', $binding.state_root, '-ReviewVerdict', 'clean'),
+        [string[]]@('-Resume', $validationState.run_id, '-StateRoot', $binding.state_root, '-ReviewVerdict', 'clean', '-ReviewDigest', 'bad', '-ReviewRecord', $reviewRecordOne),
+        [string[]]@('-Resume', $validationState.run_id, '-StateRoot', $binding.state_root, '-ReviewVerdict', 'clean', '-ReviewDigest', $bindingDigest, '-ReviewRecord', 'relative.txt'),
+        [string[]]@('-Resume', $validationState.run_id, '-StateRoot', $binding.state_root, '-ReviewVerdict', 'clean', '-ReviewDigest', $bindingDigest, '-ReviewRecord', 'C:review.txt'),
+        [string[]]@('-Resume', $validationState.run_id, '-StateRoot', $binding.state_root, '-ReviewVerdict', 'clean', '-ReviewDigest', $bindingDigest, '-ReviewRecord', '\review.txt'),
+        [string[]]@('-Resume', $validationState.run_id, '-StateRoot', $binding.state_root, '-ReviewVerdict', 'clean', '-ReviewDigest', $bindingDigest, '-ReviewRecord', $missingRecord),
+        [string[]]@('-Resume', $validationState.run_id, '-StateRoot', $binding.state_root, '-ReviewVerdict', 'clean', '-ReviewDigest', $bindingDigest, '-ReviewRecord', $insideRecord),
+        [string[]]@('-Resume', $validationState.run_id, '-StateRoot', $binding.state_root, '-ReviewVerdict', 'CLEAN', '-ReviewDigest', $bindingDigest, '-ReviewRecord', $reviewRecordOne),
+        [string[]]@('-Resume', $validationState.run_id, '-StateRoot', $binding.state_root, '-ReviewVerdict', 'clean', '-ReviewDigest', $bindingDigest, '-ReviewRecord', $invalidUtf8Record),
+        [string[]]@('-Resume', $validationState.run_id, '-StateRoot', $binding.state_root, '-ReviewVerdict', 'clean', '-ReviewDigest', $bindingDigest, '-ReviewRecord', $utf16LeRecord)
+    )
+    $validationOk = $true; $validationDetail = @()
+    foreach ($validationArgs in $validationArguments) {
+        $beforeValidationHash = Get-TestFileSha256 $validationFile.FullName
+        $validationResult = Invoke-TestEngine $validationArgs
+        $afterValidationHash = Get-TestFileSha256 $validationFile.FullName
+        if ($validationResult.code -ne 1 -or $validationResult.output -notmatch 'Engine refused' -or
+                $beforeValidationHash -cne $afterValidationHash) { $validationOk = $false }
+        $validationDetail += "$($validationResult.code):$($validationResult.output)"
+    }
+    $newFlagStateRoot = Join-Path $testRoot 'new-review-flags-state'
+    $newFlagsRun = Invoke-TestEngine @('-SpecPath', $binding.spec, '-Repo', $binding.repo, '-StateRoot', $newFlagStateRoot,
+        '-WorktreeRoot', (Join-Path $testRoot 'new-review-flags-worktrees'), '-ReviewVerdict', 'clean',
+        '-ReviewDigest', $bindingDigest, '-ReviewRecord', $reviewRecordOne)
+    $teardownFlagHashBefore = Get-TestFileSha256 $validationFile.FullName
+    $teardownFlagsRun = Invoke-TestEngine @('-Teardown', $validationState.run_id, '-StateRoot', $binding.state_root,
+        '-ReviewVerdict', 'clean', '-ReviewDigest', $bindingDigest, '-ReviewRecord', $reviewRecordOne)
+    $teardownFlagHashAfter = Get-TestFileSha256 $validationFile.FullName
+    Assert-Test 'review flag validation' `
+        ($validationOk -and $newFlagsRun.code -eq 1 -and $newFlagsRun.output -match 'Engine refused' -and
+            @(Get-ChildItem -LiteralPath $newFlagStateRoot -Filter engine-state.json -Recurse -File -ErrorAction SilentlyContinue).Count -eq 0 -and
+            $teardownFlagsRun.code -eq 1 -and $teardownFlagsRun.output -match 'Engine refused' -and
+            $teardownFlagHashBefore -ceq $teardownFlagHashAfter -and
+            ($validationDetail -join "`n") -match "-ReviewVerdict must be exactly 'clean' or 'reject'") `
+        (($validationDetail + @($newFlagsRun.output, $teardownFlagsRun.output)) -join "`n")
+
+    $reviewSchemaDocument = Get-Content $schemaPath -Raw | ConvertFrom-Json
+    $reviewSchemaOk = $true; $reviewSchemaFailures = @()
+    try { Test-Structure $validationState $reviewSchemaDocument }
+    catch { $reviewSchemaOk = $false; $reviewSchemaFailures += $_.Exception.Message }
+    foreach ($completedReviewState in @(
+        [pscustomobject]@{ name = 'two-wave clean verdict state'; state = $twoWaveDone },
+        [pscustomobject]@{ name = 'rejected-then-clean verdict state'; state = $afterCleanRejected }
+    )) {
+        try { Test-Structure $completedReviewState.state $reviewSchemaDocument }
+        catch { $reviewSchemaOk = $false; $reviewSchemaFailures += "$($completedReviewState.name): $($_.Exception.Message)" }
+    }
+    foreach ($schemaMutation in @('bad-verdict', 'missing-tree-digest', 'missing-record-sha', 'unexpected-runtime-key')) {
+        $badReviewState = ($validationState | ConvertTo-Json -Depth 100) | ConvertFrom-Json
+        if ($schemaMutation -ceq 'bad-verdict') {
+            $badReviewState.wave_runtime.'1'.review.verdicts = @([pscustomobject]@{
+                verdict = 'approve'; digest = ('a' * 64); record_path = $reviewRecordOne
+                record_sha256 = ('b' * 64); at = 'now'
+            })
+        } elseif ($schemaMutation -ceq 'missing-tree-digest') {
+            $badReviewState.wave_runtime.'1'.review.PSObject.Properties.Remove('tree_digest')
+        } elseif ($schemaMutation -ceq 'missing-record-sha') {
+            $badVerdict = [pscustomobject]@{ verdict = 'clean'; digest = ('a' * 64); record_path = $reviewRecordOne; at = 'now' }
+            $badReviewState.wave_runtime.'1'.review.verdicts = @($badVerdict)
+        } else {
+            $badReviewState.wave_runtime.'1' | Add-Member -NotePropertyName unexpected -NotePropertyValue $true
+        }
+        $rejectedBySchema = $false
+        try { Test-Structure $badReviewState $reviewSchemaDocument }
+        catch { $rejectedBySchema = $true }
+        if (-not $rejectedBySchema) { $reviewSchemaFailures += $schemaMutation }
+    }
+    Assert-Test 'review schema' `
+        ($v1Compatible -and $reviewSchemaOk -and @($reviewSchemaFailures).Count -eq 0) `
+        ($reviewSchemaFailures -join '; ')
+
+    $teardownReview = Invoke-TestScenario -Name 'awaiting-review-teardown' -Risk high -Single
+    $teardownReviewFile = Get-TestOnlyStateFile $teardownReview.state_root
+    $teardownReviewState = Get-TestOnlyState $teardownReview.state_root
+    $teardownWithoutDiscard = Invoke-TestEngine @('-Teardown', $teardownReviewState.run_id, '-StateRoot', $teardownReview.state_root)
+    $teardownRefusedState = Get-TestOnlyState $teardownReview.state_root
+    $teardownWithDiscard = Invoke-TestEngine @('-Teardown', $teardownReviewState.run_id, '-Discard', '-StateRoot', $teardownReview.state_root)
+    $teardownDoneState = Get-TestOnlyState $teardownReview.state_root
+    Assert-Test 'awaiting-review teardown' `
+        ($teardownWithoutDiscard.code -eq 1 -and $teardownWithoutDiscard.output -match 'awaiting-review' -and
+            $teardownRefusedState.status -ceq 'awaiting-review' -and $teardownWithDiscard.code -eq 0 -and
+            $teardownDoneState.teardown.status -ceq 'complete') `
+        "without=$($teardownWithoutDiscard.output); with=$($teardownWithDiscard.output)"
+
+    $originalHandoff = ${function:Invoke-EngineHandoff}
+    $script:CapturedExpectedTip = $null; $script:CapturedHandoffCalls = 0
+    function Invoke-EngineHandoff {
+        param($Repo, $IntegrationWorktree, $BaseSha, $Files, $JournaledPaths, $OnFileJournaled, $StateDirectory, $ExpectedTip)
+        $script:CapturedExpectedTip = [string]$ExpectedTip; $script:CapturedHandoffCalls++
+        return [pscustomobject]@{ ok = $true; mismatch_path = $null; recovery_patch = $null }
+    }
+    try {
+        $expectedTipState = ($twoWaveDone | ConvertTo-Json -Depth 100) | ConvertFrom-Json
+        $expectedTipState.status = 'running'; $expectedTipState.handoff.status = 'pending'
+        $expectedTipState.handoff.started_at = $null; $expectedTipState.handoff.completed_at = $null
+        $script:EngineState = $expectedTipState; $script:EngineStatePath = Join-Path $testRoot 'handoff-expected\engine-state.json'
+        $expectedTipCall = Invoke-RunnerHandoff
+        $capturedExpectedTip = [string]$script:CapturedExpectedTip
+
+        $mismatchedReviewState = ($twoWaveDone | ConvertTo-Json -Depth 100) | ConvertFrom-Json
+        $mismatchedReviewState.status = 'running'; $mismatchedReviewState.handoff.status = 'pending'
+        $mismatchedReviewState.wave_runtime.'2'.review.head = [string]$mismatchedReviewState.base_sha
+        $script:EngineState = $mismatchedReviewState; $script:EngineStatePath = Join-Path $testRoot 'handoff-mismatch\engine-state.json'
+        $callsBeforeMismatch = $script:CapturedHandoffCalls
+        $mismatchedReviewCall = Invoke-RunnerHandoff
+
+        $rejectedEarlierState = ($twoWaveDone | ConvertTo-Json -Depth 100) | ConvertFrom-Json
+        $rejectedEarlierState.status = 'running'; $rejectedEarlierState.handoff.status = 'pending'
+        $rejectedEarlierState.wave_runtime.'1'.review.status = 'rejected'
+        $mainBeforeRejectedHandoff = Get-TestFileSha256 (Join-Path $highTwoWave.repo 'src\a.py')
+        $script:EngineState = $rejectedEarlierState; $script:EngineStatePath = Join-Path $testRoot 'handoff-rejected\engine-state.json'
+        $callsBeforeRejected = $script:CapturedHandoffCalls
+        $rejectedEarlierCall = Invoke-RunnerHandoff
+        $mainAfterRejectedHandoff = Get-TestFileSha256 (Join-Path $highTwoWave.repo 'src\a.py')
+    } finally { Set-Item -LiteralPath Function:Invoke-EngineHandoff -Value $originalHandoff }
+    Assert-Test 'hand-off refuses an unreviewed tip' `
+        ($expectedTipCall -and $capturedExpectedTip -ceq [string]$expectedTipState.integration.tip -and
+            -not $mismatchedReviewCall -and $mismatchedReviewState.status -ceq 'parked' -and
+            $mismatchedReviewState.handoff.status -ceq 'pending' -and $script:CapturedHandoffCalls -eq $callsBeforeMismatch -and
+            -not $rejectedEarlierCall -and $rejectedEarlierState.status -ceq 'parked' -and
+            $rejectedEarlierState.handoff.status -ceq 'pending' -and $script:CapturedHandoffCalls -eq $callsBeforeRejected -and
+            $mainBeforeRejectedHandoff -ceq $mainAfterRejectedHandoff) `
+        "expected=$capturedExpectedTip; mismatch=$($mismatchedReviewState.diagnosis); rejected=$($rejectedEarlierState.diagnosis)"
+
     $capacityGate = Join-Path $testRoot 'capacity-critical-refusal.ps1'
     Write-TestText $capacityGate "param([switch]`$Test, [string[]]`$Paths, [string]`$Root)`nWrite-Host 'capacity plan captured'`nexit 11`n"
     $capacityCases = @()
@@ -713,20 +1160,19 @@ try {
     Assert-Test 'structural schema requires each immutable plan task prompt text or prompt path' `
         $missingPromptSourceRejected 'state task without prompt or prompt_path passed structural checking'
 
-    $riskHighSpec = Join-Path $testRoot 'risk-high-refused.md'
-    New-TestSpec $repo $riskHighSpec -Single
-    Write-TestText $riskHighSpec (([IO.File]::ReadAllText($riskHighSpec)).Replace('risk: medium', 'risk: high'))
-    $riskHighStateRoot = Join-Path $testRoot 'risk-high-refused-state'
-    $riskHighRun = Invoke-TestEngine @('-SpecPath', $riskHighSpec, '-Repo', $repo,
-        '-StateRoot', $riskHighStateRoot, '-WorktreeRoot', (Join-Path $testRoot 'risk-high-refused-wt'))
-    $riskHighState = Get-TestOnlyState $riskHighStateRoot
-    $riskHighSchemaOk = $true; $riskHighSchemaError = ''
-    try { Test-Structure $riskHighState (Get-Content $schemaPath -Raw | ConvertFrom-Json) }
-    catch { $riskHighSchemaOk = $false; $riskHighSchemaError = $_.Exception.Message }
-    Assert-Test 'risk high refusal persists schema-valid loose refused plan' `
-        ($riskHighRun.code -ne 0 -and $riskHighState.status -ceq 'refused' -and
-            $riskHighState.plan.allowed -eq $false -and $riskHighState.plan.spec.risk -ceq 'high' -and $riskHighSchemaOk) `
-        "output=$($riskHighRun.output); schema=$riskHighSchemaError"
+    $riskCriticalSpec = Join-Path $testRoot 'risk-critical-refused.md'
+    New-TestSpec $repo $riskCriticalSpec -Single -Risk critical
+    $riskCriticalStateRoot = Join-Path $testRoot 'risk-critical-refused-state'
+    $riskCriticalRun = Invoke-TestEngine @('-SpecPath', $riskCriticalSpec, '-Repo', $repo,
+        '-StateRoot', $riskCriticalStateRoot, '-WorktreeRoot', (Join-Path $testRoot 'risk-critical-refused-wt'))
+    $riskCriticalState = Get-TestOnlyState $riskCriticalStateRoot
+    $riskCriticalSchemaOk = $true; $riskCriticalSchemaError = ''
+    try { Test-Structure $riskCriticalState (Get-Content $schemaPath -Raw | ConvertFrom-Json) }
+    catch { $riskCriticalSchemaOk = $false; $riskCriticalSchemaError = $_.Exception.Message }
+    Assert-Test 'risk critical refusal persists schema-valid loose refused plan' `
+        ($riskCriticalRun.code -ne 0 -and $riskCriticalState.status -ceq 'refused' -and
+            $riskCriticalState.plan.allowed -eq $false -and $riskCriticalState.plan.spec.risk -ceq 'critical' -and $riskCriticalSchemaOk) `
+        "output=$($riskCriticalRun.output); schema=$riskCriticalSchemaError"
 
     $invalidEffortSpec = Join-Path $testRoot 'invalid-effort-refused.md'
     New-TestSpec $repo $invalidEffortSpec -Single

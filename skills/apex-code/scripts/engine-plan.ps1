@@ -354,7 +354,7 @@ function Get-EnginePlan {
     if ($frontmatter.ContainsKey('risk')) {
         $risk = [string]$frontmatter['risk']
         $emptySpec.risk = $risk
-        if ($risk -cne 'low' -and $risk -cne 'medium') { $frontmatterRefusal = 'frontmatter risk must be low or medium' }
+        if (@('low', 'medium', 'high') -cnotcontains $risk) { $frontmatterRefusal = 'frontmatter risk must be low, medium or high' }
     }
     else { $emptySpec.risk = $risk }
     $model = 'gpt-5.6-sol'
@@ -402,7 +402,7 @@ function Get-EnginePlan {
     foreach ($line in ($intent -split "`n")) {
         if ($line -match '(?i)non-goals?' ) { continue }
         if ($line -match '(?i)(?<![A-Za-z0-9_])risk:[ \t]+high(?![A-Za-z0-9_])') {
-            return New-EngineRefusal -Reason 'Intent declares risk: high' -Spec $emptySpec
+            if ($risk -cne 'high') { return New-EngineRefusal -Reason 'Intent declares risk: high but frontmatter risk is not high' -Spec $emptySpec }
         }
     }
     $planSpec = New-EnginePlanSpec -Name $name -Path $fullSpecPath -Digest $specDigest -Risk $risk -CoderModel $model -CoderEffort $effort -MaxParallelCodex $declaredMaxParallel -Intent $intent -Assumptions $assumptions -SpecialistContext $specialist

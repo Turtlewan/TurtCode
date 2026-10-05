@@ -13,7 +13,7 @@
   "properties": {
     "schema_version": { "const": 1 },
     "run_id": { "type": "string", "pattern": "^[0-9a-f]{32}$" },
-    "status": { "enum": ["running", "complete", "partial", "refused", "parked", "paused"] },
+    "status": { "enum": ["running", "complete", "partial", "refused", "parked", "paused", "awaiting-review"] },
     "created_at": { "type": "string" },
     "updated_at": { "type": "string" },
     "engine_owner": {
@@ -70,6 +70,7 @@
     "wave_runtime": {
       "type": "object",
       "additionalProperties": false,
+      "properties": {},
       "patternProperties": {
         "^[0-9]+$": {
           "type": "object",
@@ -83,6 +84,34 @@
               "properties": {
                 "base": { "type": "string" },
                 "expected_tree": { "type": "string" }
+              }
+            },
+            "review": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["status", "base", "head", "tree_digest", "files", "requested_at", "verdicts"],
+              "properties": {
+                "status": { "enum": ["awaiting", "clean", "rejected"] },
+                "base": { "type": "string" },
+                "head": { "type": "string" },
+                "tree_digest": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+                "files": { "type": "array", "items": { "type": "string" } },
+                "requested_at": { "type": "string" },
+                "verdicts": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": ["verdict", "digest", "record_path", "record_sha256", "at"],
+                    "properties": {
+                      "verdict": { "enum": ["clean", "reject"] },
+                      "digest": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+                      "record_path": { "type": "string" },
+                      "record_sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+                      "at": { "type": "string" }
+                    }
+                  }
+                }
               }
             }
           }
@@ -125,7 +154,7 @@
                 "name": { "type": "string" },
                 "path": { "type": "string" },
                 "digest": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
-                "risk": { "enum": ["low", "medium"] },
+                "risk": { "enum": ["low", "medium", "high"] },
                 "coder_model": { "enum": ["gpt-5.6-sol", "gpt-6-sol"] },
                 "coder_effort": { "enum": ["low", "medium", "high", "xhigh", "max", "ultra"] },
                 "max_parallel_codex": { "type": ["integer", "null"] },

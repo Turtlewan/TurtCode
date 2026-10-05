@@ -271,7 +271,7 @@ git update-ref HEAD "$commit"
         [pscustomobject]@{ path = 'delete.bin'; op = 'modify' }
     )
     foreach ($invalidFile in $handoffPreconditions) {
-        $preconditionResult = Invoke-EngineHandoff -Repo $repo -IntegrationWorktree $integration.worktree -BaseSha $baseSha -Files @($invalidFile) -JournaledPaths @() -OnFileJournaled { param($path) throw "unexpected journal callback for $path" } -StateDirectory $stateDirectory
+        $preconditionResult = Invoke-EngineHandoff -Repo $repo -IntegrationWorktree $integration.worktree -BaseSha $baseSha -ExpectedTip $tip -Files @($invalidFile) -JournaledPaths @() -OnFileJournaled { param($path) throw "unexpected journal callback for $path" } -StateDirectory $stateDirectory
         Assert-True (-not $preconditionResult.ok) "handoff precondition returns ok=false for $($invalidFile.op) $($invalidFile.path)"
         Assert-Equal $invalidFile.path $preconditionResult.mismatch_path 'handoff precondition pins mismatch_path'
         Assert-True (Test-Path -LiteralPath $preconditionResult.recovery_patch) 'handoff precondition saves a recovery patch'
@@ -280,7 +280,7 @@ git update-ref HEAD "$commit"
 
     Write-TestBytes (Join-Path $repo 'modify.txt') (Get-Utf8Bytes "foreign writer`r`n")
     $zeroJournal = New-Object System.Collections.ArrayList
-    $zeroResult = Invoke-EngineHandoff -Repo $repo -IntegrationWorktree $integration.worktree -BaseSha $baseSha -Files $files -JournaledPaths @() -OnFileJournaled { param($path) [void]$zeroJournal.Add($path) } -StateDirectory $stateDirectory
+    $zeroResult = Invoke-EngineHandoff -Repo $repo -IntegrationWorktree $integration.worktree -BaseSha $baseSha -ExpectedTip $tip -Files $files -JournaledPaths @() -OnFileJournaled { param($path) [void]$zeroJournal.Add($path) } -StateDirectory $stateDirectory
     Assert-True (-not $zeroResult.ok) 'pre-state mismatch refuses hand-off'
     Assert-Equal 'modify.txt' $zeroResult.mismatch_path 'mismatch path identifies foreign writer'
     Assert-True (-not (Test-Path -LiteralPath (Join-Path $repo 'created.txt'))) 'no earlier pending create was written'
@@ -319,7 +319,7 @@ git update-ref HEAD "$commit"
     $crashSeen = $false
     $crashResult = $null
     try {
-        $crashResult = Invoke-EngineHandoff -Repo $repo -IntegrationWorktree $integration.worktree -BaseSha $baseSha -Files $files -JournaledPaths @() -OnFileJournaled { param($path) throw "simulated journal crash after $path" } -StateDirectory $stateDirectory
+        $crashResult = Invoke-EngineHandoff -Repo $repo -IntegrationWorktree $integration.worktree -BaseSha $baseSha -ExpectedTip $tip -Files $files -JournaledPaths @() -OnFileJournaled { param($path) throw "simulated journal crash after $path" } -StateDirectory $stateDirectory
     } catch {
         $crashSeen = $true
     }
@@ -332,7 +332,7 @@ git update-ref HEAD "$commit"
     Assert-True $crashSeen ("journal callback crash propagates; debug=" + ($crashDebug | ConvertTo-Json -Depth 5 -Compress))
     Assert-Equal $copy.hashes[0].hash (Get-EngineRawSha256 (Join-Path $repo 'created.txt')) 'file write precedes durable journal callback'
     $resumeJournal = New-Object System.Collections.ArrayList
-    $resumed = Invoke-EngineHandoff -Repo $repo -IntegrationWorktree $integration.worktree -BaseSha $baseSha -Files $files -JournaledPaths @() -OnFileJournaled { param($path) [void]$resumeJournal.Add($path) } -StateDirectory $stateDirectory
+    $resumed = Invoke-EngineHandoff -Repo $repo -IntegrationWorktree $integration.worktree -BaseSha $baseSha -ExpectedTip $tip -Files $files -JournaledPaths @() -OnFileJournaled { param($path) [void]$resumeJournal.Add($path) } -StateDirectory $stateDirectory
     Assert-True $resumed.ok 'write-before-journal hand-off resumes'
     Assert-Equal 5 $resumeJournal.Count 'resume journals already-applied path and remaining writes'
     Assert-Equal $modifiedBlob (Get-EngineFilteredWorkingHash $repo 'modify.txt') 'resumed modify matches tip'
@@ -343,7 +343,7 @@ git update-ref HEAD "$commit"
     Write-TestBytes (Join-Path $repo 'modify.txt') $baseModifyBytes
     Write-TestBytes (Join-Path $repo 'delete.bin') $baseDeleteBytes
     $guardCallbacks = New-Object System.Collections.ArrayList
-    $guarded = Invoke-EngineHandoff -Repo $repo -IntegrationWorktree $integration.worktree -BaseSha $baseSha -Files $files -JournaledPaths @() -OnFileJournaled {
+    $guarded = Invoke-EngineHandoff -Repo $repo -IntegrationWorktree $integration.worktree -BaseSha $baseSha -ExpectedTip $tip -Files $files -JournaledPaths @() -OnFileJournaled {
         param($path)
         [void]$guardCallbacks.Add($path)
         if ($path -eq 'created.txt') { Write-TestBytes (Join-Path $repo 'modify.txt') (Get-Utf8Bytes "concurrent mutation`r`n") }
@@ -356,14 +356,15 @@ git update-ref HEAD "$commit"
 
     Write-TestBytes (Join-Path $repo 'modify.txt') $baseModifyBytes
     $finishJournal = New-Object System.Collections.ArrayList
-    $finished = Invoke-EngineHandoff -Repo $repo -IntegrationWorktree $integration.worktree -BaseSha $baseSha -Files $files -JournaledPaths @('created.txt') -OnFileJournaled { param($path) [void]$finishJournal.Add($path) } -StateDirectory $stateDirectory
+    $finished = Invoke-EngineHandoff -Repo $repo -IntegrationWorktree $integration.worktree -BaseSha $baseSha -ExpectedTip $tip -Files $files -JournaledPaths @('created.txt') -OnFileJournaled { param($path) [void]$finishJournal.Add($path) } -StateDirectory $stateDirectory
     Assert-True $finished.ok 'handoff completes after guarded retry'
     Assert-Equal 5 $finished.completed.Count 'completed includes prior journal entries'
     $nullJournal = New-Object System.Collections.ArrayList
-    $nullJournalResult = Invoke-EngineHandoff -Repo $repo -IntegrationWorktree $integration.worktree -BaseSha $baseSha -Files $files -JournaledPaths $null -OnFileJournaled { param($path) [void]$nullJournal.Add($path) } -StateDirectory $stateDirectory
+    $nullJournalResult = Invoke-EngineHandoff -Repo $repo -IntegrationWorktree $integration.worktree -BaseSha $baseSha -ExpectedTip $tip -Files $files -JournaledPaths $null -OnFileJournaled { param($path) [void]$nullJournal.Add($path) } -StateDirectory $stateDirectory
     Assert-True $nullJournalResult.ok 'null JournaledPaths is normalized to an empty array'
     Assert-Equal 5 $nullJournal.Count 'null JournaledPaths visits every already-applied path'
     Write-Output 'ok - null handoff journal normalization'
+    Write-Output 'ok - hand-off expected tip'
 
     $proofBeforeCloseout = Test-EngineTeardownProof -Repo $repo -Spec $spec -Files $files -IntegrationTip $tip
     Assert-True (-not $proofBeforeCloseout.ok) 'proof requires main HEAD as well as working files'
@@ -371,6 +372,20 @@ git update-ref HEAD "$commit"
     $proof = Test-EngineTeardownProof -Repo $repo -Spec $spec -Files $files -IntegrationTip $tip
     Assert-True $proof.ok ($proof.failures | ConvertTo-Json -Compress)
     Write-Output 'ok - proof'
+
+    $movedPath = 'moved-tip.txt'
+    Write-TestBytes (Join-Path $integration.worktree $movedPath) (Get-Utf8Bytes "unreviewed integration change`n")
+    [void](Invoke-TestGit $integration.worktree @('add', '-f', '--', $movedPath))
+    [void](Invoke-TestGit $integration.worktree @('commit', '-m', 'move integration tip'))
+    $movedTip = (Invoke-TestGit $integration.worktree @('rev-parse', 'HEAD')).text
+    Assert-True ($movedTip -cne $tip) 'extra integration commit moves HEAD beyond reviewed tip'
+    Assert-True (-not (Test-Path -LiteralPath (Join-Path $repo $movedPath))) 'moved-tip fixture is absent from main before hand-off'
+    $movedMessage = "integration HEAD $movedTip differs from reviewed tip $tip; hand-off refused"
+    Assert-Throws {
+        Invoke-EngineHandoff -Repo $repo -IntegrationWorktree $integration.worktree -BaseSha $tip -ExpectedTip $tip -Files @([pscustomobject]@{ path = $movedPath; op = 'create' }) -JournaledPaths @() -OnFileJournaled { param($path) throw "unexpected journal callback for $path" } -StateDirectory $stateDirectory
+    } ([regex]::Escape($movedMessage)) 'moved integration tip is refused with the pinned diagnosis'
+    Assert-True (-not (Test-Path -LiteralPath (Join-Path $repo $movedPath))) 'moved-tip refusal writes no hand-off file to main'
+    Write-Output 'ok - hand-off moved tip refuses'
 
     $emptyRemoved = New-Object System.Collections.ArrayList
     $emptyTeardown = Remove-EngineRunWorktrees -Repo $repo -Spec $spec -Branches @() -Worktrees @() -OnItemRemoved { param($item) [void]$emptyRemoved.Add($item) }
