@@ -513,6 +513,41 @@ try {
             $result.Output.Contains('-AuthorSpec: spec, baseline and frontmatter pre-flight steps skipped')) `
         -Detail 'tree pin, unique preflight label, and author skip line were printed'
 
+    # The additive model allowlist entry is passed to Codex and recorded case-exactly.
+    $caseName = 'author-create-gpt-6.1-sol'
+    $spec = 'new-spec-6-1'
+    $repo = New-FixtureRepo -Name $caseName
+    $authorPath = 'docs/drafts/new-spec-6-1.md'
+    $result = Invoke-DispatchCase -CaseName $caseName -Spec $spec -Repo $repo `
+        -AuthorizedPath $authorPath -ExtraParameters @{ Model = 'gpt-6.1-sol'; Effort = 'high' }
+    $draftPath = Join-Path $repo 'docs\drafts\new-spec-6-1.md'
+    $dispatchRows = @($result.Rows | Where-Object { [string]$_.row_kind -ceq 'dispatch' })
+    $row = if ($dispatchRows.Count -eq 1) { $dispatchRows[0] } else { $null }
+    Assert-Case -Label 'author-create-gpt-6.1-sol' -Condition ($result.ExitCode -eq 0) `
+        -Detail ("exit={0}" -f $result.ExitCode)
+    Assert-Case -Label 'author-create-gpt-6.1-sol draft content' `
+        -Condition ((Test-Path -LiteralPath $draftPath -PathType Leaf) -and
+            [System.IO.File]::ReadAllText($draftPath) -ceq $fakeAuthorContent) `
+        -Detail 'the authorized draft contains the fake author content'
+    Assert-Case -Label 'author-create-gpt-6.1-sol argv' `
+        -Condition (Test-ArgvModel -ArgvPath $result.ArgvPath -ExpectedModel 'gpt-6.1-sol') `
+        -Detail '-m is immediately followed by gpt-6.1-sol'
+    Assert-Case -Label 'author-create-gpt-6.1-sol ledger' `
+        -Condition ($null -ne $row -and
+            [string]$row.dispatch_kind -ceq 'author' -and
+            [string]$row.author_mode -ceq 'create' -and
+            [string]$row.model -ceq 'gpt-6.1-sol' -and
+            [string]$row.phase -ceq 'build' -and
+            [string]$row.task -ceq 'author' -and
+            [string]$row.builder_family -ceq 'openai' -and
+            [bool]$row.baseline_skipped) `
+        -Detail 'the dispatch row records the exact gpt-6.1-sol model and author metadata'
+    Assert-Case -Label 'author-create-gpt-6.1-sol gates' `
+        -Condition ($result.Output.Contains('[tree-pin] pinned') -and
+            $result.Output.Contains("preflight-$spec") -and
+            $result.Output.Contains('-AuthorSpec: spec, baseline and frontmatter pre-flight steps skipped')) `
+        -Detail 'tree pin, unique preflight label, and author skip line were printed'
+
     # A revise author dispatch binds the existing untracked draft by its git object id.
     $caseName = 'author-revise-happy'
     $spec = 'rev-spec'
@@ -658,6 +693,21 @@ exit 0
     Assert-Case -Label 'author-model-mixed-case' -Condition ($result.ExitCode -eq 1) `
         -Detail 'parameter binding returned exit 1'
     Assert-Case -Label 'author-model-mixed-case no state' `
+        -Condition ($result.Rows.Count -eq 0 -and
+            -not (Test-Path -LiteralPath $result.ArgvPath)) `
+        -Detail 'zero ledger rows and no fake argv file were created'
+
+    # The new model allowlist entry also remains case-sensitive.
+    $caseName = 'author-model-6-1-mixed-case'
+    $spec = 'model-6-1-mixed-case'
+    $repo = New-FixtureRepo -Name $caseName
+    $result = Invoke-InvalidModelCase -CaseName $caseName -Spec $spec -Repo $repo `
+        -Model 'GPT-6.1-SOL'
+    Assert-Case -Label 'author-model-6-1-mixed-case nonzero' -Condition ($result.ExitCode -ne 0) `
+        -Detail ("exit={0}" -f $result.ExitCode)
+    Assert-Case -Label 'author-model-6-1-mixed-case' -Condition ($result.ExitCode -eq 1) `
+        -Detail 'parameter binding returned exit 1'
+    Assert-Case -Label 'author-model-6-1-mixed-case no state' `
         -Condition ($result.Rows.Count -eq 0 -and
             -not (Test-Path -LiteralPath $result.ArgvPath)) `
         -Detail 'zero ledger rows and no fake argv file were created'

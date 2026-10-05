@@ -316,19 +316,21 @@ catch { `$strictPreserved = `$true }
         $frontHighIntent = Invoke-Plan (New-Fixture -SpecOptions @{ Risk = 'high'; Intent = '- **Intent:** This line declares RISK: HIGH for execution.' })
         $mediumIntent = Invoke-Plan (New-Fixture -SpecOptions @{ Risk = 'medium'; Intent = '- **Intent:** This line declares RISK: HIGH for execution.' })
         $absentIntent = Invoke-Plan (New-Fixture -SpecOptions @{ OmitRisk = $true; Intent = '- **Intent:** This line declares RISK: HIGH for execution.' })
-        $empty = New-Fixture -SpecOptions @{ Risk = '' }
-        $other = New-Fixture -SpecOptions @{ Risk = 'critical' }
-        $nearFront = New-Fixture -SpecOptions @{ Risk = 'highly' }
-        $titleFront = New-Fixture -SpecOptions @{ Risk = 'High' }
-        $upperFront = New-Fixture -SpecOptions @{ Risk = 'HIGH' }
+        $empty = Invoke-Plan (New-Fixture -SpecOptions @{ Risk = '' })
+        $other = Invoke-Plan (New-Fixture -SpecOptions @{ Risk = 'critical' })
+        $nearFront = Invoke-Plan (New-Fixture -SpecOptions @{ Risk = 'highly' })
+        $titleFront = Invoke-Plan (New-Fixture -SpecOptions @{ Risk = 'High' })
+        $upperFront = Invoke-Plan (New-Fixture -SpecOptions @{ Risk = 'HIGH' })
         $near = New-Fixture -SpecOptions @{ Intent = '- **Intent:** This mentions risk: highly without declaring it.' }
         return $frontHigh.allowed -and $frontHigh.spec.risk -ceq 'high' -and
             $frontHighIntent.allowed -and $frontHighIntent.spec.risk -ceq 'high' -and
             -not $mediumIntent.allowed -and $mediumIntent.refusal -ceq 'Intent declares risk: high but frontmatter risk is not high' -and
             -not $absentIntent.allowed -and $absentIntent.refusal -ceq 'Intent declares risk: high but frontmatter risk is not high' -and
-            -not (Invoke-Plan $empty).allowed -and -not (Invoke-Plan $other).allowed -and
-            -not (Invoke-Plan $nearFront).allowed -and -not (Invoke-Plan $titleFront).allowed -and
-            -not (Invoke-Plan $upperFront).allowed -and (Invoke-Plan $near).allowed
+            -not $empty.allowed -and $empty.refusal -ceq 'frontmatter risk must be low, medium or high' -and
+            -not $other.allowed -and $other.refusal -ceq 'frontmatter risk must be low, medium or high' -and
+            -not $nearFront.allowed -and $nearFront.refusal -ceq 'frontmatter risk must be low, medium or high' -and
+            -not $titleFront.allowed -and $titleFront.refusal -ceq 'frontmatter risk must be low, medium or high' -and
+            -not $upperFront.allowed -and $upperFront.refusal -ceq 'frontmatter risk must be low, medium or high' -and (Invoke-Plan $near).allowed
     }
     Assert-Case 'Non-goals risk token does not refuse' {
         $fixture = New-Fixture -SpecOptions @{ Intent = "- **Intent:** Build safely.`n- **Non-goals:** risk: high execution is excluded." }

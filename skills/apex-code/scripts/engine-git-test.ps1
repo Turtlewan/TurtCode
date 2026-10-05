@@ -364,6 +364,7 @@ git update-ref HEAD "$commit"
     Assert-True $nullJournalResult.ok 'null JournaledPaths is normalized to an empty array'
     Assert-Equal 5 $nullJournal.Count 'null JournaledPaths visits every already-applied path'
     Write-Output 'ok - null handoff journal normalization'
+    Assert-Equal $tip (Invoke-TestGit $integration.worktree @('rev-parse', 'HEAD')).text 'integration live HEAD equals expected hand-off tip'
     Write-Output 'ok - hand-off expected tip'
 
     $proofBeforeCloseout = Test-EngineTeardownProof -Repo $repo -Spec $spec -Files $files -IntegrationTip $tip
@@ -381,9 +382,24 @@ git update-ref HEAD "$commit"
     Assert-True ($movedTip -cne $tip) 'extra integration commit moves HEAD beyond reviewed tip'
     Assert-True (-not (Test-Path -LiteralPath (Join-Path $repo $movedPath))) 'moved-tip fixture is absent from main before hand-off'
     $movedMessage = "integration HEAD $movedTip differs from reviewed tip $tip; hand-off refused"
+    $snapshotState = {
+        $entries = @(Get-ChildItem -LiteralPath $stateDirectory -Recurse -Force -File | ForEach-Object {
+            [pscustomobject]@{
+                name = $_.FullName.Substring($stateDirectory.Length + 1)
+                bytes = $_.Length
+            }
+        } | Sort-Object -Property name)
+        ConvertTo-Json -InputObject $entries -Compress
+    }
+    $mainHeadBeforeMovedRefusal = (Invoke-TestGit $repo @('rev-parse', 'HEAD')).text
+    $stateBeforeMovedRefusal = & $snapshotState
     Assert-Throws {
         Invoke-EngineHandoff -Repo $repo -IntegrationWorktree $integration.worktree -BaseSha $tip -ExpectedTip $tip -Files @([pscustomobject]@{ path = $movedPath; op = 'create' }) -JournaledPaths @() -OnFileJournaled { param($path) throw "unexpected journal callback for $path" } -StateDirectory $stateDirectory
     } ([regex]::Escape($movedMessage)) 'moved integration tip is refused with the pinned diagnosis'
+    $mainHeadAfterMovedRefusal = (Invoke-TestGit $repo @('rev-parse', 'HEAD')).text
+    $stateAfterMovedRefusal = & $snapshotState
+    Assert-Equal $mainHeadBeforeMovedRefusal $mainHeadAfterMovedRefusal 'moved-tip refusal preserves main HEAD'
+    Assert-Equal $stateBeforeMovedRefusal $stateAfterMovedRefusal 'moved-tip refusal preserves sorted state names and byte sizes'
     Assert-True (-not (Test-Path -LiteralPath (Join-Path $repo $movedPath))) 'moved-tip refusal writes no hand-off file to main'
     Write-Output 'ok - hand-off moved tip refuses'
 

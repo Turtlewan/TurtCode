@@ -24,6 +24,8 @@ $oldCommitCrash = $env:APEX_ENGINE_TEST_CRASH_AFTER_WAVE_COMMIT
 $oldLadderCrash = $env:APEX_ENGINE_TEST_CRASH_AFTER_VERIFICATION_FAILURE
 $oldHandoffCrash = $env:APEX_ENGINE_TEST_FAIL_BEFORE_HANDOFF_JOURNAL
 $oldIdentityFailure = $env:APEX_ENGINE_TEST_FAIL_INDEX_IDENTITY
+$oldWriteTreeFailure = $env:APEX_ENGINE_TEST_FAIL_WRITE_TREE
+$oldResidueCaptureFailure = $env:APEX_ENGINE_TEST_FAIL_RESIDUE_CAPTURE
 
 function Write-TestText {
     param([string]$Path, [string]$Text)
@@ -974,13 +976,14 @@ exit `$LASTEXITCODE
         [string[]]@('-Resume', $validationState.run_id, '-StateRoot', $binding.state_root, '-ReviewVerdict', 'clean', '-ReviewDigest', $bindingDigest, '-ReviewRecord', $invalidUtf8Record),
         [string[]]@('-Resume', $validationState.run_id, '-StateRoot', $binding.state_root, '-ReviewVerdict', 'clean', '-ReviewDigest', $bindingDigest, '-ReviewRecord', $utf16LeRecord)
     )
-    $validationOk = $true; $validationDetail = @()
+    $validationOk = $true; $validationDetail = @(); $validationResults = @()
     foreach ($validationArgs in $validationArguments) {
         $beforeValidationHash = Get-TestFileSha256 $validationFile.FullName
         $validationResult = Invoke-TestEngine $validationArgs
         $afterValidationHash = Get-TestFileSha256 $validationFile.FullName
         if ($validationResult.code -ne 1 -or $validationResult.output -notmatch 'Engine refused' -or
                 $beforeValidationHash -cne $afterValidationHash) { $validationOk = $false }
+        $validationResults += $validationResult
         $validationDetail += "$($validationResult.code):$($validationResult.output)"
     }
     $newFlagStateRoot = Join-Path $testRoot 'new-review-flags-state'
@@ -993,6 +996,8 @@ exit `$LASTEXITCODE
     $teardownFlagHashAfter = Get-TestFileSha256 $validationFile.FullName
     Assert-Test 'review flag validation' `
         ($validationOk -and $newFlagsRun.code -eq 1 -and $newFlagsRun.output -match 'Engine refused' -and
+            $validationResults[3].output -match [regex]::Escape('-ReviewRecord must be an absolute normalized path.') -and
+            $validationResults[4].output -match [regex]::Escape('-ReviewRecord must be an absolute normalized path.') -and
             @(Get-ChildItem -LiteralPath $newFlagStateRoot -Filter engine-state.json -Recurse -File -ErrorAction SilentlyContinue).Count -eq 0 -and
             $teardownFlagsRun.code -eq 1 -and $teardownFlagsRun.output -match 'Engine refused' -and
             $teardownFlagHashBefore -ceq $teardownFlagHashAfter -and
@@ -1568,6 +1573,36 @@ exit ([int]$env:ENGINE_TEST_BASELINE_EXIT)
             $identityFailureCase.state.diagnosis -match '^verify gate exit 1: git index identity read before pin failed:' -and
             $identityFailureCase.state.diagnosis -match 'git ls-files' -and
             @($identityFailureCase.state.tasks[0].attempts).Count -eq 1) $identityFailureCase.result.output
+
+    $env:APEX_ENGINE_TEST_FAIL_WRITE_TREE = '1'
+    try { $commitIntentFailureCase = Invoke-TestScenario -Name 'commit-intent-capture-failure' -Scenario 'done' -Single }
+    finally { Remove-Item Env:APEX_ENGINE_TEST_FAIL_WRITE_TREE -ErrorAction SilentlyContinue }
+    $commitIntentFailureHead = (Invoke-TestGit ([string]$commitIntentFailureCase.state.integration.worktree) @('rev-parse', 'HEAD'))[-1]
+    $commitIntentFailureRuntime = $commitIntentFailureCase.state.wave_runtime.'1'
+    Assert-Test 'commit-intent capture failure parks' `
+        ($commitIntentFailureCase.result.code -ne 0 -and $commitIntentFailureCase.state.status -ceq 'parked' -and
+            $commitIntentFailureCase.state.diagnosis -ceq 'integration commit-intent capture failed for wave 1: git write-tree failed (test seam)' -and
+            $commitIntentFailureCase.state.integration.tip -ceq $commitIntentFailureCase.state.base_sha -and
+            $commitIntentFailureHead -ceq [string]$commitIntentFailureCase.state.integration.tip -and
+            -not $commitIntentFailureRuntime.PSObject.Properties['commit_intent']) `
+        $commitIntentFailureCase.result.output
+
+    $env:APEX_ENGINE_TEST_FAIL_RESIDUE_CAPTURE = '1'
+    try { $residueCaptureFailureCase = Invoke-TestScenario -Name 'residue-capture-failure' -Scenario 'done' -Single }
+    finally { Remove-Item Env:APEX_ENGINE_TEST_FAIL_RESIDUE_CAPTURE -ErrorAction SilentlyContinue }
+    $residueCaptureFailureHead = (Invoke-TestGit ([string]$residueCaptureFailureCase.state.integration.worktree) @('rev-parse', 'HEAD'))[-1]
+    $residueCaptureHasIntent = $false
+    if ($residueCaptureFailureCase.state.PSObject.Properties['wave_runtime'] -and
+            $residueCaptureFailureCase.state.wave_runtime.PSObject.Properties['1']) {
+        $residueCaptureHasIntent = $null -ne $residueCaptureFailureCase.state.wave_runtime.'1'.PSObject.Properties['commit_intent']
+    }
+    Assert-Test 'residue capture failure parks' `
+        ($residueCaptureFailureCase.result.code -ne 0 -and $residueCaptureFailureCase.state.status -ceq 'parked' -and
+            $residueCaptureFailureCase.state.diagnosis -ceq 'residue inventory capture failed for wave 1: residue inventory capture failed (test seam)' -and
+            $residueCaptureFailureCase.state.integration.tip -ceq $residueCaptureFailureCase.state.base_sha -and
+            $residueCaptureFailureHead -ceq [string]$residueCaptureFailureCase.state.integration.tip -and
+            -not $residueCaptureHasIntent) `
+        $residueCaptureFailureCase.result.output
 
     $concernsCase = Invoke-TestScenario -Name 'concerns-route' -Scenario 'concerns' -Single
     Assert-Test 'real wrapper final done_with_concerns integrates and records concern' `
@@ -2167,6 +2202,8 @@ exit $code
     $env:APEX_ENGINE_TEST_CRASH_AFTER_VERIFICATION_FAILURE = $oldLadderCrash
     $env:APEX_ENGINE_TEST_FAIL_BEFORE_HANDOFF_JOURNAL = $oldHandoffCrash
     $env:APEX_ENGINE_TEST_FAIL_INDEX_IDENTITY = $oldIdentityFailure
+    $env:APEX_ENGINE_TEST_FAIL_WRITE_TREE = $oldWriteTreeFailure
+    $env:APEX_ENGINE_TEST_FAIL_RESIDUE_CAPTURE = $oldResidueCaptureFailure
     if (Test-Path -LiteralPath $testRoot) { Remove-Item -LiteralPath $testRoot -Recurse -Force -ErrorAction SilentlyContinue }
     if (Test-Path -LiteralPath $machineLocalRoot) { Remove-Item -LiteralPath $machineLocalRoot -Recurse -Force -ErrorAction SilentlyContinue }
 }

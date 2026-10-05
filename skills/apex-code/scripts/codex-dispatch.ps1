@@ -15,7 +15,7 @@ param(
     [string]$Phase,
     [ValidateSet('low', 'medium', 'high', 'xhigh', 'max', 'ultra')]
     [string]$Effort = 'medium',
-    [ValidateSet('gpt-5.6-sol', 'gpt-6-sol', IgnoreCase = $false)]
+    [ValidateSet('gpt-5.6-sol', 'gpt-6-sol', 'gpt-6.1-sol', IgnoreCase = $false)]
     [string]$Model = 'gpt-5.6-sol',
     [ValidateRange(1, 16)]
     [int]$MachineCeiling = 4,
@@ -3496,7 +3496,7 @@ $ledgerRow = [ordered]@{
     shared_worktree_reason = $(if ($AllowSharedWorktree) { $AllowSharedWorktreeReason } else { '' })
     tree_pin_disabled = [bool]$NoTreePin
     tree_pin_disabled_reason = $(if ($NoTreePin) { $NoTreePinReason } else { '' })
-    tree_pin_override = ([bool]$TreePinScript -and [bool]$ReviewedRunId)
+    tree_pin_override = [bool]$TreePinScript
     critical_files_confirmed = [bool]$CriticalFilesConfirmed
     critical_files_confirmed_note = $(if ($CriticalFilesConfirmed) { $CriticalFilesConfirmedNote } else { '' })
     model = $coderModel

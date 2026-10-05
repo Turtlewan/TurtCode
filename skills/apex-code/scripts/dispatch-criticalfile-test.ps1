@@ -459,10 +459,16 @@ exit 0
     # shape and real end_tree_digest as production. The review fake writes into a separate sink so it
     # cannot move the tree being reviewed.
     $spec = 'critfile-review-digest-mismatch'
+    $buildTreePinScript = Join-Path $PSScriptRoot 'tree-pin.ps1'
     $build = Invoke-DispatchCase -CaseName '12a seed real build for mismatch' -Spec $spec -Fixture $fixtures[12] `
-        -ExtraParameters @{ SkipBaselineCheck = $true } `
+        -ExtraParameters @{ SkipBaselineCheck = $true; TreePinScript = $buildTreePinScript } `
         -FakeEnvironment @{ FAKE_CODEX_INSCOPE_ONLY = '1' }
     $buildRow = @($build.Rows | Where-Object { $_.phase -eq 'build' }) | Select-Object -First 1
+    Assert-Case -Label 'build with TreePinScript records an override' `
+        -Condition ($build.ExitCode -eq 0 -and $build.Rows.Count -eq 1 -and
+            $buildRow.tree_pin_override -eq $true) `
+        -Detail ("build={0}, rows={1}, override={2}" -f $build.ExitCode,
+            $build.Rows.Count, $buildRow.tree_pin_override)
     $liveDigest = [string]$buildRow.end_tree_digest
     $differentDigest = if ($liveDigest -ceq ('f' * 64)) { 'e' * 64 } else { 'f' * 64 }
     Set-LedgerRowProperty -RunId ([string]$buildRow.run_id) -Name 'end_tree_digest' -Value $differentDigest
@@ -488,6 +494,11 @@ exit 0
         -ExtraParameters @{ SkipBaselineCheck = $true } `
         -FakeEnvironment @{ FAKE_CODEX_INSCOPE_ONLY = '1' }
     $buildRow = @($build.Rows | Where-Object { $_.phase -eq 'build' }) | Select-Object -First 1
+    Assert-Case -Label 'build without TreePinScript records no override' `
+        -Condition ($build.ExitCode -eq 0 -and $build.Rows.Count -eq 1 -and
+            $buildRow.tree_pin_override -eq $false) `
+        -Detail ("build={0}, rows={1}, override={2}" -f $build.ExitCode,
+            $build.Rows.Count, $buildRow.tree_pin_override)
     $digestScript = New-ControlledDigestScript -Name 'matching-live-digest' -Digest ([string]$buildRow.end_tree_digest)
     $result = Invoke-DispatchCase -CaseName '13b review digest match' -Spec $spec -Fixture $fixtures[13] `
         -FakeRepo $reviewSink.Path -FakePath $cleanReviewFake -Authorized @() -ExtraParameters @{

@@ -255,6 +255,10 @@ function Get-RunnerWaveRuntime {
 
 function Ensure-RunnerResidueInventory {
     param([int]$WaveNumber)
+    if ($env:APEX_ENGINE_TEST_MODE -ceq '1' -and
+            $env:APEX_ENGINE_TEST_FAIL_RESIDUE_CAPTURE -ceq '1') {
+        throw 'residue inventory capture failed (test seam)'
+    }
     $runtime = Get-RunnerWaveRuntime $WaveNumber -Create
     if (-not $runtime.PSObject.Properties['residue_inventory']) {
         $inventory = [string[]]@(Get-RunnerUntrackedIgnoredPaths ([string]$script:EngineState.integration.worktree))
@@ -910,7 +914,11 @@ function Invoke-RunnerWave {
         if ($route -cne 'success') { return $false }
     }
 
-    [void](Ensure-RunnerResidueInventory ([int]$Wave.number))
+    try { [void](Ensure-RunnerResidueInventory ([int]$Wave.number)) }
+    catch {
+        Set-RunnerParked "residue inventory capture failed for wave $($Wave.number): $($_.Exception.Message)" $null
+        return $false
+    }
 
     while ($script:EngineState.status -ceq 'running') {
         [void](Restore-RunnerWave $waveBase $waveFiles)
@@ -927,12 +935,30 @@ function Invoke-RunnerWave {
         if ($failureIds.Count -eq 0) { $gate = Invoke-RunnerGate $waveFiles ([int]$Wave.number) }
         if ($failureIds.Count -eq 0 -and $gate.code -eq 0) {
             $allowedPaths = [string[]]@($waveFiles | ForEach-Object { [string]$_.path })
-            $expectedTree = Invoke-RunnerGitText $script:EngineState.integration.worktree 'write-tree'
-            $runtime = Get-RunnerWaveRuntime ([int]$Wave.number) -Create
-            $intent = [pscustomobject][ordered]@{ base = [string]$waveBase; expected_tree = [string]$expectedTree }
-            if ($runtime.PSObject.Properties['commit_intent']) { $runtime.commit_intent = $intent }
-            else { $runtime | Add-Member -NotePropertyName commit_intent -NotePropertyValue $intent }
-            Save-RunnerState
+            $runtime = $null; $hadCommitIntent = $false; $previousCommitIntent = $null; $intentAssigned = $false
+            try {
+                if ($env:APEX_ENGINE_TEST_MODE -ceq '1' -and
+                        $env:APEX_ENGINE_TEST_FAIL_WRITE_TREE -ceq '1') {
+                    throw 'git write-tree failed (test seam)'
+                }
+                $expectedTree = Invoke-RunnerGitText $script:EngineState.integration.worktree 'write-tree'
+                $runtime = Get-RunnerWaveRuntime ([int]$Wave.number) -Create
+                $hadCommitIntent = $null -ne $runtime.PSObject.Properties['commit_intent']
+                if ($hadCommitIntent) { $previousCommitIntent = $runtime.commit_intent }
+                $intent = [pscustomobject][ordered]@{ base = [string]$waveBase; expected_tree = [string]$expectedTree }
+                if ($hadCommitIntent) { $runtime.commit_intent = $intent }
+                else { $runtime | Add-Member -NotePropertyName commit_intent -NotePropertyValue $intent }
+                $intentAssigned = $true
+                Save-RunnerState
+            }
+            catch {
+                if ($intentAssigned) {
+                    if ($hadCommitIntent) { $runtime.commit_intent = $previousCommitIntent }
+                    else { $runtime.PSObject.Properties.Remove('commit_intent') }
+                }
+                Set-RunnerParked "integration commit-intent capture failed for wave $($Wave.number): $($_.Exception.Message)" $null
+                return $false
+            }
             try {
                 $commit = Commit-EngineWave -IntegrationWorktree $script:EngineState.integration.worktree `
                     -Message "APEX Engine $($script:EngineState.spec.name) wave $($Wave.number)" `
