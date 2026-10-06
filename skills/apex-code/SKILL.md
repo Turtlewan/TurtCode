@@ -1,7 +1,7 @@
 ---
 skill: apex-code
-version: 2.20.0
-last_updated: 2026-10-05
+version: 2.21.0
+last_updated: 2026-10-06
 sources:
   - docs/technical/adr/ADR-027-codex-primary-opus-fallback-deepseek-archived.md
   - docs/technical/adr/ADR-028-parallel-codex-dispatch.md
@@ -329,7 +329,7 @@ It runs the dedicated `AGENTS.md → ## Preflight commands` block when present, 
 
 ## Post-build
 
-The docs agents' three host's-pen artifacts — the handoff, `docs/status.md`, and spec archival into `docs/changes/done/` — are **permitted post-build writes outside `## Files to Change`** (D6, ADR-046); they do **not** need to be listed there. **Exactly those three. Nothing else is exempt** — any other write outside the lock is flagged, not applied.
+The docs agent's (`apex-docs-technical-agent`) three host's-pen artifacts — the handoff, `docs/status.md`, and spec archival into `docs/changes/done/` — are **permitted post-build writes outside `## Files to Change`** (D6, ADR-046); they do **not** need to be listed there. **Exactly those three. Nothing else is exempt** — any other write outside the lock is flagged, not applied.
 
 **Pin the tree before you open a gate.** A gate reads the tree at time T and acts on a verdict at
 T+n. Nothing pins T — so if the tree moves in between, the verdict describes a tree that no longer
@@ -356,7 +356,7 @@ mechanism: the reviewer reads, the tree moves, the reviewer returns **CLEAN**, a
 code nobody ever looked at. The pin covers **content, not just filenames** — that day the filename
 never changed, only what was inside it, so a `git status` check would have seen nothing.
 
-1. **Run one risk-routed Critic cadence before either docs agent.** Dispatch `apex-critic` through
+1. **Run one risk-routed Critic cadence before the Scribe and the docs agent.** Dispatch `apex-critic` through
    the Agent tool with `mode: code` and `model: sonnet` for Low, Medium, and doc-only work, or
    `model: opus` for High, on every dispatch. The Agent tool's `model:` parameter takes precedence
    over the agent file's default frontmatter `model: sonnet`. After each integrated High-risk wave,
@@ -374,19 +374,24 @@ never changed, only what was inside it, so a `git status` check would have seen 
    OWNER's choice as an `owner` row in the decisions table: (a) accept the open findings and complete
    the task, (b) authorize exactly one further fix-and-review cycle, or (c) park or kill the task.
    If that extra review is not `clean`, return to the OWNER for only (a) or (c). Only after the
-   Critic returns may `apex-docs-product-agent` run; it writes inline documentation and would move
-   the tree under an open review, voiding the verdict.
-2. **Family routing.** For Codex-built work, the Claude Critic is the cross-family review; do not
+   Critic cadence returns clean or the OWNER resolution is recorded may the Scribe run; it writes
+   documentation and would move the tree under an open review, voiding the verdict.
+2. **Scribe (attended HOST close-out).** Follow `references/scribe.md` once per repository, only
+   after step 1 returns clean or the OWNER resolution is recorded, and before the family gate
+   (step 6) and `apex-docs-technical-agent` (step 8). Require the `wrapper-model-luna` prerequisite;
+   carry the per-repo `scribe_summary` into the technical-docs handoff.
+3. **Family routing.** For Codex-built work, the Claude Critic is the cross-family review; do not
    dispatch an additional Sol review. For Claude-fallback Sonnet builds, retain the independent
    Codex review in `references/codex-review.md` and the family gate. If Codex remains unavailable,
    a diff-bound attended human review substitutes under ADR-042; a same-family Claude review is
-   advisory only. The wrapper's `-Model` parameter admits only OpenAI models (`gpt-5.6-sol`, the
-   default, and `gpt-6-sol`), so ledger family fields describe what it launched, not a caller's claim.
-3. **AFK whole-build scope.** The end-of-run Opus Critic pass through the Agent tool with
+   advisory only. With the `wrapper-model-luna` prerequisite, the wrapper's `-Model` parameter admits
+   only OpenAI models (`gpt-5.6-sol`, the default, `gpt-6-sol`, and `gpt-6-luna`), so ledger family
+   fields describe what it launched, not a caller's claim.
+4. **AFK whole-build scope.** The end-of-run Opus Critic pass through the Agent tool with
    `model: opus` over `run_base_sha..HEAD` is round 1 of the whole-build code review
    (`references/afk-endgate.md`); it replaces the normal whole-build dispatch, so do not dispatch a
    second whole-build review. If it causes fixes, use the same rounds 2–3 fix-check contract and cap.
-4. **Annotate in-session work.** At completion of every in-session worker (Claude fallback build or
+5. **Annotate in-session work.** At completion of every in-session worker (Claude fallback build or
    in-session Claude Critic), append one compact JSON row with a terminal status to the wrapper's
    ledger. Human review uses the same row shape. Resolve the ledger as
    `%APEX_STATE_DIR%\progress\codex-run-ledger.jsonl`, falling back to
@@ -429,7 +434,7 @@ never changed, only what was inside it, so a `git status` check would have seen 
    `codex-dispatch.ps1`.) For a cross-family Codex review dispatched through the wrapper, pass
    `-ReviewedRunId <build run_id>` to `codex-dispatch.ps1`; the wrapper records the binding.
 
-5. **Completion gate -- run it; do not eyeball the ledger:**
+6. **Completion gate -- run it; do not eyeball the ledger:**
 
    ```powershell
    powershell.exe -NoProfile -File "$env:USERPROFILE\.claude\skills\apex-code\scripts\apex-family-gate.ps1" -Spec <s> -Task <t> -WorktreeKey <k>
@@ -441,11 +446,11 @@ never changed, only what was inside it, so a `git status` check would have seen 
    mark complete. Non-zero (12 = same-family refusal; 13 = unverifiable) -- **REFUSE completion**
    until a cross-family review or build-bound attended human review exists. AFK -- park instead of
    blocking forever. A same-family automated review is advisory only and cannot satisfy this gate.
-6. **Before archiving, the host runs `codex-dispatch.ps1 -ListObligations` and discharges every
+7. **Before archiving, the host runs `codex-dispatch.ps1 -ListObligations` and discharges every
    cleanup and branch-teardown obligation it reports.**
-7. `apex-docs-technical-agent` -- writes the handoff and archives the spec to `docs/changes/done/`.
-8. **Host review of docs-agent output.** Before the session closes, the host reads what the docs agents wrote and either **accepts** it, or **rejects it and re-dispatches the agent with the findings so the agent REVISES its own artifacts in place**. All three artifacts are rewritable files, so revision is **idempotent by construction** — a re-dispatch overwrites the handoff and `docs/status.md` rather than appending. The one exception is the archival file move: once done it **stands and is not redone**; a re-dispatch skips it. **The host never edits the agents' output itself** — that would be a mechanical edit (ADR-046 D1). This is the control that makes the D6 AFK carve-out safe; without it the carve-out is unbacked.
-9. Report: handoff path; reviewer verdict; decisions count.
+8. `apex-docs-technical-agent` -- writes the handoff and archives the spec to `docs/changes/done/`.
+9. **Host review of docs-agent output.** This review covers only `apex-docs-technical-agent`'s artifacts; the Scribe's edits are covered by its Critic gate and family gate. Before the session closes, the host reads what the docs agent wrote and either **accepts** it, or **rejects it and re-dispatches the agent with the findings so the agent REVISES its own artifacts in place**. All three artifacts are rewritable files, so revision is **idempotent by construction** — a re-dispatch overwrites the handoff and `docs/status.md` rather than appending. The one exception is the archival file move: once done it **stands and is not redone**; a re-dispatch skips it. **The host never edits the agent's output itself** — that would be a mechanical edit (ADR-046 D1). This is the control that makes the D6 AFK carve-out safe; without it the carve-out is unbacked.
+10. Report: handoff path; reviewer verdict; decisions count.
 
 ## Autonomy, permissions, hard blocks
 

@@ -15,7 +15,7 @@ You receive:
 - spec_path: path to the executed spec
 - coder_summary: the build path's own summary (files changed, decisions, blocked actions). On the default Codex path **the host assembles it from the wrapper's `.final` completion reports as build mechanics (ADR-046 D1)**, composition — **two separate inputs, do not conflate them.** `coder_summary` is built from the wrapper's `.final` fields only: `deviations` → its `decisions`; `blocker` → its `blocked_actions`; `unresolved` carried through as its own list. `reviewer_findings` is **not** a wrapper field — it arrives separately, as this agent's other declared input from `apex-critic` code-mode findings. The handoff sections then draw as follows: **Decisions Made** ← `coder_summary.decisions`; **Blocked Actions** ← `coder_summary.blocked_actions`; **Specialist Flags** ← `reviewer_findings` ∪ `coder_summary.unresolved` (de-duplicated — the Critic findings and the coder's own open questions are different evidence). There is no Files Changed section in the handoff, so `changed_files` maps to nothing — do not carry it. **Do NOT ingest `<final>.concerns.md` anywhere** — the wrapper writes that file from exactly those three fields (`blocker` + `unresolved` + `deviations`), so reading it as well duplicates every entry. Any field the wrapper schema does not carry is filled `none` — never invented. `apex-coder` produces this summary only on the Claude fallback path.
 - reviewer_findings: output from `apex-critic` in code mode (findings or clean)
-- docs_product_summary: output from apex-docs-product-agent (inline docs / CHANGELOG / README status)
+- scribe_summary: per-repo Scribe result from skills/apex-code/references/scribe.md: {status: integrated|skipped|discarded, model: used model including fallback, files_written: paths, docs_skipped_unlisted: paths, reason: text}. The model and reason retain any failed or discarded attempt, including one preceding a successful fallback; use model none when no dispatch ran.
 - date: today's date as YYYY-MM-DD
 
 ## Step 1: Read context
@@ -32,10 +32,10 @@ Write to docs/handoff/{date}.md using the template at:
 ~/.claude/skills/apex-orchestrate/templates/handoff-from-coding.md
 
 Fill the template's four sections accurately:
-- **Decisions Made**: all from `coder_summary.decisions`; tag build-time architectural choices `[arch]`.
+- **Decisions Made**: all from `coder_summary.decisions`; tag build-time architectural choices `[arch]`. Also carry the model used, fallback, and any discarded result and its diagnosis from `scribe_summary.model` and `scribe_summary.reason`, including a discarded attempt preceding a successful retry.
 - **Specialist Flags**: from `reviewer_findings`, ALL severities including low, plus `coder_summary.unresolved`, de-duplicated. AFK runs add the end-gate table per apex-handoff.
 - **Blocked Actions**: from `coder_summary.blocked_actions`.
-- **What's Next (discoveries)**: only what the build learned.
+- **What's Next (discoveries)**: only what the build learned, including unlisted-doc skips from `scribe_summary.docs_skipped_unlisted`.
 
 Write "none" where a section is empty. **Add no sections beyond the template's four** — the H1, the session-metadata line, and the read-once preamble are template chrome and stay. The retired build-inventory sections are gone, and their facts have other homes: what changed → git log; which specs finished → docs/changes/done/; build status and in-progress position → status.md In-Flight. The template forbids repeating them (apex-handoff § one home per fact).
 
@@ -60,4 +60,4 @@ Write file back.
 
 ## Step 5: Report
 
-"Handoff written to docs/handoff/{date}.md. Spec archived to docs/changes/done/{name}.md. Docs: {status from docs_product_summary — completed | completed_with_skips | failed}."
+"Handoff written to docs/handoff/{date}.md. Spec archived to docs/changes/done/{name}.md. Docs: {scribe_summary.status — integrated|skipped|discarded}. Reason: {scribe_summary.reason}."
