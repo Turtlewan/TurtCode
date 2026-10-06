@@ -16,6 +16,11 @@ $ErrorActionPreference = 'Continue'
 
 $root = Join-Path $env:TEMP ("apex-baseline-test-" + [guid]::NewGuid().ToString('N').Substring(0,8))
 New-Item -ItemType Directory -Force -Path $root | Out-Null
+$savedStateDir = $env:APEX_STATE_DIR
+$savedGitConfigGlobal = $env:GIT_CONFIG_GLOBAL
+$env:APEX_STATE_DIR = Join-Path $root 'state'
+$env:GIT_CONFIG_GLOBAL = Join-Path $root 'gitconfig'
+[System.IO.File]::WriteAllText($env:GIT_CONFIG_GLOBAL, '', [System.Text.UTF8Encoding]::new($false))
 
 $script:fail = 0
 function Check($label, $cond, $detail) {
@@ -61,6 +66,26 @@ function Invoke-Checker($repo, [switch]$Preflight, [switch]$CaptureOutput) {
     }
     return $code
 }
+function Check-Diagnostic($label, $repo, $diagnostic) {
+    $result = Invoke-Checker $repo -CaptureOutput
+    Check $label (($result.ExitCode -eq 3) -and
+        (@($result.Output -split "`n") -ccontains $diagnostic) -and
+        $result.Output -notmatch '\[baseline\] > ') 'exit 3, exact diagnostic, no execution'
+}
+
+# Exercise the specified grep pattern against the real Task 1 block using built-in PowerShell.
+$checkerText = [System.IO.File]::ReadAllText($checker)
+$markedBlocks = [regex]::Matches($checkerText,
+    '(?ms)^# BEGIN recipe-grammar lockstep\r?\n(?<Body>.*?)^# END recipe-grammar lockstep\r?$')
+Check 'real checker has one nonempty marked block' ((@($markedBlocks).Count -eq 1) -and
+    -not [string]::IsNullOrWhiteSpace($markedBlocks[0].Groups['Body'].Value)) 'Task 1 extraction'
+if (@($markedBlocks).Count -eq 1) {
+    $extractedBlock = Join-Path $root 'recipe-grammar-block.ps1'
+    Write-File $extractedBlock $markedBlocks[0].Value
+    $purityMatches = @(Select-String -LiteralPath $extractedBlock -CaseSensitive -ErrorAction Stop `
+        -Pattern 'Get-Content|ReadAll|Write-Host|Write-Output|\bexit\b|&')
+    Check 'marked grammar passes runnable rg purity check' (@($purityMatches).Count -eq 0) ($purityMatches -join "`n")
+}
 
 Write-Host "`n=== apex-baseline-check.ps1 ===" -ForegroundColor Cyan
 Check 'green recipe exits 0' ((Invoke-Checker (New-Repo 'green' @('echo baseline-ok'))) -eq 0) 'echo -> 0'
@@ -97,6 +122,44 @@ $rawBashPipe = @('# AGENTS', '## Verify commands', '```bash', 'false | true', '`
 Check 'bash pipeline propagates failing command' ((Invoke-Checker (New-RawRepo 'bash-pipefail' $rawBashPipe)) -eq 1) 'left-side failure -> RED'
 $rawPowerShell = @('# AGENTS', '## Verify commands', '```powershell', 'if (-not $PSVersionTable) { exit 1 }', '```') -join "`n"
 Check 'powershell fence runs PowerShell-only syntax' ((Invoke-Checker (New-RawRepo 'shell-powershell' $rawPowerShell)) -eq 0) 'PowerShell conditional -> 0'
+foreach ($shellCase in @(
+    [pscustomobject]@{ Name = 'extra'; Info = 'powershell extra' },
+    [pscustomobject]@{ Name = 'uppercase'; Info = 'POWERSHELL' },
+    [pscustomobject]@{ Name = 'tab'; Info = ('powershell' + [char]9 + 'extra') }
+)) {
+    $shellRepo = New-RawRepo ('shell-' + $shellCase.Name) (@(
+        '# AGENTS', '## Verify commands', ($fence + $shellCase.Info),
+        'if (-not $PSVersionTable) { exit 1 }; Write-Output (''ps-shell-'' + ''confirmed'')', $fence
+    ) -join "`n")
+    $shellResult = Invoke-Checker $shellRepo -CaptureOutput
+    Check ("PowerShell first-token shell: " + $shellCase.Name) (($shellResult.ExitCode -eq 0) -and
+        (@($shellResult.Output -split "`n") -ccontains 'ps-shell-confirmed')) 'exit 0 + PowerShell-only output'
+}
+$unsupportedRepo = New-RawRepo 'shell-python' (@(
+    '# AGENTS', '## Verify commands', ($fence + 'python'), 'echo should-not-run', $fence
+) -join "`n")
+Check-Diagnostic 'runnable python fence -> UnsupportedShell' $unsupportedRepo "[baseline] UNPARSEABLE -- unsupported fence info-string 'python'."
+$noCommandsDiagnostic = "[baseline] UNPARSEABLE -- '## Verify commands' found but no runnable command block follows it."
+foreach ($emptyCase in @(
+    [pscustomobject]@{ Name = 'empty'; Info = ''; Lines = @() },
+    [pscustomobject]@{ Name = 'comments'; Info = ''; Lines = @('   ', '# comment', '  # indented comment') },
+    [pscustomobject]@{ Name = 'empty-python'; Info = 'python'; Lines = @() }
+)) {
+    $emptyRepo = New-RawRepo ('verify-' + $emptyCase.Name) ((@(
+        '# AGENTS', '## Verify commands', ($fence + $emptyCase.Info)
+    ) + @($emptyCase.Lines) + @($fence)) -join "`n")
+    Check-Diagnostic ($emptyCase.Name + ' fence -> NoRunnableCommands') $emptyRepo $noCommandsDiagnostic
+}
+$zeroByteRepo = New-RawRepo 'zero-byte' $null
+$zeroBytePath = Join-Path $zeroByteRepo 'AGENTS.md'
+[IO.File]::WriteAllBytes($zeroBytePath, [byte[]]@())
+if (-not ((Get-Item -LiteralPath $zeroBytePath).Length -eq 0)) { throw 'fixture is not zero bytes' }
+$zeroByteResult = Invoke-Checker $zeroByteRepo -CaptureOutput
+Check 'zero-byte AGENTS retains empty-lines binding failure' (($zeroByteResult.ExitCode -eq 1) -and
+    (Get-Item -LiteralPath (Join-Path $zeroByteRepo 'AGENTS.md')).Length -eq 0 -and
+    ($zeroByteResult.Output -replace '\s+',' ') -match "Cannot bind argument to parameter 'Lines' because it is an empty array" -and
+    $zeroByteResult.Output -match 'ParameterArgumentValidationErrorEmptyArrayNotAllowed' -and
+    $zeroByteResult.Output -notmatch '\[baseline\] (UNPARSEABLE|NO_RECIPE)') 'exit 1, outside classification grammar'
 $rawCmd = @('# AGENTS', '## Verify commands', $fence, 'if "%CD%"=="" exit 1', $fence) -join "`n"
 Check 'unlabeled fence runs cmd-only syntax' ((Invoke-Checker (New-RawRepo 'shell-cmd' $rawCmd)) -eq 0) 'cmd conditional -> 0'
 
@@ -155,13 +218,18 @@ $realOnly = (Test-Path (Join-Path $decoyRepo 'real-marker.txt')) -and
     -not (Test-Path (Join-Path $decoyRepo 'decoy-marker.txt'))
 Check 'fenced decoy heading ignored; real recipe runs' (($decoyExit -eq 0) -and $realOnly) 'real marker only'
 $unclosed = @('# AGENTS', '## Verify commands', $fence, 'echo should-not-run') -join "`n"
-Check 'unclosed recipe fence -> exit 3' ((Invoke-Checker (New-RawRepo 'unclosed-fence' $unclosed)) -eq 3) 'EOF before close'
+$unclosedDiagnostic = "[baseline] UNPARSEABLE -- '## Verify commands' recipe fence is not closed before EOF."
+Check-Diagnostic 'unclosed recipe fence -> UnclosedFence' (New-RawRepo 'unclosed-fence' $unclosed) $unclosedDiagnostic
+$infoInsideOpenFence = @(
+    '# AGENTS', '## Verify commands', $fence, 'echo should-not-run', ($fence + 'python')
+) -join "`n"
+Check-Diagnostic 'info-string inside open fence is not a closer' (New-RawRepo 'info-inside-open-fence' $infoInsideOpenFence) $unclosedDiagnostic
 
 $captioned = @(
     '# AGENTS', '## Verify commands', 'Example:', $fence, 'echo decoy', $fence,
     $fence, 'echo real', $fence
 ) -join "`n"
-Check 'caption between heading and fences -> exit 3' ((Invoke-Checker (New-RawRepo 'captioned-fences' $captioned)) -eq 3) 'adjacency enforced'
+Check-Diagnostic 'caption between heading and fences -> ParseError' (New-RawRepo 'captioned-fences' $captioned) "[baseline] UNPARSEABLE -- '## Verify commands': recipe fence not immediately adjacent to heading."
 $twoFences = @(
     '# AGENTS', '## Verify commands', $fence, 'echo first', $fence,
     $fence, 'echo second', $fence, '## Notes'
@@ -284,6 +352,8 @@ Push-Location $repo; try {
 Check 'installer honours core.hooksPath' $inCustom 'not a hardcoded .git/hooks'
 
 try { Remove-Item -Recurse -Force $root -ErrorAction SilentlyContinue } catch {}
+$env:APEX_STATE_DIR = $savedStateDir
+$env:GIT_CONFIG_GLOBAL = $savedGitConfigGlobal
 Write-Host ""
 if ($script:fail -gt 0) { Write-Host "$($script:fail) check(s) FAILED" -ForegroundColor Red; exit 1 }
 Write-Host "ALL BASELINE-CHECK TESTS PASS." -ForegroundColor Green

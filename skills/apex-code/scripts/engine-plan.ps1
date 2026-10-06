@@ -176,16 +176,171 @@ function Get-EngineSpecialistContext {
     return $items.ToArray()
 }
 
+# BEGIN recipe-grammar lockstep
+function Get-RecipeBlock {
+    param(
+        [Parameter(Mandatory)][AllowEmptyString()][string[]]$Lines,
+        [Parameter(Mandatory)][string[]]$CandidateHeadings
+    )
+
+    $headingIndex = -1
+    $selectedHeading = $null
+
+    # Scan fence state once for the whole document. Both heading selection and recipe capture use
+    # these results, so a heading-like line inside an earlier fenced example cannot be selected.
+    $lineCount = @($Lines).Count
+    $insideFence = [bool[]]::new($lineCount)
+    $fenceLines = [bool[]]::new($lineCount)
+    $fenceInfoStrings = [string[]]::new($lineCount)
+    $fenceOpen = $false
+    for ($i = 0; $i -lt $lineCount; $i++) {
+        $insideFence[$i] = $fenceOpen
+        if ($fenceOpen) {
+            # An info-string line inside a fence is content, not a closing fence.
+            if ($Lines[$i] -match '^\s{0,3}```\s*$') {
+                $fenceLines[$i] = $true
+                $fenceOpen = $false
+            }
+        } elseif ($Lines[$i] -match '^\s{0,3}```(?<Info>.*)$') {
+            $fenceLines[$i] = $true
+            $fenceInfoStrings[$i] = $Matches['Info'].Trim()
+            $fenceOpen = $true
+        }
+    }
+
+    # Candidate order has priority over document order. This makes a declared preflight block win
+    # even when the full recipe appears earlier in AGENTS.md.
+    foreach ($candidate in $CandidateHeadings) {
+        # Require the complete heading so a deprecated/suffixed decoy cannot shadow the real recipe
+        # and fail open; trailing whitespace is harmless, but trailing heading text is not.
+        $headingPattern = '^\s{0,3}##\s*' + [regex]::Escape($candidate) + '\s*$'
+        for ($i = 0; $i -lt $lineCount; $i++) {
+            if (-not $insideFence[$i] -and $Lines[$i] -match $headingPattern) {
+                $headingIndex = $i
+                $selectedHeading = $candidate
+                break
+            }
+        }
+        if ($headingIndex -ge 0) { break }
+    }
+
+    if ($headingIndex -lt 0) {
+        return [pscustomobject]@{
+            HeadingFound = $false
+            Heading = $null
+            FenceText = $null
+            Commands = @()
+            InfoString = $null
+            LanguageTag = ''
+            FenceFound = $false
+            FenceClosed = $false
+            ParseError = $null
+            Classification = 'NoHeading'
+        }
+    }
+
+    $commands = @()
+    $fenceTextLines = @()
+    $sawFence = $false
+    $fenceClosed = $false
+    $infoString = $null
+    $parseError = $null
+
+    for ($i = $headingIndex + 1; $i -lt $lineCount; $i++) {
+        $line = $Lines[$i]
+        if (-not $sawFence) {
+            if ($fenceLines[$i] -and -not $insideFence[$i]) {
+                $sawFence = $true
+                $infoString = $fenceInfoStrings[$i]
+                $fenceTextLines += $line
+                continue
+            }
+
+            # The recipe fence must be immediately adjacent to its heading. Blank lines are the
+            # only permitted separation; prose, captions, and headings make the section ambiguous.
+            if (-not [string]::IsNullOrWhiteSpace($line)) {
+                $parseError = 'recipe fence not immediately adjacent to heading'
+                break
+            }
+            continue
+        }
+
+        if (-not $fenceClosed) {
+            $fenceTextLines += $line
+            if ($fenceLines[$i] -and $insideFence[$i]) {
+                $fenceClosed = $true
+                continue
+            }
+
+            if ($insideFence[$i]) {
+                $trimmed = $line.Trim()
+                if ($trimmed.Length -gt 0 -and -not $trimmed.StartsWith('#')) {
+                    $commands += $trimmed
+                }
+            }
+            continue
+        }
+
+        # Once the recipe closes, only prose is tolerated until the next heading. A second opening
+        # fence in that span makes it unclear which fenced block is the declared recipe.
+        if (-not $insideFence[$i] -and $line -match '^\s{0,3}#{1,6}\s') { break }
+        if ($fenceLines[$i] -and -not $insideFence[$i]) {
+            $parseError = 'ambiguous recipe: a second fence follows before the next heading'
+            break
+        }
+    }
+
+    $languageTag = ''
+    if (-not [string]::IsNullOrWhiteSpace($infoString)) {
+        $languageTag = ($infoString -split '\s+', 2)[0].ToLowerInvariant()
+    }
+
+    # Acceptance order preserves the baseline diagnostics, including empty unsupported fences.
+    $classification = 'Accepted'
+    if (-not [string]::IsNullOrWhiteSpace($parseError)) {
+        $classification = 'ParseError'
+    } elseif ($sawFence -and -not $fenceClosed) {
+        $classification = 'UnclosedFence'
+    } elseif (-not $sawFence -or @($commands).Count -eq 0) {
+        $classification = 'NoRunnableCommands'
+    } elseif ($languageTag -notin @('', 'cmd', 'bat', 'powershell', 'pwsh', 'bash', 'sh')) {
+        $classification = 'UnsupportedShell'
+    }
+
+    $fenceText = $null
+    if ($sawFence) { $fenceText = $fenceTextLines -join "`n" }
+
+    return [pscustomobject]@{
+        HeadingFound = $true
+        Heading = $selectedHeading
+        FenceText = $fenceText
+        Commands = @($commands)
+        InfoString = $infoString
+        LanguageTag = $languageTag
+        FenceFound = $sawFence
+        FenceClosed = $fenceClosed
+        ParseError = $parseError
+        Classification = $classification
+    }
+}
+# END recipe-grammar lockstep
+
 function Get-EngineVerifyFence {
     param([Parameter(Mandatory = $true)][string]$AgentsPath)
 
     if (-not (Test-Path -LiteralPath $AgentsPath -PathType Leaf)) { throw 'repo AGENTS.md is missing' }
-    $text = ConvertTo-EngineLfText -Text ([System.IO.File]::ReadAllText($AgentsPath))
-    $section = [regex]::Match($text, '(?ms)^##[ \t]+Verify commands[ \t]*\n(?<Body>.*?)(?=^##[ \t]+|\z)')
-    if (-not $section.Success) { throw 'repo AGENTS.md has no Verify commands section' }
-    $fence = [regex]::Match($section.Groups['Body'].Value, '(?ms)^(?<Open>`{3,}|~{3,})[^\n]*\n(?<Commands>.*?)^(?<Close>`{3,}|~{3,})[ \t]*$')
-    if (-not $fence.Success) { throw 'repo AGENTS.md Verify commands section has no command fence' }
-    return $fence.Value.TrimEnd("`n")
+    if ((Get-Item -LiteralPath $AgentsPath).Length -eq 0) { throw 'repo AGENTS.md is empty' }
+    $lines = [System.IO.File]::ReadAllLines($AgentsPath)
+    $recipe = Get-RecipeBlock -Lines $lines -CandidateHeadings @('Verify commands')
+    switch ($recipe.Classification) {
+        'Accepted' { return $recipe.FenceText }
+        'NoHeading' { throw 'repo AGENTS.md: NoHeading (baseline exit 4): no Verify commands section' }
+        'ParseError' { throw ('repo AGENTS.md: ParseError (baseline exit 3): ' + $recipe.ParseError) }
+        'UnclosedFence' { throw 'repo AGENTS.md: UnclosedFence (baseline exit 3): Verify commands recipe fence is not closed before EOF' }
+        'NoRunnableCommands' { throw 'repo AGENTS.md: NoRunnableCommands (baseline exit 3): Verify commands section has no runnable command block' }
+        'UnsupportedShell' { throw ("repo AGENTS.md: UnsupportedShell (baseline exit 3): unsupported fence info-string '" + $recipe.InfoString + "'") }
+        default { throw ('repo AGENTS.md: unexpected recipe classification: ' + $recipe.Classification) }
+    }
 }
 
 function Get-EngineTemplateParts {

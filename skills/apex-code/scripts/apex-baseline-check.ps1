@@ -46,6 +46,7 @@ $EXIT_RED = 1
 $EXIT_UNPARSEABLE = 3
 $EXIT_NO_RECIPE = 4
 
+# BEGIN recipe-grammar lockstep
 function Get-RecipeBlock {
     param(
         [Parameter(Mandatory)][AllowEmptyString()][string[]]$Lines,
@@ -57,16 +58,23 @@ function Get-RecipeBlock {
 
     # Scan fence state once for the whole document. Both heading selection and recipe capture use
     # these results, so a heading-like line inside an earlier fenced example cannot be selected.
-    $insideFence = New-Object 'bool[]' $Lines.Count
-    $fenceLines = New-Object 'bool[]' $Lines.Count
-    $fenceInfoStrings = New-Object 'string[]' $Lines.Count
+    $lineCount = @($Lines).Count
+    $insideFence = [bool[]]::new($lineCount)
+    $fenceLines = [bool[]]::new($lineCount)
+    $fenceInfoStrings = [string[]]::new($lineCount)
     $fenceOpen = $false
-    for ($i = 0; $i -lt $Lines.Count; $i++) {
+    for ($i = 0; $i -lt $lineCount; $i++) {
         $insideFence[$i] = $fenceOpen
-        if ($Lines[$i] -match '^\s{0,3}```(?<Info>.*)$') {
+        if ($fenceOpen) {
+            # An info-string line inside a fence is content, not a closing fence.
+            if ($Lines[$i] -match '^\s{0,3}```\s*$') {
+                $fenceLines[$i] = $true
+                $fenceOpen = $false
+            }
+        } elseif ($Lines[$i] -match '^\s{0,3}```(?<Info>.*)$') {
             $fenceLines[$i] = $true
             $fenceInfoStrings[$i] = $Matches['Info'].Trim()
-            $fenceOpen = -not $fenceOpen
+            $fenceOpen = $true
         }
     }
 
@@ -76,7 +84,7 @@ function Get-RecipeBlock {
         # Require the complete heading so a deprecated/suffixed decoy cannot shadow the real recipe
         # and fail open; trailing whitespace is harmless, but trailing heading text is not.
         $headingPattern = '^\s{0,3}##\s*' + [regex]::Escape($candidate) + '\s*$'
-        for ($i = 0; $i -lt $Lines.Count; $i++) {
+        for ($i = 0; $i -lt $lineCount; $i++) {
             if (-not $insideFence[$i] -and $Lines[$i] -match $headingPattern) {
                 $headingIndex = $i
                 $selectedHeading = $candidate
@@ -90,26 +98,31 @@ function Get-RecipeBlock {
         return [pscustomobject]@{
             HeadingFound = $false
             Heading = $null
+            FenceText = $null
             Commands = @()
             InfoString = $null
+            LanguageTag = ''
             FenceFound = $false
             FenceClosed = $false
             ParseError = $null
+            Classification = 'NoHeading'
         }
     }
 
     $commands = @()
+    $fenceTextLines = @()
     $sawFence = $false
     $fenceClosed = $false
     $infoString = $null
     $parseError = $null
 
-    for ($i = $headingIndex + 1; $i -lt $Lines.Count; $i++) {
+    for ($i = $headingIndex + 1; $i -lt $lineCount; $i++) {
         $line = $Lines[$i]
         if (-not $sawFence) {
             if ($fenceLines[$i] -and -not $insideFence[$i]) {
                 $sawFence = $true
                 $infoString = $fenceInfoStrings[$i]
+                $fenceTextLines += $line
                 continue
             }
 
@@ -123,6 +136,7 @@ function Get-RecipeBlock {
         }
 
         if (-not $fenceClosed) {
+            $fenceTextLines += $line
             if ($fenceLines[$i] -and $insideFence[$i]) {
                 $fenceClosed = $true
                 continue
@@ -146,16 +160,40 @@ function Get-RecipeBlock {
         }
     }
 
+    $languageTag = ''
+    if (-not [string]::IsNullOrWhiteSpace($infoString)) {
+        $languageTag = ($infoString -split '\s+', 2)[0].ToLowerInvariant()
+    }
+
+    # Acceptance order preserves the baseline diagnostics, including empty unsupported fences.
+    $classification = 'Accepted'
+    if (-not [string]::IsNullOrWhiteSpace($parseError)) {
+        $classification = 'ParseError'
+    } elseif ($sawFence -and -not $fenceClosed) {
+        $classification = 'UnclosedFence'
+    } elseif (-not $sawFence -or @($commands).Count -eq 0) {
+        $classification = 'NoRunnableCommands'
+    } elseif ($languageTag -notin @('', 'cmd', 'bat', 'powershell', 'pwsh', 'bash', 'sh')) {
+        $classification = 'UnsupportedShell'
+    }
+
+    $fenceText = $null
+    if ($sawFence) { $fenceText = $fenceTextLines -join "`n" }
+
     return [pscustomobject]@{
         HeadingFound = $true
         Heading = $selectedHeading
+        FenceText = $fenceText
         Commands = @($commands)
         InfoString = $infoString
+        LanguageTag = $languageTag
         FenceFound = $sawFence
         FenceClosed = $fenceClosed
         ParseError = $parseError
+        Classification = $classification
     }
 }
+# END recipe-grammar lockstep
 
 function Resolve-BashExecutable {
     $bashCommands = @(Get-Command bash.exe -CommandType Application -All -ErrorAction SilentlyContinue)
@@ -193,10 +231,7 @@ function Invoke-RecipeBlock {
         [Parameter(Mandatory)][string]$TargetWorktree
     )
 
-    $languageTag = ''
-    if (-not [string]::IsNullOrWhiteSpace($Recipe.InfoString)) {
-        $languageTag = ($Recipe.InfoString -split '\s+', 2)[0].ToLowerInvariant()
-    }
+    $languageTag = $Recipe.LanguageTag
 
     $bashPath = $null
     switch ($languageTag) {
@@ -207,11 +242,6 @@ function Invoke-RecipeBlock {
                 exit $EXIT_UNPARSEABLE
             }
             break
-        }
-        { $_ -in @('', 'cmd', 'bat', 'powershell', 'pwsh') } { break }
-        default {
-            Write-Host "[baseline] UNPARSEABLE -- unsupported fence info-string '$($Recipe.InfoString)'." -ForegroundColor Red
-            exit $EXIT_UNPARSEABLE
         }
     }
 
@@ -273,15 +303,19 @@ if ($Preflight) {
 
 $lines = [System.IO.File]::ReadAllLines($agentsPath)
 $recipe = Get-RecipeBlock -Lines $lines -CandidateHeadings $candidateHeadings
-if (-not $recipe.HeadingFound) {
+if ($recipe.Classification -eq 'NoHeading') {
     Write-Host "[baseline] NO_RECIPE -- AGENTS.md has none of the requested recipe headings: $($candidateHeadings -join ', ')." -ForegroundColor DarkGray
     # Use the same whole-document fence transitions as Get-RecipeBlock so fenced examples stay
     # silent. This diagnostic does not relax the exact heading match or select a recipe.
     $fenceOpen = $false
     for ($i = 0; $i -lt @($lines).Count; $i++) {
         $line = $lines[$i]
+        if ($fenceOpen) {
+            if ($line -match '^\s{0,3}```\s*$') { $fenceOpen = $false }
+            continue
+        }
         if ($line -match '^\s{0,3}```(?<Info>.*)$') {
-            $fenceOpen = -not $fenceOpen
+            $fenceOpen = $true
             continue
         }
         if (-not $fenceOpen -and $line -match '^\s{0,3}##\s*(Verify|Preflight) commands\b.+') {
@@ -294,18 +328,23 @@ if (-not $recipe.HeadingFound) {
     exit $EXIT_NO_RECIPE
 }
 
-if (-not [string]::IsNullOrWhiteSpace($recipe.ParseError)) {
+if ($recipe.Classification -eq 'ParseError') {
     Write-Host "[baseline] UNPARSEABLE -- '## $($recipe.Heading)': $($recipe.ParseError)." -ForegroundColor Red
     exit $EXIT_UNPARSEABLE
 }
 
-if ($recipe.FenceFound -and -not $recipe.FenceClosed) {
+if ($recipe.Classification -eq 'UnclosedFence') {
     Write-Host "[baseline] UNPARSEABLE -- '## $($recipe.Heading)' recipe fence is not closed before EOF." -ForegroundColor Red
     exit $EXIT_UNPARSEABLE
 }
 
-if (-not $recipe.FenceFound -or $recipe.Commands.Count -eq 0) {
+if ($recipe.Classification -eq 'NoRunnableCommands') {
     Write-Host "[baseline] UNPARSEABLE -- '## $($recipe.Heading)' found but no runnable command block follows it." -ForegroundColor Red
+    exit $EXIT_UNPARSEABLE
+}
+
+if ($recipe.Classification -eq 'UnsupportedShell') {
+    Write-Host "[baseline] UNPARSEABLE -- unsupported fence info-string '$($recipe.InfoString)'." -ForegroundColor Red
     exit $EXIT_UNPARSEABLE
 }
 

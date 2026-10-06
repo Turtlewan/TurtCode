@@ -3,11 +3,68 @@ param()
 
 $ErrorActionPreference = 'Stop'
 $planner = Join-Path $PSScriptRoot 'engine-plan.ps1'
+$baseline = Join-Path $PSScriptRoot 'apex-baseline-check.ps1'
 $realValidator = Join-Path $PSScriptRoot 'apex-spec-validate.ps1'
 $testRoot = Join-Path $env:TEMP ('engine-plan-test-' + [guid]::NewGuid().ToString('N'))
 $utf8 = New-Object System.Text.UTF8Encoding($false)
 $failures = 0
 $assertions = 0
+$savedStateDir = $env:APEX_STATE_DIR
+$savedGitConfigGlobal = $env:GIT_CONFIG_GLOBAL
+
+function Get-MarkedRecipeBytes {
+    param([string]$Path)
+    $bytes = [System.IO.File]::ReadAllBytes($Path)
+    $strictUtf8 = New-Object System.Text.UTF8Encoding($false, $true)
+    $text = $strictUtf8.GetString($bytes)
+    $begins = [regex]::Matches($text, '(?m)^# BEGIN recipe-grammar lockstep(?=\r?$)')
+    $ends = [regex]::Matches($text, '(?m)^# END recipe-grammar lockstep(?=\r?$)')
+    if (@($begins).Count -ne 1 -or @($ends).Count -ne 1) {
+        throw ('expected exactly one BEGIN and END marker line in ' + $Path)
+    }
+    $begin = $begins[0]
+    $end = $ends[0]
+    $bodyStart = $begin.Index + $begin.Length
+    if ($end.Index -le $bodyStart -or [string]::IsNullOrWhiteSpace($text.Substring($bodyStart, $end.Index - $bodyStart))) {
+        throw ('empty or reversed marked recipe span in ' + $Path)
+    }
+    $spanEnd = $end.Index + $end.Length
+    if ($spanEnd -lt $text.Length -and $text[$spanEnd] -eq [char]13) { $spanEnd++ }
+    if ($spanEnd -lt $text.Length -and $text[$spanEnd] -eq [char]10) { $spanEnd++ }
+    $span = $text.Substring($begin.Index, $spanEnd - $begin.Index)
+    $eols = @([regex]::Matches($span, '\r\n|\n|\r') | ForEach-Object { $_.Value })
+    if (@($eols).Count -eq 0 -or $eols[0] -ceq "`r") { throw ('missing or unsupported EOL in ' + $Path) }
+    foreach ($eol in $eols) {
+        if ($eol -cne $eols[0]) { throw ('mixed EOL in marked recipe span in ' + $Path) }
+    }
+    $offset = $strictUtf8.GetByteCount($text.Substring(0, $begin.Index))
+    $length = $strictUtf8.GetByteCount($span)
+    $rawSpan = New-Object byte[] $length
+    [System.Buffer]::BlockCopy($bytes, $offset, $rawSpan, 0, $length)
+    return [pscustomobject]@{ Bytes = $rawSpan; Offset = $offset; Eol = $eols[0] }
+}
+
+function Test-RecipeLockstep {
+    param([object]$Left, [object]$Right)
+    $length = @($Left.Bytes).Count
+    if ($Left.Eol -cne $Right.Eol -or $length -ne @($Right.Bytes).Count) { return $false }
+    for ($i = 0; $i -lt $length; $i++) {
+        if ($Left.Bytes[$i] -ne $Right.Bytes[$i]) { return $false }
+    }
+    return $true
+}
+
+function Invoke-BaselinePreflight {
+    param([string]$Repo)
+    $savedEap = $ErrorActionPreference
+    try {
+        $ErrorActionPreference = 'Continue'
+        $output = @(& powershell.exe -NoProfile -File $baseline -Preflight -Worktree $Repo 2>&1)
+        $code = $LASTEXITCODE
+    }
+    finally { $ErrorActionPreference = $savedEap }
+    return [pscustomobject]@{ ExitCode = $code; Output = ($output -join "`n") }
+}
 
 function Write-Utf8 {
     param([string]$Path, [string]$Text)
@@ -18,8 +75,14 @@ function Write-Utf8 {
 
 function Invoke-GitQuiet {
     param([string]$Repo, [string[]]$Arguments)
-    $output = @(& git -C $Repo @Arguments 2>&1 | ForEach-Object { $_.ToString() })
-    if ($LASTEXITCODE -ne 0) { throw ('git failed: ' + ($output -join ' | ')) }
+    $savedEap = $ErrorActionPreference
+    try {
+        $ErrorActionPreference = 'Continue'
+        $output = @(& git -C $Repo @Arguments 2>&1 | ForEach-Object { $_.ToString() })
+        $code = $LASTEXITCODE
+    }
+    finally { $ErrorActionPreference = $savedEap }
+    if ($code -ne 0) { throw ('git failed: ' + ($output -join ' | ')) }
     return ,$output
 }
 
@@ -27,22 +90,22 @@ function New-TestRepo {
     $path = Join-Path $testRoot ('repo-' + [guid]::NewGuid().ToString('N'))
     [void](New-Item -ItemType Directory -Path $path -Force)
     [void](Invoke-GitQuiet -Repo $path -Arguments @('init', '-q'))
-    Write-Utf8 -Path (Join-Path $path 'AGENTS.md') -Text @'
-# Test repository
-
-## Verify commands
-
-```
-node --check exact-one.js
-powershell.exe -NoProfile -File exact-two.ps1
-```
-
-## Preflight commands
-
-```
-node --check exact-one.js
-```
-'@
+    Write-Utf8 -Path (Join-Path $path 'AGENTS.md') -Text (@(
+        '# Test repository'
+        ''
+        '## Verify commands'
+        ''
+        '```'
+        'node --check exact-one.js'
+        'powershell.exe -NoProfile -File exact-two.ps1'
+        '```'
+        ''
+        '## Preflight commands'
+        ''
+        '```'
+        'node --check exact-one.js'
+        '```'
+    ) -join "`n")
     return $path
 }
 
@@ -63,8 +126,14 @@ function Set-TestCommit {
         $env:GIT_AUTHOR_NAME = 'Fixture'
         $env:GIT_COMMITTER_EMAIL = 'fixture@example.invalid'
         $env:GIT_COMMITTER_NAME = 'Fixture'
-        $commit = @('fixture' | & git -C $Repo commit-tree $tree 2>&1 | ForEach-Object { $_.ToString() })[-1]
-        if ($LASTEXITCODE -ne 0) { throw 'git commit-tree failed' }
+        $savedEap = $ErrorActionPreference
+        try {
+            $ErrorActionPreference = 'Continue'
+            $commit = @('fixture' | & git -C $Repo commit-tree $tree 2>&1 | ForEach-Object { $_.ToString() })[-1]
+            $code = $LASTEXITCODE
+        }
+        finally { $ErrorActionPreference = $savedEap }
+        if ($code -ne 0) { throw 'git commit-tree failed' }
         [void](Invoke-GitQuiet -Repo $Repo -Arguments @('update-ref', 'HEAD', $commit))
     }
     finally {
@@ -239,40 +308,155 @@ function Assert-Case {
 
 try {
     [void](New-Item -ItemType Directory -Path $testRoot -Force)
+    $env:APEX_STATE_DIR = Join-Path $testRoot 'state'
+    $env:GIT_CONFIG_GLOBAL = Join-Path $testRoot 'gitconfig'
+    Write-Utf8 -Path $env:GIT_CONFIG_GLOBAL -Text ''
     $successValidator = Join-Path $testRoot 'validator-success.ps1'
     $failureValidator = Join-Path $testRoot 'validator-failure.ps1'
     Write-Utf8 -Path $successValidator -Text "param([string]`$SpecPath)`nWrite-Output VALIDATOR-SEAM`nexit 0`n"
     Write-Utf8 -Path $failureValidator -Text "param([string]`$SpecPath)`nWrite-Output REFUSED-BY-SEAM`nexit 17`n"
     . $planner
 
+    Assert-Case 'raw UTF-8 marked blocks include unique markers and identical EOL and bytes' {
+        $baselineBlock = Get-MarkedRecipeBytes -Path $baseline
+        $plannerBlock = Get-MarkedRecipeBytes -Path $planner
+        return Test-RecipeLockstep -Left $baselineBlock -Right $plannerBlock
+    }
+    Assert-Case 'mutated scratch copy fails the same raw-byte lockstep comparison' {
+        $baselineBlock = Get-MarkedRecipeBytes -Path $baseline
+        $plannerBlock = Get-MarkedRecipeBytes -Path $planner
+        if (-not (Test-RecipeLockstep -Left $baselineBlock -Right $plannerBlock)) { throw 'live blocks already differ' }
+        $scratch = Join-Path $testRoot 'mutated-engine-plan.ps1'
+        $scratchBytes = [System.IO.File]::ReadAllBytes($planner)
+        # Change the first body byte, preserving the markers, length, and EOL. Never run this copy.
+        $mutationOffset = $plannerBlock.Offset + $utf8.GetByteCount('# BEGIN recipe-grammar lockstep' + $plannerBlock.Eol)
+        $scratchBytes[$mutationOffset] = $scratchBytes[$mutationOffset] -bxor 1
+        [System.IO.File]::WriteAllBytes($scratch, $scratchBytes)
+        $scratchBlock = Get-MarkedRecipeBytes -Path $scratch
+        return -not (Test-RecipeLockstep -Left $baselineBlock -Right $scratchBlock)
+    }
+
+    $fence = '```'
+    $heading = '## Verify commands'
+    $plainFence = @($fence, 'exit 0', $fence)
+    $indentedFence = @('  ```cmd', '   exit 0', ' ```')
+    $extraFence = @(' ```powershell extra', '  [void]$PSVersionTable; exit 0', '   ```')
+    $decoy = @('```text', $heading, 'exit 0', $fence)
+    $adjacencyDiagnostic = "[baseline] UNPARSEABLE -- '## Verify commands': recipe fence not immediately adjacent to heading."
+    $parityRows = @(
+        [pscustomobject]@{ Name = 'exact heading'; Lines = @($heading) + $indentedFence; Code = 0; Class = 'Accepted'; Fence = ($indentedFence -join "`n") }
+        [pscustomobject]@{ Name = 'suffixed near-miss'; Lines = @('## Verify commands (deprecated)') + $plainFence; Code = 4; Class = 'NoHeading' }
+        [pscustomobject]@{ Name = 'prose before fence'; Lines = @($heading, 'Caption before recipe') + $plainFence; Code = 3; Class = 'ParseError'; Diagnostic = $adjacencyDiagnostic }
+        [pscustomobject]@{ Name = 'fenced decoy plus real heading'; Lines = $decoy + @('', $heading, '') + $indentedFence; Code = 0; Class = 'Accepted'; Fence = ($indentedFence -join "`n") }
+        [pscustomobject]@{ Name = 'powershell extra'; Lines = @($heading) + $extraFence; Code = 0; Class = 'Accepted'; Fence = ($extraFence -join "`n") }
+        [pscustomobject]@{ Name = 'unsupported shell'; Lines = @($heading, '```python', 'exit 0', $fence); Code = 3; Class = 'UnsupportedShell'; Diagnostic = "[baseline] UNPARSEABLE -- unsupported fence info-string 'python'." }
+        [pscustomobject]@{ Name = 'empty fence'; Lines = @($heading, $fence, $fence); Code = 3; Class = 'NoRunnableCommands' }
+        [pscustomobject]@{ Name = 'comment-only fence'; Lines = @($heading, $fence, '  # no commands', '', $fence); Code = 3; Class = 'NoRunnableCommands' }
+        [pscustomobject]@{ Name = 'prose after close'; Lines = @($heading) + $plainFence + @('Prose after the recipe.'); Code = 0; Class = 'Accepted'; Fence = ($plainFence -join "`n") }
+        [pscustomobject]@{ Name = 'decoy-only fenced heading'; Lines = $decoy; Code = 4; Class = 'NoHeading' }
+        [pscustomobject]@{ Name = 'tilde fence'; Lines = @($heading, '~~~', 'exit 0', '~~~'); Code = 3; Class = 'ParseError'; Diagnostic = $adjacencyDiagnostic }
+        [pscustomobject]@{ Name = 'unclosed fence'; Lines = @($heading, $fence, 'exit 0'); Code = 3; Class = 'UnclosedFence' }
+        [pscustomobject]@{ Name = 'four-backtick opener'; Lines = @($heading, '````powershell', 'exit 0', $fence); Code = 3; Class = 'UnsupportedShell'; Diagnostic = "[baseline] UNPARSEABLE -- unsupported fence info-string '" + [char]96 + "powershell'." }
+        [pscustomobject]@{ Name = 'second fence before next heading'; Lines = @($heading) + $plainFence + @('') + $plainFence; Code = 3; Class = 'ParseError'; Diagnostic = "[baseline] UNPARSEABLE -- '## Verify commands': ambiguous recipe: a second fence follows before the next heading." }
+        [pscustomobject]@{ Name = 'info-string content without later closer'; Lines = @($heading, $fence, 'exit 0', '```python'); Code = 3; Class = 'UnclosedFence' }
+        [pscustomobject]@{ Name = 'empty python fence'; Lines = @($heading, '```python', $fence); Code = 3; Class = 'NoRunnableCommands' }
+    )
+    $classExitCodes = @{ NoHeading = 4; ParseError = 3; UnclosedFence = 3; NoRunnableCommands = 3; UnsupportedShell = 3 }
+    $classDiagnostics = @{
+        NoHeading = '[baseline] NO_RECIPE -- AGENTS.md has none of the requested recipe headings: Preflight commands, Verify commands.'
+        UnclosedFence = "[baseline] UNPARSEABLE -- '## Verify commands' recipe fence is not closed before EOF."
+        NoRunnableCommands = "[baseline] UNPARSEABLE -- '## Verify commands' found but no runnable command block follows it."
+    }
+    Assert-Case 'parity matrix has all sixteen Verify-only rows' { return @($parityRows).Count -eq 16 }
+    foreach ($row in $parityRows) {
+        Assert-Case ('real baseline Preflight and planner parity: ' + $row.Name) {
+            $fixture = New-Fixture
+            $agentsPath = Join-Path $fixture.Repo 'AGENTS.md'
+            # CRLF on disk also proves that selected/prompt fence strings use LF joining.
+            Write-Utf8 -Path $agentsPath -Text ($row.Lines -join "`r`n")
+            $observedBaseline = Invoke-BaselinePreflight -Repo $fixture.Repo
+            $plan = Get-EnginePlan -SpecPath $fixture.Spec -Repo $fixture.Repo -MaxParallel 2 -ValidatorPath $realValidator
+            if ($observedBaseline.ExitCode -ne $row.Code) {
+                throw ('expected baseline exit {0}, got {1}: {2}' -f $row.Code, $observedBaseline.ExitCode, $observedBaseline.Output)
+            }
+            if ([bool]$plan.allowed -ne ($observedBaseline.ExitCode -eq 0)) { throw ('accept/reject mismatch: ' + $plan.refusal) }
+            if ($row.Code -eq 0) {
+                $selectedFence = Get-EngineVerifyFence -AgentsPath $agentsPath
+                if ($selectedFence -cne $row.Fence) { throw 'selected FenceText differs from exact source fence' }
+                $tasks = @($plan.waves | ForEach-Object { $_.tasks })
+                if (@($tasks).Count -eq 0) { throw 'accepted plan has no task prompts' }
+                foreach ($task in $tasks) {
+                    $promptFences = [regex]::Matches($task.prompt,
+                        '(?ms)^- Verify: run the exact build-repo recipe commands:\n(?<Fence>.*?)(?=\n- Final message:|\z)')
+                    if (@($promptFences).Count -ne 1 -or $promptFences[0].Groups['Fence'].Value -cne $row.Fence) {
+                        throw 'prompt fence differs from exact source fence (including info string and whitespace)'
+                    }
+                }
+            }
+            else {
+                if ($classExitCodes[$row.Class] -ne $observedBaseline.ExitCode) { throw 'classification does not map to baseline exit' }
+                $expectedReasonPrefix = 'repo AGENTS.md: ' + $row.Class + ' (baseline exit ' + $observedBaseline.ExitCode + '): '
+                if (-not $plan.refusal.StartsWith($expectedReasonPrefix, [System.StringComparison]::Ordinal)) {
+                    throw ('expected distinct classification and exit mapping: ' + $plan.refusal)
+                }
+                $diagnostic = $classDiagnostics[$row.Class]
+                if ($null -ne $row.PSObject.Properties['Diagnostic']) { $diagnostic = $row.Diagnostic }
+                if (@($observedBaseline.Output -split "`n") -cnotcontains $diagnostic) { throw ('baseline classification diagnostic mismatch: ' + $observedBaseline.Output) }
+                if ($observedBaseline.Output -match '\[baseline\] > ') { throw 'rejected recipe executed a command' }
+                if (@($plan.waves).Count -ne 0) { throw 'rejected plan has executable waves' }
+            }
+            return $true
+        }
+    }
+    Assert-Case 'zero-byte AGENTS retains baseline binding failure and distinct planner refusal' {
+        $fixture = New-Fixture
+        $agentsPath = Join-Path $fixture.Repo 'AGENTS.md'
+        [IO.File]::WriteAllBytes($agentsPath, [byte[]]@())
+        if (-not ((Get-Item -LiteralPath $agentsPath).Length -eq 0)) { throw 'fixture is not zero bytes' }
+        $observedBaseline = Invoke-BaselinePreflight -Repo $fixture.Repo
+        $plan = Get-EnginePlan -SpecPath $fixture.Spec -Repo $fixture.Repo -MaxParallel 2 -ValidatorPath $realValidator
+        return $observedBaseline.ExitCode -eq 1 -and
+            ($observedBaseline.Output -replace '\s+',' ') -match "Cannot bind argument to parameter 'Lines' because it is an empty array" -and
+            $observedBaseline.Output -notmatch '\[baseline\] > ' -and
+            -not $plan.allowed -and $plan.refusal -ceq 'repo AGENTS.md is empty' -and
+            $plan.refusal -notmatch 'NoHeading|ParseError|UnclosedFence|NoRunnableCommands|UnsupportedShell|Accepted|baseline exit' -and
+            @($plan.waves).Count -eq 0
+    }
+
     Assert-Case 'dot-source preserves caller parameters EAP and StrictMode' {
         $child = Join-Path $testRoot 'dot-source-child.ps1'
         $escapedPlanner = $planner.Replace("'", "''")
-        Write-Utf8 -Path $child -Text @"
-param(
-    [string]`$SpecPath,
-    [string]`$Repo,
-    [int]`$MaxParallel
-)
-`$ErrorActionPreference = 'SilentlyContinue'
-Set-StrictMode -Version 2.0
-`$beforeEap = `$ErrorActionPreference
-. '$escapedPlanner'
-`$strictPreserved = `$false
-try { `$null = `$variableThatMustNotExist }
-catch { `$strictPreserved = `$true }
-[pscustomobject]@{
-    SpecPath = `$SpecPath
-    Repo = `$Repo
-    MaxParallel = `$MaxParallel
-    ErrorActionPreference = [string]`$ErrorActionPreference
-    StrictModePreserved = `$strictPreserved
-    AddedJson = [bool](Test-Path Variable:Json)
-    AddedValidatorPath = [bool](Test-Path Variable:ValidatorPath)
-} | ConvertTo-Json -Compress
-"@
-        $output = @(& powershell.exe -NoProfile -File $child -SpecPath 'spec-sentinel' -Repo 'repo-sentinel' -MaxParallel 7)
-        if ($LASTEXITCODE -ne 0) { return $false }
+        Write-Utf8 -Path $child -Text (@(
+            "param("
+            "    [string]`$SpecPath,"
+            "    [string]`$Repo,"
+            "    [int]`$MaxParallel"
+            ")"
+            "`$ErrorActionPreference = 'SilentlyContinue'"
+            "Set-StrictMode -Version 2.0"
+            "`$beforeEap = `$ErrorActionPreference"
+            ". '$escapedPlanner'"
+            "`$strictPreserved = `$false"
+            "try { `$null = `$variableThatMustNotExist }"
+            "catch { `$strictPreserved = `$true }"
+            "[pscustomobject]@{"
+            "    SpecPath = `$SpecPath"
+            "    Repo = `$Repo"
+            "    MaxParallel = `$MaxParallel"
+            "    ErrorActionPreference = [string]`$ErrorActionPreference"
+            "    StrictModePreserved = `$strictPreserved"
+            "    AddedJson = [bool](Test-Path Variable:Json)"
+            "    AddedValidatorPath = [bool](Test-Path Variable:ValidatorPath)"
+            "} | ConvertTo-Json -Compress"
+        ) -join "`n")
+        $savedEap = $ErrorActionPreference
+        try {
+            $ErrorActionPreference = 'Continue'
+            $output = @(& powershell.exe -NoProfile -File $child -SpecPath 'spec-sentinel' -Repo 'repo-sentinel' -MaxParallel 7)
+            $code = $LASTEXITCODE
+        }
+        finally { $ErrorActionPreference = $savedEap }
+        if ($code -ne 0) { return $false }
         $observed = ($output -join "`n") | ConvertFrom-Json
         $preserved = $observed.SpecPath -ceq 'spec-sentinel' -and $observed.Repo -ceq 'repo-sentinel' -and
             $observed.MaxParallel -eq 7 -and $observed.ErrorActionPreference -ceq 'SilentlyContinue' -and
@@ -603,13 +787,21 @@ catch { `$strictPreserved = `$true }
     }
     Assert-Case 'JSON CLI emits the pinned object' {
         $fixture = New-Fixture
-        $json = @(& powershell.exe -NoProfile -File $planner -SpecPath $fixture.Spec -Repo $fixture.Repo -MaxParallel 2 -ValidatorPath $successValidator -Json 2>&1 | ForEach-Object { $_.ToString() })
-        if ($LASTEXITCODE -ne 0) { return $false }
+        $savedEap = $ErrorActionPreference
+        try {
+            $ErrorActionPreference = 'Continue'
+            $json = @(& powershell.exe -NoProfile -File $planner -SpecPath $fixture.Spec -Repo $fixture.Repo -MaxParallel 2 -ValidatorPath $successValidator -Json 2>&1 | ForEach-Object { $_.ToString() })
+            $code = $LASTEXITCODE
+        }
+        finally { $ErrorActionPreference = $savedEap }
+        if ($code -ne 0) { return $false }
         $parsed = ($json -join "`n") | ConvertFrom-Json
         return $parsed.allowed -and $parsed.spec.name -eq 'fixture-plan' -and @($parsed.waves).Count -eq 1
     }
 }
 finally {
+    $env:APEX_STATE_DIR = $savedStateDir
+    $env:GIT_CONFIG_GLOBAL = $savedGitConfigGlobal
     $resolvedTestRoot = [System.IO.Path]::GetFullPath($testRoot)
     $resolvedTempRoot = [System.IO.Path]::GetFullPath($env:TEMP).TrimEnd([char[]]@([char]92, [char]47)) + [System.IO.Path]::DirectorySeparatorChar
     if ($resolvedTestRoot.StartsWith($resolvedTempRoot, [System.StringComparison]::OrdinalIgnoreCase) -and (Test-Path -LiteralPath $resolvedTestRoot)) {
