@@ -122,10 +122,14 @@ function Get-BuildOutputsBlockBytes([string]$Path) {
     return ,([System.Text.Encoding]::UTF8.GetBytes($block.Value))
 }
 
-function Assert-BuildOutputsLockstep([string]$TreePinPath, [string]$ScopePath) {
+function Assert-BuildOutputsLockstep([string]$TreePinPath, [string]$ScopePath, [string]$EnginePath) {
     $pinBytes = Get-BuildOutputsBlockBytes $TreePinPath
     $scopeBytes = Get-BuildOutputsBlockBytes $ScopePath
-    if ([Convert]::ToBase64String($pinBytes) -cne [Convert]::ToBase64String($scopeBytes)) {
+    $engineBytes = Get-BuildOutputsBlockBytes $EnginePath
+    $pinBlock = [Convert]::ToBase64String($pinBytes)
+    $scopeBlock = [Convert]::ToBase64String($scopeBytes)
+    $engineBlock = [Convert]::ToBase64String($engineBytes)
+    if ($pinBlock -cne $scopeBlock -or $pinBlock -cne $engineBlock -or $scopeBlock -cne $engineBlock) {
         throw 'Build-outputs lockstep blocks differ byte-for-byte'
     }
 }
@@ -533,17 +537,18 @@ try {
     $result = Invoke-TreePin (@('-Verify') + $argsForCase)
     Assert-Equal 'manifest-named directory moves the tree' 69 $result.ExitCode
 
-    # Read the sibling WORKING-TREE source; no commit/ref/SHA lookup substitutes for this file.
+    # Read the sibling WORKING-TREE sources; no commit/ref/SHA lookup substitutes for these files.
     $scopePath = Join-Path $PSScriptRoot 'codex-scope-check.ps1'
-    Assert-BuildOutputsLockstep $scriptPath $scopePath
-    Assert-True 'build-output marker blocks are byte-equal to sibling working-tree scope checker' $true
+    $enginePath = Join-Path $PSScriptRoot 'apex-engine.ps1'
+    Assert-BuildOutputsLockstep $scriptPath $scopePath $enginePath
+    Assert-True 'build-output marker blocks are byte-equal across working-tree Engine, scope-check, and tree-pin' $true
     $scratchPin = Join-Path $testRoot 'mutated-tree-pin.ps1'
     Copy-Item -LiteralPath $scriptPath -Destination $scratchPin
     $scratchText = [System.IO.File]::ReadAllText($scratchPin).Replace('duplicate exact heading', 'mutated exact heading')
     Write-Utf8File $scratchPin $scratchText
     $mutationRejected = $false
-    try { Assert-BuildOutputsLockstep $scratchPin $scopePath } catch { $mutationRejected = $true }
-    Assert-True 'lockstep check rejects a mutated scratch copy' $mutationRejected
+    try { Assert-BuildOutputsLockstep $scratchPin $scopePath $enginePath } catch { $mutationRejected = $true }
+    Assert-True 'three-way lockstep check rejects a mutated scratch copy' $mutationRejected
 
     # Execute only the shared pure functions to inspect parser results without invoking tree-pin.
     $pureBlock = [System.Text.Encoding]::UTF8.GetString((Get-BuildOutputsBlockBytes $scriptPath))

@@ -26,6 +26,8 @@ $oldHandoffCrash = $env:APEX_ENGINE_TEST_FAIL_BEFORE_HANDOFF_JOURNAL
 $oldIdentityFailure = $env:APEX_ENGINE_TEST_FAIL_INDEX_IDENTITY
 $oldWriteTreeFailure = $env:APEX_ENGINE_TEST_FAIL_WRITE_TREE
 $oldResidueCaptureFailure = $env:APEX_ENGINE_TEST_FAIL_RESIDUE_CAPTURE
+$oldAgentsFetchFailure = $env:APEX_ENGINE_TEST_FAIL_AGENTS_FETCH
+$oldAgentsFetchTrace = $env:APEX_ENGINE_TEST_AGENTS_FETCH_TRACE_PATH
 
 function Write-TestText {
     param([string]$Path, [string]$Text)
@@ -78,7 +80,7 @@ function Assert-Test {
 }
 
 function New-TestRepo {
-    param([string]$Name)
+    param([string]$Name, [string]$BuildOutput)
     $repo = Join-Path $testRoot $Name
     [void][IO.Directory]::CreateDirectory($repo)
     [void](Invoke-TestGit $repo @('init', '-q'))
@@ -107,8 +109,37 @@ powershell.exe -NoProfile -File verify.ps1
 ```powershell
 powershell.exe -NoProfile -File verify.ps1
 ```
+
+## Build outputs
+
+```text
+src/*/bin
+```
 '@
-    [void](Set-TestCommit $repo @('.gitignore', '.gitattributes', 'src/a.py', 'verify.ps1', 'AGENTS.md') $null)
+    $paths = @('.gitignore', '.gitattributes', 'src/a.py', 'verify.ps1', 'AGENTS.md')
+    if ($BuildOutput) {
+        # Keep parents visible so status and persisted diagnoses name the individual file.
+        Write-TestText (Join-Path $repo '.gitignore') "src/*/bin/*.dat`nscratch/*.dat`n"
+        Write-TestText (Join-Path $repo 'src/widget/bin/anchor.txt') "tracked anchor`n"
+        Write-TestText (Join-Path $repo 'scratch/anchor.txt') "tracked anchor`n"
+        $paths += @('src/widget/bin/anchor.txt', 'scratch/anchor.txt')
+        $outputPath = 'src/widget/bin/generated.dat'
+        if ($BuildOutput -in @('undeclared', 'working-only')) { $outputPath = 'scratch/generated.dat' }
+        if ($BuildOutput -ceq 'unignored') { $outputPath = 'src/widget/bin/untracked.txt' }
+        $agents = [IO.File]::ReadAllText((Join-Path $repo 'AGENTS.md'))
+        $command = "[IO.File]::WriteAllBytes((Join-Path (Get-Location).Path '$outputPath'), [byte[]]@(0,255,13,10,128,65,0))"
+        if ($BuildOutput -ceq 'working-only') {
+            $command = "`$agentsPath = Join-Path (Get-Location).Path 'AGENTS.md'; [IO.File]::WriteAllText(`$agentsPath, ([IO.File]::ReadAllText(`$agentsPath).Replace('src/*/bin', 'src/*/bin' + [Environment]::NewLine + 'scratch')), (New-Object Text.UTF8Encoding(`$false))); " + $command
+        }
+        # Only the full verify fence produces output; dispatch preflight stays clean.
+        $agents = $agents.Replace("## Verify commands`n`n``````powershell`npowershell.exe -NoProfile -File verify.ps1",
+            "## Verify commands`n`n``````powershell`npowershell.exe -NoProfile -File verify.ps1`n$command")
+        # Here-strings in this source can contain CRLF on Windows.
+        $agents = $agents.Replace("## Verify commands`r`n`r`n``````powershell`r`npowershell.exe -NoProfile -File verify.ps1",
+            "## Verify commands`r`n`r`n``````powershell`r`npowershell.exe -NoProfile -File verify.ps1`r`n$command")
+        Write-TestText (Join-Path $repo 'AGENTS.md') $agents
+    }
+    [void](Set-TestCommit $repo $paths $null)
     return $repo
 }
 
@@ -122,11 +153,12 @@ function New-TestSpec {
         [string]$Repo, [string]$Path, [switch]$Critical, [switch]$Single,
         [string]$FirstId = '1', [string]$SecondId = '2',
         [ValidateSet('low', 'medium', 'high', 'xhigh', 'max', 'ultra')][string]$Effort = 'medium',
-        [string]$Risk = 'medium', [switch]$TwoWave
+        [string]$Risk = 'medium', [switch]$TwoWave, [switch]$IgnoredFile
     )
     $emDash = [string][char]0x2014
     $firstPath = if ($Critical) { '.github/workflows/build.yml' } else { 'src/a.py' }
     $firstOp = if ($Critical) { 'create' } else { 'modify' }
+    if ($IgnoredFile) { $firstPath = 'src/widget/bin/payload.dat'; $firstOp = 'create' }
     $omitSecond = $Critical -or $Single
     $secondTask = if ($omitSecond) { '' } else { "- [ ] **Task $SecondId** - Create the second fixture file. $emDash files: src/b.py $emDash done when: the second fixture file exists." }
     $secondDepends = if ($TwoWave) { '["1"]' } else { '[]' }
@@ -333,9 +365,15 @@ if ($scenario -ceq 'agent_message_command_429') {
 if ($scenario -ceq 'process_failure') { [Console]::Error.WriteLine('ERROR: transport disconnected'); exit 1 }
 if (-not $task) { exit 1 }
 if ($task -ceq '1') {
-    $payload = if ($scenario -ceq 'always_verify_fail') { 'VERIFY_FAIL-one' } else { 'fake-one' }
-    [IO.File]::AppendAllText((Join-Path $repo 'src\a.py'), "$payload`r`n", [Text.UTF8Encoding]::new($false))
-    $changed = @('src/a.py')
+    if ($scenario -ceq 'authorized-ignored') {
+        [IO.File]::WriteAllBytes((Join-Path $repo 'src/widget/bin/payload.dat'), [byte[]]@(0,255,13,10,128,65,0))
+        [IO.File]::WriteAllBytes((Join-Path $repo 'src/widget/bin/generated.dat'), [byte[]]@(42))
+        $changed = @('src/widget/bin/payload.dat')
+    } else {
+        $payload = if ($scenario -ceq 'always_verify_fail') { 'VERIFY_FAIL-one' } else { 'fake-one' }
+        [IO.File]::AppendAllText((Join-Path $repo 'src\a.py'), "$payload`r`n", [Text.UTF8Encoding]::new($false))
+        $changed = @('src/a.py')
+    }
 } else {
     [IO.Directory]::CreateDirectory((Join-Path $repo 'src')) | Out-Null
     $payload = 'fake-two'
@@ -428,20 +466,27 @@ function Invoke-TestScenario {
         [switch]$Single, [string]$FirstId = '1', [string]$SecondId = '2',
         [string]$Risk = 'medium', [switch]$TwoWave,
         [AllowNull()][string]$BaselinePath, [AllowNull()][string]$TreePinPath,
-        [AllowNull()][string]$CriticalPath
+        [AllowNull()][string]$CriticalPath, [string]$BuildOutput, [switch]$IgnoredFile,
+        [AllowNull()][string]$AgentsFetchFailure, [AllowNull()][string]$AgentsFetchTrace
     )
-    $repoPath = New-TestRepo "$Name-repo"
+    $repoPath = New-TestRepo "$Name-repo" -BuildOutput $BuildOutput
     $specPath = Join-Path $testRoot "$Name.md"
     New-TestSpec $repoPath $specPath -Single:$Single -FirstId $FirstId -SecondId $SecondId -Effort $Effort `
-        -Risk $Risk -TwoWave:$TwoWave
+        -Risk $Risk -TwoWave:$TwoWave -IgnoredFile:$IgnoredFile
     $statePath = Join-Path $testRoot "$Name-state"
     $worktrees = Join-Path $testRoot "$Name-worktrees"
     $oldScenario = $env:ENGINE_TEST_FAKE_SCENARIO
     $oldBaselinePath = $env:APEX_ENGINE_TEST_BASELINE_PATH
     $oldTreePinPath = $env:APEX_ENGINE_TEST_TREE_PIN_PATH
     $oldCriticalPath = $env:APEX_ENGINE_TEST_CRITICAL_PATH
+    $oldAgentsFetchFailure = $env:APEX_ENGINE_TEST_FAIL_AGENTS_FETCH
+    $oldAgentsFetchTrace = $env:APEX_ENGINE_TEST_AGENTS_FETCH_TRACE_PATH
+    $oldScenarioState = $env:APEX_STATE_DIR
     try {
         $env:ENGINE_TEST_FAKE_SCENARIO = $Scenario
+        $env:APEX_STATE_DIR = $statePath
+        if ($AgentsFetchFailure) { $env:APEX_ENGINE_TEST_FAIL_AGENTS_FETCH = $AgentsFetchFailure } else { Remove-Item Env:APEX_ENGINE_TEST_FAIL_AGENTS_FETCH -ErrorAction SilentlyContinue }
+        if ($AgentsFetchTrace) { $env:APEX_ENGINE_TEST_AGENTS_FETCH_TRACE_PATH = $AgentsFetchTrace } else { Remove-Item Env:APEX_ENGINE_TEST_AGENTS_FETCH_TRACE_PATH -ErrorAction SilentlyContinue }
         if ($BaselinePath) { $env:APEX_ENGINE_TEST_BASELINE_PATH = $BaselinePath } else { Remove-Item Env:APEX_ENGINE_TEST_BASELINE_PATH -ErrorAction SilentlyContinue }
         if ($TreePinPath) { $env:APEX_ENGINE_TEST_TREE_PIN_PATH = $TreePinPath } else { Remove-Item Env:APEX_ENGINE_TEST_TREE_PIN_PATH -ErrorAction SilentlyContinue }
         if ($CriticalPath) { $env:APEX_ENGINE_TEST_CRITICAL_PATH = $CriticalPath } else { Remove-Item Env:APEX_ENGINE_TEST_CRITICAL_PATH -ErrorAction SilentlyContinue }
@@ -458,7 +503,22 @@ function Invoke-TestScenario {
         $env:APEX_ENGINE_TEST_BASELINE_PATH = $oldBaselinePath
         $env:APEX_ENGINE_TEST_TREE_PIN_PATH = $oldTreePinPath
         $env:APEX_ENGINE_TEST_CRITICAL_PATH = $oldCriticalPath
+        $env:APEX_ENGINE_TEST_FAIL_AGENTS_FETCH = $oldAgentsFetchFailure
+        $env:APEX_ENGINE_TEST_AGENTS_FETCH_TRACE_PATH = $oldAgentsFetchTrace
+        $env:APEX_STATE_DIR = $oldScenarioState
     }
+}
+
+function Assert-TestBuildOutputPark {
+    param([string]$Name, [object]$Case, [string]$Path, [string]$Cause = 'unexpected residue')
+    # Read the durable journal again rather than relying on output or an in-memory diagnosis.
+    $persisted = Get-TestOnlyState $Case.state_root
+    $head = (Invoke-TestGit ([string]$persisted.integration.worktree) @('rev-parse', 'HEAD'))[-1]
+    $commits = (Invoke-TestGit ([string]$persisted.integration.worktree) @('rev-list', '--count', "$($persisted.base_sha)..HEAD"))[-1]
+    Assert-Test $Name ($Case.result.code -eq 1 -and $persisted.status -ceq 'parked' -and
+        $persisted.diagnosis -match $Cause -and $persisted.diagnosis -match [regex]::Escape($Path) -and
+        $persisted.integration.tip -ceq $persisted.base_sha -and $head -ceq $persisted.base_sha -and $commits -ceq '0') `
+        "exit=$($Case.result.code); diagnosis=$($persisted.diagnosis); commits=$commits; $($Case.result.output)"
 }
 
 # Mirrors codex-dispatch.ps1 New-DispatchRefusalEvent exactly; these fixtures are used only for
@@ -611,6 +671,7 @@ try {
     $env:GIT_CONFIG_GLOBAL = Join-Path $testRoot 'empty.gitconfig'
     Write-TestText $env:GIT_CONFIG_GLOBAL "[user]`nname = Engine Test`nemail = engine@example.invalid`n"
     $env:APEX_ENGINE_TEST_MODE = '1'
+    Remove-Item Env:APEX_ENGINE_TEST_FAIL_AGENTS_FETCH, Env:APEX_ENGINE_TEST_AGENTS_FETCH_TRACE_PATH -ErrorAction SilentlyContinue
     # apex-engine.ps1 reads this test-only timing seam while it is imported.
     $env:APEX_ENGINE_TEST_RETRY_DELAY_SECONDS = '0'
     $env:APEX_ENGINE_TEST_IMPORT_ONLY = '1'
@@ -1827,6 +1888,117 @@ exit 0
             $residueResumeDone.code -eq 0 -and $residueDone.status -ceq 'complete') `
         "park=$($residueResumePark.output); done=$($residueResumeDone.output)"
 
+    # Task 2: real-script reachability. Invoke-TestScenario clears both script overrides.
+    $declaredPath = 'src/widget/bin/generated.dat'
+    $undeclaredPath = 'scratch/generated.dat'
+    $realDeclared = Invoke-TestScenario -Name 'build-output-real-declared' -Single -BuildOutput declared
+    $realDeclaredState = Get-TestOnlyState $realDeclared.state_root
+    $realPins = @(Get-ChildItem -LiteralPath $realDeclared.state_root -Filter 'apex-treepin-engine-*-wave-1-*.txt' -Recurse -File)
+    $realDeclaredStatus = Invoke-TestGit ([string]$realDeclaredState.integration.worktree) @('status', '--porcelain', '-uall', '--ignored')
+    Assert-Test 'build outputs real tree-pin and baseline declared ignored output completes/0' `
+        ($realDeclared.result.code -eq 0 -and $realDeclaredState.status -ceq 'complete' -and @($realPins).Count -eq 1 -and
+            ($realDeclaredStatus -join "`n") -match ('(?m)^!! ' + [regex]::Escape($declaredPath) + '$') -and
+            [IO.File]::ReadAllText((Join-Path $realDeclaredState.integration.worktree 'src/a.py')) -match 'fake-one' -and
+            @($realDeclaredState.wave_runtime.'1'.residue_inventory).Count -eq 0) $realDeclared.result.output
+    $realUndeclared = Invoke-TestScenario -Name 'build-output-real-undeclared' -Single -BuildOutput undeclared
+    Assert-TestBuildOutputPark 'build outputs real scripts undeclared output parks/1 with cause and path before commit' `
+        $realUndeclared $undeclaredPath '(changed the working tree|unexpected residue)'
+    $realUndeclaredPins = @(Get-ChildItem -LiteralPath $realUndeclared.state_root -Filter 'apex-treepin-engine-*-wave-1-*.txt' -Recurse -File)
+    Assert-Test 'build outputs real undeclared case reached integration pin and committed verify fence' `
+        (@($realUndeclaredPins).Count -eq 1 -and
+            (Test-Path -LiteralPath (Join-Path $realUndeclared.state.integration.worktree $undeclaredPath))) $realUndeclared.result.output
+
+    # Bypass only tree-pin for classification: retain real stage, baseline, index identity and residue scan.
+    $buildOutputPin = Join-Path $testRoot 'build-output-tree-pin.ps1'
+    $buildOutputPinText = @'
+param([switch]$Pin, [switch]$Verify, [switch]$Digest, [string]$Worktree, [string]$Label, [string]$PinDirectory)
+if ($Digest) { & '__REAL_TREE_PIN__' -Digest -Worktree $Worktree; exit $LASTEXITCODE }
+Write-Host 'build-output classification pin stub'
+exit 0
+'@
+    # Task build digests must still match the real wrapper; stub only integration Pin/Verify.
+    Write-TestText $buildOutputPin ($buildOutputPinText.Replace('__REAL_TREE_PIN__',
+        (Join-Path (Split-Path -Parent $engine) 'tree-pin.ps1').Replace("'", "''")))
+    $singleFetchTrace = Join-Path $testRoot 'build-output-single-fetch.txt'
+    $declaredControl = Invoke-TestScenario -Name 'build-output-residue-declared-control' -Single -BuildOutput declared `
+        -TreePinPath $buildOutputPin -AgentsFetchTrace $singleFetchTrace
+    $singleFetches = @(Get-Content -LiteralPath $singleFetchTrace)
+    $controlState = Get-TestOnlyState $declaredControl.state_root
+    $controlStatus = Invoke-TestGit ([string]$controlState.integration.worktree) @('status', '--porcelain', '-uall', '--ignored')
+    Assert-Test 'build outputs residue declared exemption and one fetch across inventory and scan' `
+        ($declaredControl.result.code -eq 0 -and $controlState.status -ceq 'complete' -and
+            @($controlState.wave_runtime.'1'.residue_inventory).Count -eq 0 -and
+            ($controlStatus -join "`n") -match ('(?m)^!! ' + [regex]::Escape($declaredPath) + '$') -and
+            @($singleFetches).Count -eq 1 -and $singleFetches[0] -ceq $controlState.base_sha -and
+            $declaredControl.result.output -notmatch '\[engine\] WARNING:') $declaredControl.result.output
+    foreach ($kind in @('undeclared', 'working-only', 'unignored')) {
+        $classification = Invoke-TestScenario -Name "build-output-residue-$kind" -Single -BuildOutput $kind -TreePinPath $buildOutputPin
+        $badPath = if ($kind -ceq 'unignored') { 'src/widget/bin/untracked.txt' } else { $undeclaredPath }
+        Assert-TestBuildOutputPark "build outputs residue $kind parks/1 with path and no integration commit" $classification $badPath
+        if ($kind -ceq 'working-only') {
+            $committedAgents = Invoke-TestGit ([string]$classification.state.integration.worktree) @('show', 'HEAD:AGENTS.md')
+            Assert-Test 'build outputs working-tree-only declaration is absent from integration HEAD' `
+                (($committedAgents -join "`n") -notmatch '(?m)^scratch$' -and
+                    [IO.File]::ReadAllText((Join-Path $classification.state.integration.worktree 'AGENTS.md')) -match '(?m)^scratch\r?$') `
+                $classification.result.output
+        }
+        if ($kind -ceq 'unignored') {
+            $unignoredStatus = Invoke-TestGit ([string]$classification.state.integration.worktree) @('status', '--porcelain', '-uall', '--ignored')
+            Assert-Test 'build outputs unignored file under declared prefix retains question-mark status' `
+                (($unignoredStatus -join "`n") -match ('(?m)^\?\? ' + [regex]::Escape($badPath) + '$')) ($unignoredStatus -join "`n")
+        }
+    }
+
+    foreach ($fetchFailure in @('ls-tree', 'show')) {
+        $failureTrace = Join-Path $testRoot "build-output-$fetchFailure-fetch.txt"
+        # Same committed declaration and path as the successful control: ONLY the fetch fails.
+        $fetchCase = Invoke-TestScenario -Name "build-output-fetch-failure-$fetchFailure" -Single -BuildOutput declared `
+            -TreePinPath $buildOutputPin -AgentsFetchFailure $fetchFailure -AgentsFetchTrace $failureTrace
+        Assert-TestBuildOutputPark "build outputs $fetchFailure fetch failure disables declared exemption and parks/1" $fetchCase $declaredPath
+        $failedFetches = @(Get-Content -LiteralPath $failureTrace)
+        $warnings = @($fetchCase.result.output -split "`r?`n" | Where-Object { $_ -match '^\[engine\] WARNING: .*build-output declarations unavailable' })
+        $failedAgents = Invoke-TestGit ([string]$fetchCase.state.integration.worktree) @('show', 'HEAD:AGENTS.md')
+        $failedTree = Invoke-TestGit ([string]$fetchCase.state.integration.worktree) @('ls-tree', '-r', '--name-only', 'HEAD')
+        $selectedOperation = if ($fetchFailure -ceq 'show') { 'show HEAD:AGENTS.md' } else { 'ls-tree AGENTS.md' }
+        Assert-Test "build outputs $fetchFailure warns once per HEAD SHA and leaves other Git operations intact" `
+            (@($failedFetches).Count -eq 1 -and $failedFetches[0] -ceq $fetchCase.state.base_sha -and
+                @($warnings).Count -eq @($failedFetches | Select-Object -Unique).Count -and
+                $warnings[0] -match [regex]::Escape("git $selectedOperation failed (test seam)") -and
+                ($failedAgents -join "`n") -match '(?m)^src/\*/bin$' -and $failedTree -ccontains 'src/a.py' -and
+                [IO.File]::ReadAllText((Join-Path $fetchCase.state.integration.worktree 'src/a.py')) -match 'fake-one') $fetchCase.result.output
+    }
+
+    $twoWaveTrace = Join-Path $testRoot 'build-output-two-wave-fetch.txt'
+    $twoWaveOutputs = Invoke-TestScenario -Name 'build-output-cache-head-change' -TwoWave -BuildOutput declared `
+        -TreePinPath $buildOutputPin -AgentsFetchTrace $twoWaveTrace
+    $twoWaveFetches = @(Get-Content -LiteralPath $twoWaveTrace)
+    $firstWaveCommit = (Invoke-TestGit ([string]$twoWaveOutputs.state.integration.worktree) @('rev-parse', "$($twoWaveOutputs.state.integration.tip)^"))[-1]
+    Assert-Test 'build outputs declaration cache fetches once per integration HEAD and again after wave commit' `
+        ($twoWaveOutputs.result.code -eq 0 -and $twoWaveOutputs.state.status -ceq 'complete' -and
+            @($twoWaveFetches).Count -eq 2 -and $twoWaveFetches[0] -ceq $twoWaveOutputs.state.base_sha -and
+            $twoWaveFetches[1] -ceq $firstWaveCommit -and $twoWaveFetches[0] -cne $twoWaveFetches[1] -and
+            @($twoWaveOutputs.state.wave_runtime.'1'.residue_inventory).Count -eq 0 -and
+            @($twoWaveOutputs.state.wave_runtime.'2'.residue_inventory).Count -eq 0) ($twoWaveFetches -join ', ')
+
+    $authorizedIgnored = Invoke-TestScenario -Name 'build-output-manifest-ignored' -Scenario authorized-ignored -Single `
+        -BuildOutput declared -IgnoredFile -TreePinPath $buildOutputPin
+    $authorizedState = Get-TestOnlyState $authorizedIgnored.state_root
+    $authorizedPath = 'src/widget/bin/payload.dat'
+    $authorizedTaskPath = Join-Path $authorizedState.tasks[0].attempts[0].worktree $authorizedPath
+    $authorizedIntegrationPath = Join-Path $authorizedState.integration.worktree $authorizedPath
+    $authorizedTree = Invoke-TestGit ([string]$authorizedState.integration.worktree) @('ls-tree', '-r', '--name-only', $authorizedState.integration.tip)
+    $authorizedBlob = Invoke-RunnerGitBytes ([string]$authorizedState.integration.worktree) "show $($authorizedState.integration.tip):$authorizedPath"
+    $expectedBytes = [Convert]::ToBase64String([byte[]]@(0,255,13,10,128,65,0))
+    $offManifestStatus = Invoke-TestGit ([string]$authorizedState.integration.worktree) @('status', '--porcelain', '-uall', '--ignored')
+    Assert-Test 'build outputs manifest ignored file copies exact bytes and stages only authorized path' `
+        ($authorizedIgnored.result.code -eq 0 -and $authorizedState.status -ceq 'complete' -and
+            [Convert]::ToBase64String([IO.File]::ReadAllBytes($authorizedTaskPath)) -ceq $expectedBytes -and
+            [Convert]::ToBase64String([IO.File]::ReadAllBytes($authorizedIntegrationPath)) -ceq $expectedBytes -and
+            [Convert]::ToBase64String([byte[]]$authorizedBlob) -ceq $expectedBytes -and
+            (Test-Path -LiteralPath (Join-Path $authorizedState.tasks[0].attempts[0].worktree $declaredPath)) -and
+            $authorizedTree -ccontains $authorizedPath -and $authorizedTree -cnotcontains $declaredPath -and
+            ($offManifestStatus -join "`n") -match ('(?m)^!! ' + [regex]::Escape($declaredPath) + '$')) $authorizedIgnored.result.output
+
     $offManifestIntegration = [string]$repinLiveCase.state.integration.worktree
     Write-TestText (Join-Path $offManifestIntegration 'off-manifest.txt') "staged outside manifest`n"
     [void](Invoke-TestGit $offManifestIntegration @('add', '-f', '--', 'off-manifest.txt'))
@@ -1997,10 +2169,17 @@ exit $code
 
         $parent = (Invoke-TestGit $repo @('rev-parse', 'HEAD'))[-1]
         [void](Set-TestCommit $repo @('src/a.py', 'src/b.py') $parent)
+        $dirtyTaskWorktree = [string]$state.tasks[0].attempts[0].worktree
+        Write-TestText (Join-Path $dirtyTaskWorktree 'src/widget/bin/teardown.dat') "declared ignored teardown output`n"
+        $dirtyTaskStatus = Invoke-TestGit $dirtyTaskWorktree @('status', '--porcelain', '-uall', '--ignored')
+        Assert-Test 'proof-gated teardown fixture has a declared ignored output in its task worktree' `
+            (($dirtyTaskStatus -join "`n") -match '(?m)^!! src/widget/bin/') ($dirtyTaskStatus -join "`n")
         $completeTeardownResult = Invoke-TestEngine @('-Teardown', $state.run_id, '-StateRoot', $stateRoot, '-WorktreeRoot', $worktreeRoot)
         $afterTeardown = Get-Content $stateFiles[0].FullName -Raw | ConvertFrom-Json
         Assert-Test 'complete teardown with proof and durable per-item journal' `
-            ($completeTeardownResult.code -eq 0 -and $afterTeardown.teardown.status -ceq 'complete' -and @($afterTeardown.teardown.items).Count -eq 6) `
+            ($completeTeardownResult.code -eq 0 -and $afterTeardown.teardown.status -ceq 'complete' -and @($afterTeardown.teardown.items).Count -eq 6 -and
+                -not (Test-Path -LiteralPath $dirtyTaskWorktree) -and
+                @($afterTeardown.teardown.items | Where-Object { $_.kind -ceq 'worktree' -and $_.value -ceq $dirtyTaskWorktree }).Count -eq 1) `
             "exit=$($completeTeardownResult.code); $($completeTeardownResult.output)"
     }
 
@@ -2204,6 +2383,8 @@ exit $code
     $env:APEX_ENGINE_TEST_FAIL_INDEX_IDENTITY = $oldIdentityFailure
     $env:APEX_ENGINE_TEST_FAIL_WRITE_TREE = $oldWriteTreeFailure
     $env:APEX_ENGINE_TEST_FAIL_RESIDUE_CAPTURE = $oldResidueCaptureFailure
+    $env:APEX_ENGINE_TEST_FAIL_AGENTS_FETCH = $oldAgentsFetchFailure
+    $env:APEX_ENGINE_TEST_AGENTS_FETCH_TRACE_PATH = $oldAgentsFetchTrace
     if (Test-Path -LiteralPath $testRoot) { Remove-Item -LiteralPath $testRoot -Recurse -Force -ErrorAction SilentlyContinue }
     if (Test-Path -LiteralPath $machineLocalRoot) { Remove-Item -LiteralPath $machineLocalRoot -Recurse -Force -ErrorAction SilentlyContinue }
 }

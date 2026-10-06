@@ -60,9 +60,11 @@ base; a delete must be absent in the task worktree before the Engine removes the
 Any failed check aborts integration. The Engine consumes uncommitted task files; no task-branch
 commit is needed for byte copy.
 
-**Current limitation:** Engine integration parks repos whose `## Build outputs` verify creates
-ignored directories until **`engine-build-output-residue`** ships. Use the attended manual fallback
-below for those repos; declaring the outputs does not yet exempt them from the Engine residue scan.
+Engine honors committed `## Build outputs` declarations in HEAD's `AGENTS.md`, using the same
+declaration grammar as scope-check/tree-pin, for ignored, untracked verify residue (`!!`). Only
+paths at or below a declared entry are exempt; unignored (`??`), tracked, and undeclared paths
+remain checked. Declaration lookup failure disables only the declared-output exemption. Copy
+and stage remain limited to manifest files, including explicitly authorized ignored files.
 
 **Manual fallback is attended HOST Bash only**, executed as mechanics under the orchestrator's
 wave plan (ADR-046 D1), never by a coder or an unattended build. Integrate tasks serially with this

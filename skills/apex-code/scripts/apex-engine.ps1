@@ -23,6 +23,7 @@ Set-StrictMode -Version 2
 
 $script:EngineScriptRoot = $PSScriptRoot
 $script:EngineState = $null
+$script:EngineBuildOutputDeclarations = @{}
 $script:EngineStatePath = $null
 $script:EngineStateRoot = $null
 $script:EngineWrapper = $null
@@ -207,6 +208,182 @@ function Get-RunnerIndexIdentity {
     [pscustomobject]@{ head = $head; index_digest = $digest }
 }
 
+# BEGIN build-outputs lockstep
+function ConvertFrom-BuildOutputsSection {
+    param([AllowEmptyString()][string]$Text)
+
+    $lines = @($Text -split '\r?\n')
+    $headings = New-Object System.Collections.Generic.List[int]
+    $insideFence = New-Object 'bool[]' $lines.Count
+    $fenceChar = ''
+    $fenceLength = 0
+    for ($i = 0; $i -lt $lines.Count; $i++) {
+        $insideFence[$i] = $fenceLength -gt 0
+        if ($fenceLength -gt 0) {
+            $closePattern = '^ {0,3}' + [regex]::Escape($fenceChar) + '{' + $fenceLength + ',}[ \t]*$'
+            if ($lines[$i] -match $closePattern) { $fenceLength = 0 }
+            continue
+        }
+        if ($lines[$i] -match '^ {0,3}(?<Fence>`{3,}|~{3,})(?<Info>.*)$') {
+            $fenceChar = $Matches['Fence'].Substring(0, 1)
+            $fenceLength = $Matches['Fence'].Length
+            continue
+        }
+        if ($lines[$i] -cmatch '^ {0,3}## Build outputs[ \t]*$') { $headings.Add($i) }
+    }
+
+    $entries = New-Object System.Collections.Generic.List[string]
+    $reason = $null
+    $errorLine = 0
+    if ($headings.Count -gt 1) {
+        $reason = 'duplicate exact heading'
+        $errorLine = $headings[1] + 1
+    } elseif ($headings.Count -eq 1) {
+        $heading = $headings[0]
+        $opened = $false
+        $closed = $false
+        $openingLine = $heading + 1
+        for ($i = $heading + 1; $i -lt $lines.Count; $i++) {
+            $line = $lines[$i]
+            $errorLine = $i + 1
+            if (-not $opened) {
+                if ([string]::IsNullOrWhiteSpace($line)) { continue }
+                if ($line -notmatch '^ {0,3}(?<Fence>`{3,}|~{3,})(?<Info>.*)$') {
+                    $reason = 'fence must be the first nonblank line after the heading'
+                    break
+                }
+                $fenceChar = $Matches['Fence'].Substring(0, 1)
+                $fenceLength = $Matches['Fence'].Length
+                $info = $Matches['Info'].Trim()
+                if ($info -cne '' -and $info -cne 'text') {
+                    $reason = "fence info must be empty or 'text'"
+                    break
+                }
+                $opened = $true
+                $openingLine = $i + 1
+                continue
+            }
+            if ($closed) {
+                if (-not $insideFence[$i] -and $line -match '^ {0,3}#{1,6}(?:[ \t]+|$)') { break }
+                if ($line -match '^ {0,3}(?:`{3,}|~{3,})') {
+                    $reason = 'only one fence is allowed before the next heading'
+                    break
+                }
+                continue
+            }
+            $closePattern = '^ {0,3}' + [regex]::Escape($fenceChar) + '{' + $fenceLength + ',}[ \t]*$'
+            if ($line -match $closePattern) { $closed = $true; continue }
+            $entry = $line.Trim()
+            if ($entry.Length -eq 0) { continue }
+            if ($entries.Count -ge 32) { $reason = 'more than 32 entries'; break }
+            if ($entry.Contains('**') -or $entry -match '[?\[\]{}!]' -or $entry.Contains('\')) {
+                $reason = 'unsupported wildcard or backslash'; break
+            }
+            if ($entry.StartsWith('/') -or $entry.EndsWith('/') -or $entry.Contains(':')) {
+                $reason = 'path must be repo-relative without leading/trailing slash or drive'; break
+            }
+            $segments = @($entry -split '/')
+            $invalidSegment = $false
+            foreach ($segment in $segments) {
+                if ($segment.Length -eq 0 -or $segment -ceq '.' -or $segment -ceq '..' -or
+                        [string]::Equals($segment, '.git', [System.StringComparison]::OrdinalIgnoreCase)) {
+                    $invalidSegment = $true; break
+                }
+            }
+            if ($invalidSegment) { $reason = 'empty, dot, parent, or .git segment'; break }
+            if ($segments[-1].Contains('*')) { $reason = "'*' is forbidden in the final segment"; break }
+            $entries.Add($entry)
+        }
+        if (-not $reason -and (-not $opened -or -not $closed)) {
+            $reason = 'missing or unclosed fence'
+            $errorLine = $openingLine
+        }
+    }
+    $warning = $null
+    if ($reason) {
+        $entries.Clear()
+        $warning = "AGENTS.md '## Build outputs' unparseable (line ${errorLine}: $reason); no build-output exclusions applied"
+    }
+    return [pscustomobject]@{ Entries = @($entries.ToArray()); Warning = $warning }
+}
+
+function Test-IsDeclaredBuildOutputPath {
+    param([string]$Path, [AllowEmptyCollection()][string[]]$Entries)
+
+    $pathSegments = @($Path -split '/')
+    foreach ($entry in @($Entries)) {
+        $patternSegments = @($entry -split '/')
+        if ($pathSegments.Count -lt $patternSegments.Count) { continue }
+        $matchesPrefix = $true
+        for ($i = 0; $i -lt $patternSegments.Count; $i++) {
+            # Match literals ordinally, including the literal pieces surrounding a single-segment
+            # '*'. Regex IgnoreCase alone uses culture-sensitive casing and is not this contract.
+            $pieces = @($patternSegments[$i] -split '\*')
+            $segment = $pathSegments[$i]
+            $position = 0
+            if (-not $segment.StartsWith($pieces[0], [System.StringComparison]::OrdinalIgnoreCase)) {
+                $matchesPrefix = $false; break
+            }
+            $position = $pieces[0].Length
+            if ($pieces.Count -eq 1) {
+                if ($position -ne $segment.Length) { $matchesPrefix = $false; break }
+                continue
+            }
+            for ($j = 1; $j -lt $pieces.Count - 1; $j++) {
+                $found = $segment.IndexOf($pieces[$j], $position, [System.StringComparison]::OrdinalIgnoreCase)
+                if ($found -lt 0) { $matchesPrefix = $false; break }
+                $position = $found + $pieces[$j].Length
+            }
+            if (-not $matchesPrefix) { break }
+            $lastPiece = $pieces[-1]
+            if (-not $segment.EndsWith($lastPiece, [System.StringComparison]::OrdinalIgnoreCase) -or
+                    $segment.Length - $lastPiece.Length -lt $position) {
+                $matchesPrefix = $false; break
+            }
+        }
+        if ($matchesPrefix) { return $true }
+    }
+    return $false
+}
+# END build-outputs lockstep
+
+# Declaration results (including fetch failures) are process-local, keyed by integration HEAD.
+function Get-RunnerBuildOutputDeclaration {
+    param([string]$Root)
+    $head = Invoke-RunnerGitText $Root 'rev-parse' 'HEAD'
+    if ($script:EngineBuildOutputDeclarations.ContainsKey($head)) {
+        return $script:EngineBuildOutputDeclarations[$head]
+    }
+
+    $declaration = [pscustomobject]@{ Entries = @(); Warning = $null }
+    try {
+        if ($env:APEX_ENGINE_TEST_MODE -ceq '1' -and $env:APEX_ENGINE_TEST_AGENTS_FETCH_TRACE_PATH) {
+            [IO.File]::AppendAllText($env:APEX_ENGINE_TEST_AGENTS_FETCH_TRACE_PATH,
+                $head + [Environment]::NewLine, (New-Object Text.UTF8Encoding($false)))
+        }
+        if ($env:APEX_ENGINE_TEST_MODE -ceq '1' -and $env:APEX_ENGINE_TEST_FAIL_AGENTS_FETCH -ceq 'ls-tree') {
+            throw 'git ls-tree AGENTS.md failed (test seam)'
+        }
+        $agentsAtHead = Invoke-RunnerGitText $Root 'ls-tree' '--full-tree' '--name-only' 'HEAD' '--' 'AGENTS.md'
+        if (@($agentsAtHead -split "`n") -ccontains 'AGENTS.md') {
+            if ($env:APEX_ENGINE_TEST_MODE -ceq '1' -and $env:APEX_ENGINE_TEST_FAIL_AGENTS_FETCH -ceq 'show') {
+                throw 'git show HEAD:AGENTS.md failed (test seam)'
+            }
+            $bytes = Invoke-RunnerGitBytes $Root 'show HEAD:AGENTS.md'
+            $text = (New-Object Text.UTF8Encoding($false, $true)).GetString($bytes)
+            $declaration = ConvertFrom-BuildOutputsSection -Text $text
+        }
+    } catch {
+        $declaration = [pscustomobject]@{
+            Entries = @()
+            Warning = "AGENTS.md build-output declarations unavailable ($($_.Exception.Message)); declared class disabled"
+        }
+    }
+    $script:EngineBuildOutputDeclarations[$head] = $declaration
+    if ($declaration.Warning) { Write-Host "[engine] WARNING: $($declaration.Warning)" -ForegroundColor Yellow }
+    return $declaration
+}
+
 function Test-RunnerToolCachePath {
     param([string]$Path)
     $normalized = ($Path -replace '\\', '/').TrimEnd('/')
@@ -221,6 +398,8 @@ function Test-RunnerToolCachePath {
 
 function Get-RunnerUntrackedIgnoredPaths {
     param([string]$Root)
+    $declaration = Get-RunnerBuildOutputDeclaration $Root
+    $entries = [string[]]@($declaration.Entries)
     $bytes = Invoke-RunnerGitBytes $Root 'status --porcelain -uall --ignored -z'
     $text = (New-Object Text.UTF8Encoding($false, $true)).GetString($bytes)
     $paths = New-Object 'Collections.Generic.List[string]'
@@ -230,6 +409,7 @@ function Get-RunnerUntrackedIgnoredPaths {
         if ($xy -notin @('??', '!!')) { continue }
         $path = ($entry.Substring(3) -replace '\\', '/').TrimEnd('/')
         if ($xy -ceq '!!' -and (Test-RunnerToolCachePath $path)) { continue }
+        if ($xy -ceq '!!' -and (Test-IsDeclaredBuildOutputPath -Path $path -Entries $entries)) { continue }
         [void]$paths.Add($path)
     }
     $result = [string[]]@($paths | Sort-Object -CaseSensitive -Unique)
@@ -815,7 +995,7 @@ function Invoke-RunnerGate {
         return [pscustomobject]@{ code = 1; diagnosis = "git residue scan failed: $($_.Exception.Message)"; moved = $false; gate = 'verify' }
     }
     if (@($residue).Count -gt 0) {
-        return [pscustomobject]@{ code = 69; diagnosis = "integration tree has untracked/ignored residue outside wave manifest: $(@($residue | Select-Object -First 10) -join ', ')"; moved = $true; gate = 'verify' }
+        return [pscustomobject]@{ code = 69; diagnosis = "unexpected residue: integration tree has untracked/ignored residue outside wave manifest: $(@($residue | Select-Object -First 10) -join ', ')"; moved = $true; gate = 'verify' }
     }
     return [pscustomobject]@{ code = $baseline.exit_code; diagnosis = $baseline.output; moved = $false; gate = 'baseline' }
 }
