@@ -2,7 +2,7 @@
 # PowerShell 5.1 only, with no module dependencies.
 
 $script:EngineDispatchSchemaPath = Join-Path (Split-Path $PSScriptRoot -Parent) `
-    'references\orchestrator-protocol-schema.json'
+    'references\engine-event-schema.json'
 if (-not (Get-Variable -Name EngineDispatchProcesses -Scope Script -ErrorAction SilentlyContinue)) {
     $script:EngineDispatchProcesses = @{}
 }
@@ -492,7 +492,11 @@ function Test-EngineSchemaNode {
             $Value -is [System.Management.Automation.PSCustomObject])
     if ($isObject -and (Test-EngineHasProperty $Rule 'properties')) {
         $properties = Get-EngineProperty $Rule 'properties'
-        foreach ($required in @((Get-EngineProperty $Rule 'required'))) {
+        $requiredKeys = @()
+        if (Test-EngineHasProperty $Rule 'required') {
+            $requiredKeys = @((Get-EngineProperty $Rule 'required'))
+        }
+        foreach ($required in $requiredKeys) {
             if (-not (Test-EngineHasProperty $Value ([string]$required))) {
                 $Diagnosis.Value = "$Path is missing required key '$required'"
                 return $false
@@ -565,6 +569,21 @@ function Test-EngineSchemaDefinition {
         }
         if ($null -ne $code -and $null -ne (Get-EngineProperty -Object $Event -Name 'rule')) {
             $Diagnosis.Value = 'wrapper refusal events require a null rule'; return $false
+        }
+        # Keep the refusal contract's schema conditionals in force after the legacy checks above.
+        foreach ($conditional in @((Get-EngineProperty $def 'allOf'))) {
+            if (-not (Test-EngineHasProperty $conditional 'if')) { continue }
+            $conditionDiagnosis = ''
+            $condition = Get-EngineProperty $conditional 'if'
+            $branchName = if (Test-EngineSchemaNode -Value $Event -Rule $condition `
+                    -Path "event (`$defs.$Definition)" -Diagnosis ([ref]$conditionDiagnosis)) {
+                'then'
+            } else { 'else' }
+            if (Test-EngineHasProperty $conditional $branchName) {
+                $branch = Get-EngineProperty $conditional $branchName
+                if (-not (Test-EngineSchemaNode -Value $Event -Rule $branch `
+                            -Path "event (`$defs.$Definition)" -Diagnosis $Diagnosis)) { return $false }
+            }
         }
     }
     return $true

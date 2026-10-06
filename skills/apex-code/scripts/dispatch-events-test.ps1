@@ -6,7 +6,8 @@ $dispatch = Join-Path $PSScriptRoot 'codex-dispatch.ps1'
 $fakeCodex = Join-Path $PSScriptRoot 'dispatch-test-fakecodex.ps1'
 $criticalFiles = Join-Path $PSScriptRoot 'apex-critical-files.ps1'
 $treePin = Join-Path $PSScriptRoot 'tree-pin.ps1'
-$schemaPath = Join-Path (Split-Path $PSScriptRoot -Parent) 'references\orchestrator-protocol-schema.json'
+# Producer event fixtures validate against the extracted Engine event contract.
+$schemaPath = Join-Path (Split-Path $PSScriptRoot -Parent) 'references\engine-event-schema.json'
 foreach ($required in @($dispatch, $fakeCodex, $criticalFiles, $treePin, $schemaPath)) {
     if (-not (Test-Path -LiteralPath $required -PathType Leaf)) {
         throw "Required event-test dependency not found: $required"

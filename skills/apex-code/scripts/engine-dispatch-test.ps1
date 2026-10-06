@@ -654,6 +654,15 @@ exit 2
     if (-not $result1.event_path) { throw 'successful fixture did not produce an event path; see preceding failure' }
     $eventRaw = [System.IO.File]::ReadAllText($result1.event_path)
     $eventObject = $eventRaw | ConvertFrom-Json
+    $expectedSchemaPath = (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot '..\references\engine-event-schema.json')).ProviderPath
+    $actualSchemaPath = (Resolve-Path -LiteralPath $script:EngineDispatchSchemaPath).ProviderPath
+    $schemaDiagnosis = ''
+    # Check a real wrapper event against the Engine event contract loaded by the adapter.
+    $wrapperSchemaValid = Test-EngineSchemaDefinition -Event $eventObject -Definition 'dispatch_result' `
+        -Diagnosis ([ref]$schemaDiagnosis)
+    Assert-EngineCase 'real wrapper event uses engine event schema' `
+        ($actualSchemaPath -eq $expectedSchemaPath -and $wrapperSchemaValid) `
+        "schema=$actualSchemaPath; expected=$expectedSchemaPath; $schemaDiagnosis"
     $eventObject.task_id = 'wrong-task'
     Write-TestText $result1.event_path ($eventObject | ConvertTo-Json -Depth 20)
     $badContext = Read-EngineDispatchEvent -ChildOutputPath $output1 -ExitCode 0 -TaskId '1' -Worktree $repo1 -LedgerPath $ledgerPath
@@ -689,6 +698,54 @@ exit 2
     if ($refusalRead.event_path) {
         $refusalRaw = [System.IO.File]::ReadAllText($refusalRead.event_path)
         $refusalObject = $refusalRaw | ConvertFrom-Json
+        $refusalSchema = Get-Content -LiteralPath $script:EngineDispatchSchemaPath -Raw | ConvertFrom-Json
+        $matchingThenCount = 0
+        $matchingThenWithoutRequired = $true
+        $exit74Accepted = $false
+        $exit74Diagnosis = ''
+        $oldSchemaPreference = $ErrorActionPreference
+        try {
+            $ErrorActionPreference = 'Stop'
+            foreach ($conditional in @($refusalSchema.'$defs'.refusal.allOf)) {
+                $conditionDiagnosis = ''
+                if (Test-EngineSchemaNode -Value $refusalObject -Rule $conditional.if `
+                        -Path 'event ($defs.refusal)' -Diagnosis ([ref]$conditionDiagnosis)) {
+                    $matchingThenCount++
+                    if (Test-EngineHasProperty $conditional.then 'required') {
+                        $matchingThenWithoutRequired = $false
+                    }
+                }
+            }
+            $exit74Accepted = Test-EngineSchemaDefinition -Event $refusalObject -Definition 'refusal' `
+                -Diagnosis ([ref]$exit74Diagnosis)
+        } catch {
+            $exit74Diagnosis = $_.Exception.Message
+        } finally {
+            $ErrorActionPreference = $oldSchemaPreference
+        }
+        Assert-EngineCase 'valid exit-74 refusal without then required accepted' `
+            ($refusalResult.exit_code -eq 74 -and $refusalObject.exit_code -eq 74 -and
+                $matchingThenCount -gt 0 -and $matchingThenWithoutRequired -and $exit74Accepted) `
+            "matching then branches=$matchingThenCount; $exit74Diagnosis"
+
+        $nullExitRefusal = $refusalRaw | ConvertFrom-Json
+        $nullExitRefusal.exit_code = $null
+        $nullExitRefusal.rule = 'structural-malformed-output'
+        $nullExitRefusal.synthesized = $true
+        $nullExitDiagnosis = ''
+        # Null-exit host refusals must satisfy the schema's named rule enum.
+        $nullExitAccepted = Test-EngineSchemaDefinition -Event $nullExitRefusal -Definition 'refusal' `
+            -Diagnosis ([ref]$nullExitDiagnosis)
+        Assert-EngineCase 'valid null-exit refusal rule accepted' $nullExitAccepted $nullExitDiagnosis
+
+        $nullExitRefusal.rule = 'invalid-refusal-rule'
+        $invalidRuleDiagnosis = ''
+        $invalidRuleAccepted = Test-EngineSchemaDefinition -Event $nullExitRefusal -Definition 'refusal' `
+            -Diagnosis ([ref]$invalidRuleDiagnosis)
+        Assert-EngineCase 'invalid null-exit refusal rule rejected' `
+            (-not $invalidRuleAccepted -and $invalidRuleDiagnosis -match '\.rule is outside its schema enum') `
+            $invalidRuleDiagnosis
+
         $refusalObject.run_id = 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'
         Write-TestText $refusalRead.event_path ($refusalObject | ConvertTo-Json -Depth 20)
         $badConditional = Read-EngineDispatchEvent -ChildOutputPath $refusalOutput -ExitCode 74 `

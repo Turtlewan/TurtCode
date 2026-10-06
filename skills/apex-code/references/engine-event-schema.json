@@ -1,0 +1,105 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "apex://engine-event-schema",
+  "title": "APEX Engine event contract (dispatch_result and refusal)",
+  "$defs": {
+    "dispatch_result": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "task_id", "repo", "exit_code", "run_id", "log_path", "status", "report_status", "scopeViolation", "scope_exit", "encoding_violation", "critical_violation", "violation_detail", "tree_moved", "final", "concerns_md", "scope_check", "truncated", "porcelain"],
+      "properties": {
+        "kind": { "const": "dispatch_result" },
+        "task_id": { "type": "string", "maxLength": 64 },
+        "repo": { "type": "string", "maxLength": 512, "description": "the dispatch -Worktree path, not the repository's main checkout path" },
+        "exit_code": { "type": "integer", "enum": [0, 1, 65, 66, 67, 68, 69, 73, 77] },
+        "run_id": { "type": "string", "maxLength": 64 },
+        "log_path": { "type": ["string", "null"], "maxLength": 512 },
+        "status": { "type": "string", "maxLength": 64, "pattern": "^(done|done_with_concerns|success|blocked|failed|abandoned-unadopted|adopted-(done|done_with_concerns|blocked|void)(\\+scope[0-9]+)?)$", "description": "the ledger row's status verbatim, and TERMINAL STATUSES ONLY. A dispatch_result is a COMPLETED result, so the non-terminal row states (leasing, running, stalled, adopting, orphaned) are excluded by construction - they never arrive on this tag, and a row still in one of them has produced no outcome to adjudicate. Adopted rows may carry a +scope<N> suffix (adopted-done+scope65), so read the prefix, never the bare equality. success is a legacy terminal-success spelling that apex-family-gate.ps1:38-43 and codex-dispatch.ps1:2400 both still accept, so it is admitted here. error and digest_mismatch are NOT statuses: they are sibling ledger FIELDS written alongside status 'failed' (codex-dispatch.ps1:2545, 2609). ONE STATUS DOES NOT OUTRANK ITS EXIT, AND IT IS THE ONLY ONE: on status 'adopted-void' the exit code WINS. The adoption path writes status 'adopted-void' at codex-dispatch.ps1:1653 and closes the row, and only THEN chooses its exit - exiting 67 at :1672-1674 when the recovered report said 'blocked', WITHOUT rewriting the status. So an adopted-void row carrying exit 67 is a blocked hard stop (verdict blocked), and an adopted-void row carrying exit 69 is a moved tree (verdict void -> request_verify). Read the exit on this status, and this status only; on every other status in this pattern the status beats the exit" },
+        "report_status": { "type": ["string", "null"], "enum": ["done", "done_with_concerns", "blocked", null], "description": "the ledger row's report_status verbatim: the wrapper's DERIVED value for the report, which is NOT necessarily the .final's literal status - the wrapper promotes it from blocker/unresolved evidence when it refutes a 'done' claim, and SYNTHESIZES 'blocked' outright when the report is UNPARSEABLE (codex-dispatch.ps1:2990) or when it is MISSING AND THE CHILD EXITED 0 (:2993-2997 - the synthesis branch is guarded by 'elseif ($exitCode -eq 0)'). The guard matters: an exit-1 run that wrote no report gets NO synthesis, so its report_status is null. So a populated report_status never witnesses that a report existed, and a null one does not witness exit 0; only final witnesses a report" },
+        "scopeViolation": { "type": "boolean" },
+        "scope_exit": { "type": ["integer", "null"], "enum": [65, 66, null], "description": "the event's routing translation of the raw ledger scope_exit, independently of which code won the dispatch exit. Raw null or 0 maps to null without naming scope_exit in truncated; raw 1 (the scope checker's violation exit) or 65 maps to 65 without truncation; raw 66 maps to 66 without truncation. Every other raw value maps to null and names scope_exit in truncated. The ledger retains its raw value unchanged. IT IS WHAT UN-MASKS A 67: the exit precedence puts 67 ahead of both remedy classes, so a blocked row that was ALSO out of scope surfaces scopeViolation true, and 65 and 66 want different remedies. ROUTING: when scopeViolation is true, read scope_exit for the remedy class - 65 re-routes the task through planning (the spec's Files to Change is wrong), 66 re-dispatches with a corrected authorized set. THE ENUM IS CLOSED AT 65, 66 AND NULL. Null means 'no remedy class is readable', whether the raw result was clean, absent or unroutable; scope_exit in truncated distinguishes an unroutable result. A true scopeViolation beside null carries the obligation without a class: the host says so in notes rather than picking one" },
+        "encoding_violation": { "type": "boolean" },
+        "critical_violation": { "type": ["boolean", "null"], "description": "null on a read-only or review row: not applicable, never clean" },
+        "violation_detail": { "type": ["string", "null"], "maxLength": 512, "description": "the wrapper's printed violation banner line(s), copied verbatim by the host. The banner is GENERIC: codex-dispatch.ps1:3197-3201 always prints '[dispatch] CRITICAL FILE VIOLATION in the post-hoc written set. Do NOT commit.' and appends '[dispatch] HARD-BLOCK critical path(s): <joined paths>' ONLY on a hard block - so the several causes (a named confirmable critical path, a docs/audit hard block, a missing written-set evidence line, a classifier anomaly) are NOT distinguishable from this string. It is evidence for the reason line and for the operator, and it is INSUFFICIENT for cause classification - which is exactly WHY v1 routes exit 77 and any true critical_violation to park rather than to a confirmation. NULL IS THE ORDINARY CASE ON A MASKED CRITICAL, NOT AN ANOMALY: the banner prints on the 77 path ONLY (codex-dispatch.ps1:3197-3201), so a true critical_violation that arrives under a winning exit 67, 69, 66 or 65 has NO banner and this field is null. The park reason therefore cites THE FLAG - 'critical_violation true under exit <code>' - and quotes violation_detail only when it is present. There is no verbatim-quoting requirement: reason stays within its 200-character cap either way" },
+        "tree_moved": { "type": "boolean" },
+        "final": {
+          "type": ["object", "null"],
+          "additionalProperties": false,
+          "description": "the completion-schema object, or null. THE RULE IS ONE RULE, NOT AN ENUMERATION OF CASES: final is null exactly when the wrapper found no parseable completion report, and present exactly when it found one. NO exit code implies either way - any code can co-occur with a present OR an absent final (exit 1 most notoriously, because the wrapper parses the .final at :2885 some 340 lines BEFORE it remaps the child's non-zero exit to 1 at :3224). No ledger STATUS implies it either - adopted-blocked in particular MAY carry a real final. report_status does not settle it: it is derived and, when the report is missing or unparseable, synthesized. Adjudicate on final when present, else on status",
+          "required": ["status", "changed_files", "commands_run", "deviations", "unresolved", "blocker"],
+          "properties": {
+            "status": { "type": "string", "enum": ["done", "done_with_concerns", "blocked"] },
+            "changed_files": { "type": "array", "maxItems": 200, "items": { "type": "string", "maxLength": 512 } },
+            "commands_run": {
+              "type": "array",
+              "maxItems": 100,
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["command", "result", "detail"],
+                "properties": {
+                  "command": { "type": "string", "maxLength": 2000 },
+                  "result": { "type": "string", "enum": ["pass", "fail", "not_run"] },
+                  "detail": { "type": ["string", "null"], "maxLength": 2000 }
+                }
+              }
+            },
+            "deviations": { "type": "array", "maxItems": 50, "items": { "type": "string", "maxLength": 2000 } },
+            "unresolved": { "type": "array", "maxItems": 50, "items": { "type": "string", "maxLength": 2000 } },
+            "blocker": { "type": ["string", "null"], "maxLength": 2000 }
+          }
+        },
+        "concerns_md": { "type": ["string", "null"], "maxLength": 10240 },
+        "scope_check": { "type": ["string", "null"], "maxLength": 10000 },
+        "truncated": { "type": "array", "maxItems": 12, "items": { "type": "string", "maxLength": 64 }, "description": "names every field whose value is NOT the producer's own: one the host cut to fit a cap, or one the host SYNTHESIZED because the producer never emitted it - notably a violation boolean filled as false on a pre-launch failure row or an adoption path that never computed it. Empty when every field is verbatim" },
+        "porcelain": { "type": ["string", "null"], "maxLength": 40000 },
+        "error": { "type": ["string", "null"], "maxLength": 512, "description": "OPTIONAL - the only field on this tag that is not in required, because the ledger row carries it only on the failure paths that write one. It is the ledger row's own `error` field verbatim: the sibling written alongside status 'failed' when a gate script is missing (codex-dispatch.ps1:2545, :2577) or when a launch/setup failure is caught and durably closed (:3231, the catch block whose message is the exception's). Absent and null both mean the row carried none. ITS COVERAGE IS NARROW, AND A QUOTA-OUT IS NOT IN IT: this field is written only on the missing-helper and caught-setup-exception paths. A MID-RUN QUOTA FAILURE IS A PLAIN CHILD NON-ZERO (codex-dispatch.ps1:2869) that the wrapper remaps to exit 1 (:3224-3226), printing its diagnostic to the DISPATCH LOG, which the agent never reads - so no field on this tag distinguishes a quota-out from any other child failure, and nothing here may be read as identifying one. THE EXIT-1 RULE THAT FOLLOWS: final present -> adjudicate the final; error present -> route on the cause it names; BOTH null -> redispatch once, then park with reason 'cause unknown - operator checks the dispatch log (possible quota-out)'. Truncation is flagged the ordinary way: if the host cuts this to 512 it names 'error' in truncated" }
+      }
+    },
+
+    "refusal": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "task_id", "repo", "exit_code", "rule", "detail", "synthesized", "tail", "run_id", "final", "truncated"],
+      "properties": {
+        "kind": { "const": "refusal" },
+        "task_id": { "type": ["string", "null"], "maxLength": 64 },
+        "repo": { "type": ["string", "null"], "maxLength": 512 },
+        "exit_code": { "type": ["integer", "null"], "enum": [71, 72, 74, 75, 76, 78, 79, 80, 81, 82, 83, 124, null] },
+        "rule": { "type": ["string", "null"], "maxLength": 64, "description": "the named-enum rule is a HOST-GENERATED refusal's field only. The wrapper does not emit rule names: on a wrapper refusal (exit_code is an integer) rule is NULL and detail carries the wrapper's printed line verbatim. Read rule on a null-exit_code refusal, read detail on every other one - notably on 76, whose five gates are told apart by detail and never by rule" },
+        "detail": { "type": "string", "maxLength": 512, "description": "THE WRAPPER'S PRINTED REFUSAL LINE WHEN ONE EXISTS, VERBATIM - and it is the only thing that distinguishes the several causes that share one exit code (78's three, 82's four, 76's five); on a host-generated refusal it names which check failed. NOT EVERY WRAPPER REFUSAL PRINTS A STANDARDIZED LINE, so this field ALSO admits a host-composed one: exit 124 prints NOTHING at all before exiting (codex-dispatch.ps1:2828-2840), the live-coder exit 75 prints four [adopt] lines and no REFUSED line (:1428-1434), and the live-sibling exit 71 prints 'REFUSING TO LAUNCH' rather than a REFUSED line (:2490-2502). On those paths detail is a HOST-COMPOSED one-line factual description of the observed condition - what was observed, not what it means - and synthesized is true. Read synthesized before treating this string as the producer's own words. The 512 cap CAN bite: an exit-72 pre-flight surfaces validator output of no fixed length, so when the host cuts this string it sets truncated true - a cut is marked, never silent" },
+        "synthesized": { "type": "boolean", "description": "true when detail is the HOST'S one-line factual description of the observed condition rather than a line the wrapper printed - the 124, live-75 and live-sibling-71 paths, which print no standardized refusal line. False when detail is the wrapper's own printed line, verbatim. It is the boolean that keeps a composed sentence from being read as producer text, and it is required on every refusal: a host-generated refusal (null exit_code) names its own rule and composes its own detail, so it is true there too" },
+        "tail": { "type": ["string", "null"], "maxLength": 10000 },
+        "run_id": { "type": ["string", "null"], "maxLength": 64, "description": "the id this refusal's output NAMES; the referent varies by exit code and is never this attempt's own id, except on 124. ALWAYS present on 75, 80 and 124; present on 78 and 82 WHENEVER THE INBOUND IDENTIFIER WAS WELL-FORMED and null when it was not (see those codes' conditionals - the wrapper echoes arbitrary caller input on an 82 not-found and a 78 unknown-id, and that raw echo rides in detail, not here); null on 71, 72, 74, 76, 79, 81 and 83, where the wrapper surfaces no id at all. SOURCING, IN ORDER: from the wrapper's printed line when one carries the id; ELSE from the host's OWN launch or ledger context for that dispatch - which the host has on exactly the paths that print nothing, 124 (the run it launched itself) and the live 75 (the adopt target it named in its own call) - and NEVER invented, reconstructed from a log path, or guessed" },
+        "final": { "type": "null" },
+        "truncated": { "type": "boolean", "description": "true when the host cut detail or tail to fit its cap - AND IT MEANS CUTTING, NOTHING ELSE. A boolean rather than the array dispatch_result carries, because a refusal has exactly two cappable fields, so naming which one was cut adds nothing an exit code and a read do not already give. IT IS NOT THE SYNTHESIS FLAG: a refusal DOES carry synthesized fields - detail is host-composed on the 124, live-75, live-sibling-71 and host-generated paths - and that fact is carried by its own required boolean, synthesized, never here. Read both: truncated says the string is a fragment, synthesized says the string is not the producer's words, and they are independent" }
+      },
+      "allOf": [
+        {
+          "if": { "required": ["exit_code"], "properties": { "exit_code": { "type": "null" } } },
+          "then": { "properties": { "rule": { "enum": ["hard-block-commit-unapproved", "hard-block-push-main", "hard-block-merge", "hard-block-teardown-outside-d8", "hard-block-critical-unconfirmed", "hard-block-audit-write", "structural-cap", "structural-disjointness", "structural-authorized-outside-spec", "structural-offlist-write", "structural-malformed-output", "structural-malformed-inbound"] } } }
+        },
+        {
+          "if": { "required": ["exit_code"], "properties": { "exit_code": { "type": "integer" } } },
+          "then": { "properties": { "rule": { "type": "null", "description": "a wrapper refusal carries no rule name - there is no such string on its stdout to read one from, which is why every wrapper-refusal route reads detail" } } }
+        },
+        {
+          "if": { "required": ["exit_code"], "properties": { "exit_code": { "enum": [75, 80, 124] } } },
+          "then": { "properties": { "run_id": { "type": "string", "pattern": "^[0-9a-f]{32}$", "description": "REQUIRED, AND SHAPE-PINNED, on these three: 75 the adopt-target row, 80 the BLOCKING unresolved row, 124 this run's own launched id. Every one of them is a WRAPPER LEDGER ROW the host or wrapper ALREADY HOLDS - a leased target, a live blocking row, a launched run - so there is no malformed-input case here and null is refused: whose run_id is exactly 32 lowercase hex characters on all 1326 rows measured on the live ledger, so the shape is a pattern, not a floor, and a 31-hex or 33-hex id is a reconstruction rather than a read and is refused too" } } }
+        },
+        {
+          "if": { "required": ["exit_code"], "properties": { "exit_code": { "const": 82 } } },
+          "then": { "properties": { "run_id": { "type": ["string", "null"], "pattern": "^[0-9a-f]{32}$", "description": "NULLABLE, WITH SEMANTICS - and the nullability is forced by the live wrapper, not a relaxation for convenience. When present this is the abandon-target WRAPPER LEDGER ROW, exactly 32 lowercase hex characters on all 1326 rows measured on the live ledger, so a 31-hex or 33-hex string is a reconstruction rather than a read and is refused. IT IS NULL EXACTLY WHEN THE INBOUND IDENTIFIER WAS MALFORMED: the 82 not-found path ECHOES ARBITRARY CALLER INPUT, so there may be no ledger row and no 32-hex id to name at all. Forcing the pattern would make honest emission impossible on exactly those refusals - the host would have to drop the event, invent an id, or reshape it. WHERE THE RAW INPUT GOES: into detail, under its ordinary 512-character bound and with truncated set if the host cut it; and synthesized STAYS FALSE, because that detail IS the wrapper's own printed line - marking it host-generated would falsify the event's provenance for the sake of a shape" } } }
+        },
+        {
+          "if": { "required": ["exit_code"], "properties": { "exit_code": { "const": 78 } } },
+          "then": { "properties": { "run_id": { "type": ["string", "null"], "minLength": 22, "description": "NULLABLE, WITH SEMANTICS, and NOT 32-hex when present: 78 names the REVIEWED build's run, which MAY be a host-appended in-session id rather than a wrapper ledger row (measured 22-46 characters), so a present id carries a length FLOOR of 22 where the wrapper-row codes carry the exact hex pattern. IT IS NULL EXACTLY WHEN THE INBOUND IDENTIFIER WAS MALFORMED: the 78 unknown-id path ECHOES ARBITRARY CALLER INPUT, so a sub-floor or junk identifier has no well-formed id to carry here. Forcing the floor would make honest emission impossible on exactly those refusals. WHERE THE RAW INPUT GOES: into detail, under its ordinary 512-character bound and with truncated set if the host cut it; and synthesized STAYS FALSE, because that detail IS the wrapper's own printed line - marking it host-generated would falsify the event's provenance for the sake of a shape. A PRESENT-BUT-SHORT id is still refused: 21 characters is neither a well-formed id nor an honest null, it is a mangled read" } } }
+        },
+        {
+          "if": { "required": ["exit_code"], "properties": { "exit_code": { "enum": [71, 72, 74, 76, 79, 81, 83] } } },
+          "then": { "properties": { "run_id": { "type": "null", "description": "the wrapper surfaces no id on these paths, and the host never scrapes the ledger to reconstruct one" } } }
+        }
+      ]
+    }
+  }
+}
