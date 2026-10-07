@@ -187,6 +187,8 @@ function New-SpecText {
         [string]$Intent = '- **Intent:** Build the fixture.',
         [string]$Assumptions = '- The fixture environment is available.',
         [string]$Specialist = "### Security`nKeep fixture writes scoped.`n`n### Accessibility`n(none)",
+        [string]$TaskLabelSeparator = '-',
+        [string]$TaskFieldSeparator,
         [switch]$NoSpec,
         [switch]$OmitRisk,
         [string]$SpecIdentity,
@@ -209,10 +211,11 @@ function New-SpecText {
     $taskRows = New-Object 'System.Collections.Generic.List[string]'
     $acceptanceRows = New-Object 'System.Collections.Generic.List[string]'
     $emDash = [string][char]0x2014
+    if ([string]::IsNullOrEmpty($TaskFieldSeparator)) { $TaskFieldSeparator = $emDash }
     foreach ($task in $Tasks) {
         foreach ($file in @($task.files)) { [void]$fileRows.Add('| ' + $file.path + ' | ' + $file.op + ' | fixture |') }
         $paths = @($task.files | ForEach-Object { $_.path }) -join ', '
-        [void]$taskRows.Add(('- [ ] **Task {0}** - Implement task {0} exactly. {1} files: {2} {1} done when: task {0} is complete.' -f $task.id, $emDash, $paths))
+        [void]$taskRows.Add(('- [ ] **Task {0}** {1} Implement task {0} exactly. {2} files: {3} {2} done when: task {0} is complete.' -f $task.id, $TaskLabelSeparator, $TaskFieldSeparator, $paths))
         [void]$acceptanceRows.Add(('- [ ] Task {0} - task {0} is executable -> verify: run the fixture command.' -f $task.id))
     }
     $manifestBlock = ''
@@ -753,6 +756,61 @@ try {
         $plan = Invoke-Plan -Fixture (New-Fixture -Tasks $tasks) -MaxParallel 2
         return $plan.allowed -and @($plan.waves).Count -eq 3 -and
             (@($plan.waves | ForEach-Object { $_.tasks[0].id }) -join ',') -eq '1,2,3'
+    }
+    Assert-Case 'template em-dash task label and fields are planned' {
+        $path = 'src/em-dash.txt'
+        $emDash = [string][char]0x2014
+        $fixture = New-Fixture -Tasks @(New-Task -Id '1' -Files @(New-File -Path $path)) -SpecOptions @{
+            TaskLabelSeparator = $emDash
+            TaskFieldSeparator = $emDash
+        }
+        $plan = Invoke-Plan $fixture
+        if (-not $plan.allowed) { throw ('em-dash fixture refused: ' + $plan.refusal) }
+        $task = $plan.waves[0].tasks[0]
+        return $task.text.Contains('files: ' + $path) -and
+            @($task.files).Count -eq 1 -and $task.files[0].path -ceq $path -and
+            $task.done_when -ceq 'task 1 is complete.'
+    }
+    Assert-Case 'en-dash task label with em-dash fields is planned' {
+        $path = 'src/en-dash.txt'
+        $enDash = [string][char]0x2013
+        $emDash = [string][char]0x2014
+        $fixture = New-Fixture -Tasks @(New-Task -Id '1' -Files @(New-File -Path $path)) -SpecOptions @{
+            TaskLabelSeparator = $enDash
+            TaskFieldSeparator = $emDash
+        }
+        $plan = Invoke-Plan $fixture
+        if (-not $plan.allowed) { throw ('en-dash fixture refused: ' + $plan.refusal) }
+        $task = $plan.waves[0].tasks[0]
+        return $task.text.Contains('files: ' + $path) -and
+            @($task.files).Count -eq 1 -and $task.files[0].path -ceq $path -and
+            $task.done_when -ceq 'task 1 is complete.'
+    }
+    Assert-Case 'ASCII-hyphen task label is planned' {
+        $path = 'src/ascii-hyphen.txt'
+        $emDash = [string][char]0x2014
+        $fixture = New-Fixture -Tasks @(New-Task -Id '1' -Files @(New-File -Path $path)) -SpecOptions @{
+            TaskLabelSeparator = '-'
+            TaskFieldSeparator = $emDash
+        }
+        $plan = Invoke-Plan $fixture
+        if (-not $plan.allowed) { throw ('ASCII-hyphen fixture refused: ' + $plan.refusal) }
+        $task = $plan.waves[0].tasks[0]
+        return $task.text.Contains('files: ' + $path) -and
+            @($task.files).Count -eq 1 -and $task.files[0].path -ceq $path -and
+            $task.done_when -ceq 'task 1 is complete.'
+    }
+    Assert-Case 'all-none specialist context produces prompts for every task' {
+        $tasks = @(
+            (New-Task -Id '1' -Files @(New-File -Path 'none-one.txt'))
+            (New-Task -Id '2' -Files @(New-File -Path 'none-two.txt'))
+        )
+        $specialist = "### Security`n(none)`n`n### Performance`n(none)`n`n### Accessibility`n(none)"
+        $plan = Invoke-Plan (New-Fixture -Tasks $tasks -SpecOptions @{ Specialist = $specialist })
+        if (-not $plan.allowed) { throw ('all-none specialist fixture refused: ' + $plan.refusal) }
+        $plannedTasks = @($plan.waves | ForEach-Object { $_.tasks })
+        return $plannedTasks.Count -eq $tasks.Count -and
+            @($plannedTasks | Where-Object { [string]::IsNullOrWhiteSpace($_.prompt) }).Count -eq 0
     }
     Assert-Case 'exact live-template slots commands and prompt digest' {
         $fixture = New-Fixture -SpecOptions @{

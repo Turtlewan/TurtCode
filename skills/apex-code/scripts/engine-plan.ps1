@@ -366,7 +366,7 @@ function Get-EngineTaskDeclarations {
     param([Parameter(Mandatory = $true)][string]$Text)
 
     $tasksBody = Get-EngineSectionBody -Text $Text -Heading 'Tasks'
-    $matches = [regex]::Matches($tasksBody, '(?ms)^- \[[ xX]\][ \t]+\*\*Task[ \t]+(?<Id>[0-9]+[A-Za-z]?)(?:[^*]*)\*\*[ \t]*-[ \t]*(?<Text>.*?)(?=^- \[[ xX]\][ \t]+\*\*Task[ \t]+|\z)')
+    $matches = [regex]::Matches($tasksBody, '(?ms)^- \[[ xX]\][ \t]+\*\*Task[ \t]+(?<Id>[0-9]+[A-Za-z]?)(?:[^*]*)\*\*[ \t]*[-\u2013\u2014][ \t]*(?<Text>.*?)(?=^- \[[ xX]\][ \t]+\*\*Task[ \t]+|\z)')
     $result = @{}
     foreach ($match in $matches) {
         $id = $match.Groups['Id'].Value.ToLowerInvariant()
@@ -400,7 +400,7 @@ function New-EnginePrompt {
         [Parameter(Mandatory = $true)][string]$RepoPath,
         [Parameter(Mandatory = $true)][string]$Intent,
         [Parameter(Mandatory = $true)][string]$Assumptions,
-        [Parameter(Mandatory = $true)][object[]]$SpecialistContext,
+        [Parameter(Mandatory = $true)][AllowEmptyCollection()][object[]]$SpecialistContext,
         [Parameter(Mandatory = $true)][string]$VerifyFence,
         [Parameter(Mandatory = $true)][object]$Template
     )
