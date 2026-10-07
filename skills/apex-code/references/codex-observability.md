@@ -45,8 +45,8 @@ it into the worktree.
   **Never a default `coder_effort`.** `ultra` remains unproven against `max` pending a head-to-head eval.
 
 The Engine's automatic retry ladder stops at `xhigh`. Beyond `xhigh`, **HOST decides** whether to amend
-task effort and start a new Engine run or use the attended HOST manual path; log each escalation. Sonnet
-fallback, including quota-out, requires OWNER approval and is never an automatic Engine model swap.
+task effort and start a new Engine run or use the attended HOST manual path; log each escalation.
+Sonnet fallback, including quota-out, requires OWNER approval and is never an automatic Engine model swap.
 
 The old Sol model rung (ADR-032) is **gone**: `gpt-5.6-sol` *is* the coder now (ADR-034), so there is no
 higher Codex model to escalate to — the dial is the whole ladder.
