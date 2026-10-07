@@ -607,6 +607,8 @@ function Test-Structure {
     if ($Schema.PSObject.Properties['pattern'] -and $Value -is [string] -and $Value -cnotmatch [string]$Schema.pattern) { throw "$At does not match its pattern" }
     if ($null -ne $Value -and $Schema.PSObject.Properties['minimum'] -and
             [long]$Value -lt [long]$Schema.minimum) { throw "$At is below its minimum" }
+    if ($null -ne $Value -and $Schema.PSObject.Properties['maximum'] -and
+            [long]$Value -gt [long]$Schema.maximum) { throw "$At is above its maximum" }
     if ($Schema.PSObject.Properties['anyOf']) {
         $anyMatched = $false
         foreach ($candidate in @($Schema.anyOf)) {
@@ -728,6 +730,116 @@ try {
         Test-Structure $v1State (Get-Content $schemaPath -Raw | ConvertFrom-Json)
     } catch { $v1Compatible = $false; $v1CompatibilityError = $_.Exception.Message }
     Assert-Test 'v1 schema compatibility' $v1Compatible $v1CompatibilityError
+
+    # Import-only parameter binding and direct attempts keep timeout tests independent of
+    # full Engine runs. Reuse the allowed plan from the schema-valid reachability fixture.
+    $timeoutSchema = Get-Content $schemaPath -Raw | ConvertFrom-Json
+    $timeoutFixtureRepo = $repo
+    $timeoutFixtureStateRoot = $stateRoot
+    $timeoutFixtureWorktreeRoot = $worktreeRoot
+    $env:APEX_ENGINE_TEST_IMPORT_ONLY = '1'
+    foreach ($invalidTimeout in @(0, 241)) {
+        $rejected = $false
+        try { . $engine -NoOutputTimeoutMin $invalidTimeout } catch { $rejected = $true }
+        Assert-Test "timeout CLI rejects $invalidTimeout" $rejected 'ValidateRange accepted an out-of-range timeout'
+    }
+    $timeoutStates = @()
+    foreach ($timeoutCase in @('default', 'explicit')) {
+        $importParameters = @{ SpecPath = $spec }
+        if ($timeoutCase -ceq 'explicit') { $importParameters.NoOutputTimeoutMin = 75 }
+        . $engine @importParameters
+        $repo = $timeoutFixtureRepo; $stateRoot = $timeoutFixtureStateRoot; $worktreeRoot = $timeoutFixtureWorktreeRoot
+        $expectedTimeout = if ($timeoutCase -ceq 'explicit') { 75 } else { 30 }
+        Assert-Test "$timeoutCase timeout binding flag" `
+            ($script:EngineNoOutputTimeoutBound -eq ($timeoutCase -ceq 'explicit')) 'explicit binding flag was incorrect'
+        $runDirectory = Join-Path $testRoot ("timeout-$timeoutCase")
+        $script:EngineStatePath = Join-Path $runDirectory 'engine-state.json'
+        $script:EngineWorktreeRoot = $worktreeRoot
+        $script:EngineWrapper = Join-Path $PSScriptRoot 'codex-dispatch.ps1'
+        $newState = New-RunnerStateObject ([Guid]::NewGuid().ToString('N')) $runDirectory `
+            $repo $state.base_sha 2 $state.capacity $state.plan $state.spec.name `
+            $state.spec.original_digest $state.spec.snapshot_path $state.engine_owner
+        Assert-Test "$timeoutCase new state records timeout" `
+            ($newState.no_output_timeout_min -eq $expectedTimeout) 'new state lost its timeout'
+        $timeoutStates += $newState
+    }
+    Remove-Item Env:APEX_ENGINE_TEST_IMPORT_ONLY -ErrorAction SilentlyContinue
+    $legacyTimeoutState = ($timeoutStates[0] | ConvertTo-Json -Depth 100) | ConvertFrom-Json
+    $legacyTimeoutState.PSObject.Properties.Remove('no_output_timeout_min')
+    foreach ($schemaState in @($timeoutStates[0], $timeoutStates[1], $legacyTimeoutState)) {
+        $valid = $true; $detail = ''
+        try { Test-Structure $schemaState $timeoutSchema } catch { $valid = $false; $detail = $_.Exception.Message }
+        Assert-Test 'new/legacy timeout state passes schema' $valid $detail
+    }
+    foreach ($invalidTimeout in @(241, 0, 'not-an-integer')) {
+        $invalidState = ($timeoutStates[0] | ConvertTo-Json -Depth 100) | ConvertFrom-Json
+        $invalidState.no_output_timeout_min = $invalidTimeout
+        $rejection = ''
+        try { Test-Structure $invalidState $timeoutSchema } catch { $rejection = $_.Exception.Message }
+        $expectedReason = if ($invalidTimeout -eq 241) { 'above its maximum' }
+            elseif ($invalidTimeout -eq 0) { 'below its minimum' } else { 'wrong JSON type' }
+        Assert-Test "timeout schema rejects $invalidTimeout" `
+            ($rejection -like "*no_output_timeout_min*$expectedReason*") $rejection
+    }
+    $pinnedState = ($state | ConvertTo-Json -Depth 100) | ConvertFrom-Json
+    $pinnedState.plan.spec.coder_model = 'gpt-6.1-sol'
+    foreach ($wave in @($pinnedState.plan.waves)) { foreach ($task in @($wave.tasks)) { $task.coder_model = 'gpt-6.1-sol' } }
+    $pinnedState.tasks[0].attempts[0].model = 'gpt-6.1-sol'
+    $pinnedValid = $true; $pinnedError = ''
+    try { Test-Structure $pinnedState $timeoutSchema } catch { $pinnedValid = $false; $pinnedError = $_.Exception.Message }
+    Assert-Test 'pinned gpt-6.1-sol passes all three state model enums' $pinnedValid $pinnedError
+
+    $timeoutCriticalGate = ${function:Test-RunnerCriticalGate}
+    $timeoutStartDispatch = ${function:Start-EngineDispatch}
+    function Test-RunnerCriticalGate { param($TaskPlan, $TaskState) return $true }
+    function Start-EngineDispatch {
+        param($WrapperPath, $ArgsPath, $ChildOutputPath, $StateRoot)
+        return [pscustomobject]@{ pid = $PID; start_time = '2001-02-03T04:05:06.0000000Z' }
+    }
+    try {
+        foreach ($case in @('default', 'explicit', 'legacy', 'resume-bound', 'resume-unbound', 'resume-legacy-bound', 'resume-legacy-unbound')) {
+            $sourceState = if ($case -ceq 'explicit') { $timeoutStates[1] }
+                elseif ($case -like '*legacy*') { $legacyTimeoutState } else { $timeoutStates[0] }
+            $script:EngineState = ($sourceState | ConvertTo-Json -Depth 100) | ConvertFrom-Json
+            $expectedTimeout = if ($case -ceq 'explicit') { 75 } else { 30 }
+            $script:EngineStateRoot = Join-Path $testRoot "timeout-$case-state"
+            $script:EngineStatePath = Join-Path (Join-Path $script:EngineStateRoot $script:EngineState.run_id) 'engine-state.json'
+            if ($case -like 'resume-*') {
+                $script:EngineNoOutputTimeoutBound = $case -like '*-bound'
+                $NoOutputTimeoutMin = 90
+                if ($case -notlike '*legacy*') { $script:EngineState.no_output_timeout_min = 45 }
+                Save-RunnerState
+                $ready = Initialize-RunnerResume $script:EngineState.run_id
+                $expectedTimeout = if ($script:EngineNoOutputTimeoutBound) { 90 }
+                    elseif ($case -like '*legacy*') { 30 } else { 45 }
+                $savedResume = Get-Content $script:EngineStatePath -Raw | ConvertFrom-Json
+                $savedProperty = $savedResume.PSObject.Properties['no_output_timeout_min']
+                Assert-Test "$case saves timeout choice" `
+                    ($ready -and (($null -ne $savedProperty -and $savedProperty.Value -eq $expectedTimeout) -or
+                        ($case -ceq 'resume-legacy-unbound' -and $null -eq $savedProperty))) 'resume lost persisted timeout choice'
+            }
+            $taskPlan = $script:EngineState.plan.waves[0].tasks[0]
+            $taskState = $script:EngineState.tasks[0]
+            $attempt = ($state.tasks[0].attempts[0] | ConvertTo-Json -Depth 100) | ConvertFrom-Json
+            $attempt.worktree = $repo
+            $attempt.args_path = Join-Path (Split-Path -Parent $script:EngineStatePath) 'dispatch-args.json'
+            $attempt.child_output_path = Join-Path (Split-Path -Parent $script:EngineStatePath) 'child.out'
+            $taskState.attempts = @($attempt)
+            $child = Start-RunnerAttempt $taskPlan $taskState $attempt
+            $dispatchArgs = Get-Content $attempt.args_path -Raw | ConvertFrom-Json
+            Assert-Test "$case dispatches state timeout or legacy fallback" `
+                ($null -ne $child -and $dispatchArgs.NoOutputTimeoutMin -eq $expectedTimeout) 'dispatch arguments have the wrong timeout'
+            Close-RunnerRunLock
+        }
+    } finally {
+        Close-RunnerRunLock
+        Set-Item -LiteralPath Function:Test-RunnerCriticalGate -Value $timeoutCriticalGate
+        Set-Item -LiteralPath Function:Start-EngineDispatch -Value $timeoutStartDispatch
+        $env:APEX_ENGINE_TEST_IMPORT_ONLY = '1'
+        . $engine
+        $repo = $timeoutFixtureRepo; $stateRoot = $timeoutFixtureStateRoot; $worktreeRoot = $timeoutFixtureWorktreeRoot
+        Remove-Item Env:APEX_ENGINE_TEST_IMPORT_ONLY -ErrorAction SilentlyContinue
+    }
 
     # High-risk review pauses use the production tree-pin unless a case explicitly selects one of
     # the two digest-failure stubs below.

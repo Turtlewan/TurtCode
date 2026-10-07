@@ -3,6 +3,7 @@ param(
     [string]$SpecPath,
     [string]$Repo,
     [ValidateRange(1, 16)][int]$MaxParallel,
+    [ValidateRange(1, 240)][int]$NoOutputTimeoutMin = 30,
     [switch]$Attended,
     [string]$CriticalFilesConfirmedNote,
     [string]$WorktreeRoot,
@@ -34,6 +35,7 @@ $script:EngineConfirmation = $CriticalFilesConfirmedNote
 $script:EngineCodexExecutable = $CodexExecutable
 $script:EngineCodexPrefix = [string[]]@($CodexExecutableArgumentPrefix)
 $script:EngineMaxParallelBound = $PSBoundParameters.ContainsKey('MaxParallel')
+$script:EngineNoOutputTimeoutBound = $PSBoundParameters.ContainsKey('NoOutputTimeoutMin')
 $script:EngineWorktreeRootBound = $PSBoundParameters.ContainsKey('WorktreeRoot')
 $script:EngineWrapperBound = $PSBoundParameters.ContainsKey('WrapperPath')
 $script:EngineCodexBound = $PSBoundParameters.ContainsKey('CodexExecutable')
@@ -608,6 +610,7 @@ function New-RunnerAttempt {
 function Start-RunnerAttempt {
     param([object]$TaskPlan, [object]$TaskState, [object]$Attempt)
     if (-not (Test-RunnerCriticalGate $TaskPlan $TaskState)) { return $null }
+    $timeoutProperty = $script:EngineState.PSObject.Properties['no_output_timeout_min']
     $parameters = @{
         Phase = 'build'; Spec = [string]$script:EngineState.spec.name; Task = [string]$TaskPlan.id
         Worktree = [string]$Attempt.worktree; BaseSha = (Invoke-RunnerGitText $Attempt.worktree 'rev-parse' 'HEAD')
@@ -615,6 +618,7 @@ function Start-RunnerAttempt {
         Authorized = [string[]]@($TaskPlan.files | ForEach-Object { [string]$_.path })
         Effort = [string]$Attempt.effort; Model = [string]$Attempt.model; Prompt = [string]$TaskPlan.prompt
         ScratchDirectory = (Join-Path (Split-Path -Parent $script:EngineStatePath) 'wrapper-scratch')
+        NoOutputTimeoutMin = $(if ($null -ne $timeoutProperty) { [int]$timeoutProperty.Value } else { 30 })
     }
     if ($script:EngineAttended) { $parameters.Attended = $true }
     if (-not [string]::IsNullOrWhiteSpace($script:EngineConfirmation)) {
@@ -1550,6 +1554,7 @@ function New-RunnerStateObject {
         state_path = $script:EngineStatePath; worktree_root = $script:EngineWorktreeRoot
         wrapper_path = $script:EngineWrapper; codex_executable = $(if ($script:EngineCodexExecutable) { $script:EngineCodexExecutable } else { $null })
         codex_executable_argument_prefix = [string[]]@($script:EngineCodexPrefix)
+        no_output_timeout_min = $NoOutputTimeoutMin
         spec = [pscustomobject][ordered]@{ name = $Name; original_path = (Get-RunnerPath $SpecPath); original_digest = $Digest; snapshot_path = $Snapshot; snapshot_digest = $Digest }
         repo = $RepoRoot; base_sha = $BaseSha
         integration = [pscustomobject][ordered]@{ worktree = $null; branch = $null; tip = $null }
@@ -1666,6 +1671,10 @@ function Initialize-RunnerResume {
     if (-not $script:EngineWrapperBound) { $script:EngineWrapper = Get-RunnerPath ([string]$script:EngineState.wrapper_path) }
     if (-not $script:EngineCodexBound) { $script:EngineCodexExecutable = [string]$script:EngineState.codex_executable }
     if (-not $script:EngineCodexPrefixBound) { $script:EngineCodexPrefix = [string[]]@($script:EngineState.codex_executable_argument_prefix) }
+    if ($script:EngineNoOutputTimeoutBound) {
+        $script:EngineState | Add-Member -NotePropertyName no_output_timeout_min -NotePropertyValue $NoOutputTimeoutMin -Force
+        Save-RunnerState
+    }
     if (-not (Test-RunnerOutsideWorktree $script:EngineWorktreeRoot)) { throw 'Recorded worktree root is inside a Git worktree.' }
     if (-not (Test-Path -LiteralPath $script:EngineWrapper -PathType Leaf)) { throw "Recorded wrapper is missing: $script:EngineWrapper" }
     try { $digest = Get-RunnerDigest ([string]$script:EngineState.spec.original_path) }

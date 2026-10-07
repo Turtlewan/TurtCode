@@ -528,13 +528,15 @@ try {
         return (Invoke-Plan $fixture).allowed
     }
     Assert-Case 'pinned model defaults and allowlist' {
-        $default = New-Fixture -SpecOptions @{ CoderModel = $null }
-        $pinned = New-Fixture -SpecOptions @{ CoderModel = 'gpt-6-sol' }
-        $alias = New-Fixture -SpecOptions @{ CoderModel = 'codex' }
-        $bad = New-Fixture -SpecOptions @{ CoderModel = 'sonnet' }
-        return (Invoke-Plan $default).spec.coder_model -ceq 'gpt-5.6-sol' -and
-            (Invoke-Plan $pinned).spec.coder_model -ceq 'gpt-6-sol' -and
-            (Invoke-Plan $alias).spec.coder_model -ceq 'gpt-5.6-sol' -and -not (Invoke-Plan $bad).allowed
+        $default = Invoke-Plan (New-Fixture -SpecOptions @{ CoderModel = $null })
+        $pinned = Invoke-Plan (New-Fixture -SpecOptions @{ CoderModel = 'gpt-6-sol' })
+        $newPinned = Invoke-Plan (New-Fixture -SpecOptions @{ CoderModel = 'gpt-6.1-sol' })
+        $alias = Invoke-Plan (New-Fixture -SpecOptions @{ CoderModel = 'codex' })
+        $bad = Invoke-Plan (New-Fixture -SpecOptions @{ CoderModel = 'sonnet' })
+        return $default.allowed -and $default.spec.coder_model -ceq 'gpt-5.6-sol' -and
+            $pinned.allowed -and $pinned.spec.coder_model -ceq 'gpt-6-sol' -and
+            $newPinned.allowed -and $newPinned.spec.coder_model -ceq 'gpt-6.1-sol' -and
+            $alias.allowed -and $alias.spec.coder_model -ceq 'gpt-5.6-sol' -and -not $bad.allowed
     }
     Assert-Case 'multiple repo keys and repo mismatch refuse' {
         $multi = New-Fixture -TwoRepos
