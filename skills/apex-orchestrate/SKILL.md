@@ -1,7 +1,7 @@
 ---
 skill: apex-orchestrate
-version: 2.4.1
-last_updated: 2026-10-05
+version: 2.5.0
+last_updated: 2026-10-06
 sources:
   - docs/technical/adr/ADR-015-dispatch-return-contract.md
   - docs/technical/adr/ADR-036-remove-knowledge-layer.md
@@ -54,7 +54,9 @@ half-refactor is unreviewable), then move. Two reads, one line, go.
 | Signal | Route to |
 |--------|----------|
 | plan · design · architect · spec · "let's build" · what if | **apex-plan**, which dispatches a gpt-6-sol spec author through the wrapper's `-AuthorSpec` (apex-plan, "Writing the spec"; ADR-048) |
-| build · implement · execute · start build | **apex-code**. **ATTENDED builds:** dispatch the `model: opus` **`apex-build-orchestrator`** agent (`~/.claude/agents/apex-build-orchestrator.md`; Opus 5, ADR-045 as amended) with three inputs: (a) the spec's **absolute path** AND (b) its **full text** — path alone is not enough, the agent has no tool that guarantees it can open it; and (c) **one per-repo input block for EVERY repo the spec touches** — the repo root, the absolute path of that repo's `AGENTS.md` verify contract, that repo's HEAD sha, **and that `AGENTS.md`'s `## Verify commands` FENCED BLOCK, copied in VERBATIM**. Populate it by replacing the marker and entire stub with one fence directly under the exact heading `## Verify commands` (blank lines only); put notes after the closing fence. The agent contract requires the verify commands themselves, not a pointer to them: it has no tool guaranteed to open the file, so a path alone leaves it adjudicating verify results against commands it cannot read. Copy the fence contents exactly — no summary, no reformatting, no command dropped. The per-repo blocks are what the schema's `repos` map is keyed on, so a single-repo build supplies exactly one and a multi-repo build supplies one per repo; a plan can only declare a repo that arrived this way. Add the live tree facts: `git status --porcelain`, existing worktrees and `codex/*` branches, `max_parallel_codex`, the `coder_effort` default, and the build date. It owns the **BUILD PHASE** — task selection, wave sequencing, dispatch parameters, exit-code routing, verify adjudication, retries/escalation/forks, integration order — and you execute its wave plan as mechanics and return bounded results. **Close-out is NOT its scope:** when it emits `complete`, you run the review → docs → family-gate → archival chain per `apex-code/SKILL.md` § Post-build. **UNATTENDED (AFK) builds keep the current host path** — the v1 agent is attended-only and is not dispatched for them. |
+| build · implement · execute · start build — attended, Engine-eligible | **apex-code**, Engine path (default, attended): `& "$env:USERPROFILE\.claude\skills\apex-code\scripts\apex-engine.ps1" -SpecPath <absolute> -Repo <absolute> -Attended -MaxParallel 2` (`1` for `risk: high`). Read `engine-state.json` **status and diagnosis** when present; otherwise use the console `Engine refused: <message>` diagnosis. Exit **0** = build/hand-off complete, HOST close-out pending; **1** = refused/parked/failed/partial/quota-paused — diagnose, fix inputs/spec or seek owner disposition; **2** = `awaiting-review` — HOST runs Opus Critic on the integrated wave, then resumes with the bound clean/reject review record per **apex-code**. Follow its resume/recovery rules; after exit 0, run **apex-code/SKILL.md § Post-build** against the integrated tip, then owner-approved commit and proof-gated `-Teardown <runId>`. |
+| attended build — Engine-refused spec or owner-directed recovery | **apex-code**, attended **HOST manual path**: no manifest, shared-file tasks, multi-repo, `coder_model: sonnet`, or owner-directed escalation/fixes. For other refusals, use durable status/diagnosis or the console `Engine refused:` message to fix inputs/spec or route to manual recovery. HOST owns scheduling, dispatch, verify adjudication, integration, and recovery; close out per **apex-code/SKILL.md § Post-build**. Sonnet quota fallback requires owner decision. |
+| unattended (AFK) build | **apex-code**, documented HOST AFK/manual mechanics and governance gates; Engine is the default **attended** route only. |
 | broken · failing · bug · regression · "why does X" | **apex-debug** |
 | review this spec | apex-plan (dispatched spec review) |
 | review the built code | dispatch **`apex-critic`** with `mode: code`; on every Agent tool dispatch pass `model: sonnet` for Low/Medium or doc-only work and `model: opus` for High (`risk: high` overrides doc-only). The Agent tool's `model:` parameter overrides the agent file's default frontmatter `model: sonnet`. Follow **apex-code** for code review scope and cadence. |
@@ -63,7 +65,7 @@ half-refactor is unreviewable), then move. Two reads, one line, go.
 | audit the skills · stocktake | apex-refresh |
 | next · what's next · where are we | auto-detect (below) |
 
-Both dispatches are the ADR-045 role split, tightened by ADR-046 D1: the host reasons and plans, workers build. The host's build-time mechanics are launching and monitoring subprocesses from the orchestrator's wave plan, executing the git operations that plan directs, and returning status/exit codes — never task selection, sequencing, routing, verify adjudication, retries, or close-out.
+The Engine owns deterministic build mechanics on the attended eligible path. HOST reads durable status and diagnosis, makes owner/escalation decisions, and runs Post-build close-out. On attended manual recovery and AFK builds, HOST owns build mechanics and adjudication; workers build in isolated worktrees.
 
 **Debug beats build** when both are present — an unexplained failure is not a feature.
 

@@ -66,7 +66,7 @@ deviations): which existing pattern to mirror, a local name. Blocker (report in 
 improvise): an acceptance criterion that cannot pass as written, a needed file outside the
 authorized set, a missing credential."
 
-The coder runs the recipe **inside its own worktree** and iterates to green — that is what this clause instructs. It is not the authoritative pass, and it is not an adjudication. On the integration tree the ownership is split (ADR-046 D1; apex-code § Verify). The host EXECUTES the recipe as mechanics from the orchestrator's wave plan and returns the raw results; the ORCHESTRATOR owns the pass/fail adjudication and the routing that follows. Both cadences are required; neither replaces the other.
+The coder runs the recipe **inside its own isolated worktree** and iterates to green — that is what this clause instructs. It is not the authoritative pass, and it is not an adjudication. The **authoritative integrated verify** runs on the integration tree: the Engine executes the recipe and adjudicates pass/fail for eligible attended builds; HOST executes and adjudicates on the manual/AFK path (apex-code § Verify). Both cadences are required; neither replaces the other.
 
 ## Reading the completion — the LAST agent_message, never any other
 
@@ -98,15 +98,25 @@ message by construction). If you are reading the **log** instead — a progress 
 regex over `"status":` — you must take the **last** `agent_message` and discard the rest. Never the
 first match, never "the first `done`".
 
-## Completion routing (orchestrator-owned; the host reads the exit code + `.final` JSON and reports them)
+## Completion routing (Engine for eligible attended builds; HOST for manual recovery)
 
-| Signal | Meaning | Orchestrator routing |
+On the Engine path, the Engine consumes coder completions and owns deterministic retry, integration, and verify routing. HOST reads the Engine exit code plus durable `engine-state` status **and diagnosis**, not a coder's `done` as build success. If no state exists, use the console `Engine refused: <message>` as the diagnosis; fix the inputs/spec or take the attended HOST manual path.
+
+| Engine exit | Meaning | HOST routing |
 |---|---|---|
-| `status: done` | complete | run the spec's Verification Recipe on the diff (trust but verify) → check the task off |
+| `0` | build/hand-off complete; HOST close-out pending | Critic/Scribe/family gate/docs close-out against the integrated tip, then owner-approved commit and proof-gated `-Teardown <runId>` per apex-code Post-build |
+| `1` | refused/parked/failed/partial/quota-paused; distinguish by status and diagnosis | diagnose; fix inputs/spec or seek owner disposition for manual recovery. Resume an unchanged spec with `-Resume <runId>`; an amended spec needs a new run after inspecting partial work and permitted `-Teardown <runId> -Discard` |
+| `2` | `awaiting-review` | run Opus Critic on the integrated wave, then `-Resume <runId>` with bound `-ReviewVerdict clean\|reject`, `-ReviewDigest`, and external `-ReviewRecord` per apex-code Engine path; rejection parks for HOST manual fixes or amended-spec rerun |
+
+On the manual/AFK path, HOST reads the coder exit code + final `.final` JSON and adjudicates:
+
+| Signal | Meaning | HOST routing |
+|---|---|---|
+| `status: done` | complete | run the spec's authoritative integrated Verification Recipe on the diff (trust but verify) → check the task off |
 | `status: done_with_concerns` | complete + flags | verify as above; copy `deviations` / `unresolved` into the decisions table |
 | `status: blocked` (+ `blocker`) | **spec defect** | route through Forks (capture-at-halt). Never model-fallback — a spec defect survives the swap |
-| non-zero exit / no valid `.final`, log tail shows a rate-limit / quota signature | **paused, not failed** | park the task + checkpoint In-Flight; operator choice: wait for quota reset (re-dispatch Codex) vs Claude fallback (Sonnet 5) now |
-| non-zero exit, any other signature | process failure | one re-dispatch; if it repeats, treat as verify-fail (effort ladder → fallback) |
-| verify recipe fails on a `done` diff | verify-fail | effort-bump ladder (ADR-030) → `ultra` rung (ADR-034) → Claude fallback (Sonnet 5) per SKILL.md § Fallback |
+| non-zero exit / no valid `.final`, log tail shows a rate-limit / quota signature | **paused, not failed** | park the task + checkpoint In-Flight; owner choice: wait for quota reset (re-dispatch Codex) vs HOST-directed Claude fallback (Sonnet 5) |
+| non-zero exit, any other signature | process failure | one re-dispatch; if it repeats, treat as verify-fail: HOST bumps effort through `xhigh`, then decides whether to re-dispatch at `max`/`ultra` with amended effort or take another manual route. Claude (Sonnet) fallback requires owner decision per SKILL.md § Fallback; no automatic model swap |
+| verify recipe fails on a `done` diff | verify-fail | HOST bumps effort through `xhigh` (ADR-030); beyond that, HOST decides whether to re-dispatch at `max`/`ultra` with amended effort or take another manual route. Claude (Sonnet) fallback requires owner decision per SKILL.md § Fallback; no automatic model swap |
 
-The host reads the signal and hands it up; **which rung fires — re-dispatch, effort bump, fork, park — is the orchestrator's call**, not the host's (ADR-046 D1). **V1:** on an ATTENDED build the orchestrator is the dispatched `apex-build-orchestrator` agent and the host relays the signal and executes the rung it names; on an UNATTENDED build the host performs that routing itself until v2 (ADR-046 D1).
+HOST owns manual re-dispatch, effort bump, Forks, and parking. The Engine accepts max/ultra task effort, but its automatic retry ladder stops at xhigh; beyond that ladder HOST decides between an amended-effort spec/new Engine run and attended manual recovery. Whole-spec Sonnet pins and owner-approved Sonnet quota fallback use the HOST manual path.

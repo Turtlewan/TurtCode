@@ -5,8 +5,13 @@ Loaded on demand when apex-code runs the family-aware cross-model review (apex-c
 Codex is the default *builder*, so this review path fires only on the Claude fallback — Sonnet 5, per
 A1); it **never edits code**, and its *findings* are advisory — but its **verdict routes**: `BLOCK` →
 exit 67, which is a HARD STOP on the pipeline (do not commit, do not build a dependent spec).
-**The BUILD ORCHESTRATOR adjudicates a build-side review BLOCK and routes it** (ADR-046 D1); the host relays it to
+**The HOST receives, adjudicates, and routes a build-side review BLOCK on the manual path**; the HOST relays it to
 the user only when the call needs human judgment. It is not auto-dismissable and not merely a suggestion.
+The HOST owns the later Critic cadence against the integrated tip (apex-code § Post-build). At an Engine
+high-risk `awaiting-review` pause, the HOST runs Opus Critic on the recorded integrated-wave diff and supplies
+`-Resume <runId> -ReviewVerdict clean|reject -ReviewDigest <64 lowercase hex> -ReviewRecord <existing absolute path outside every Git worktree>`.
+The Engine consumes only that HOST-supplied verdict bound to the recorded tree digest and review record;
+`reject` parks the run. This cross-model `BLOCK` is not an Engine review verdict.
 `FLAG` → exit 68, carried into the review. Note: the Claude fallback builds only via the three fallback triggers
 (see model-routing), so this Codex review usually can't run either → apex-code degrades to
 single-model + human flag. Codex-built work receives no additional Sol cross-family pass.

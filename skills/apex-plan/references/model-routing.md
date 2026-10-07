@@ -9,10 +9,9 @@ Loaded on demand when a build could take more than one coder — i.e. before set
 `coder_model` frontmatter, or at a quota-out fallback decision. Under ADR-027 as amended (A1,
 session-79b; ADR-045) the menu is `{codex, sonnet}` and routing **collapses**: Codex is the default
 coder for every task; **Sonnet 5** is reached only through the three fallback triggers
-(quota-out/unavailable · whole-spec `coder_model: sonnet` pin · terminal verify-failure routing by
-the executor). There is no per-task cost/complexity routing, and the fallback is not a proactive
+(quota-out/unavailable · whole-spec `coder_model: sonnet` pin · HOST-directed terminal verify-failure recovery). There is no per-task cost/complexity routing, and the fallback is not a proactive
 choice. Specs are authored by gpt-6-sol through the wrapper's `-AuthorSpec` (apex-plan, Writing the
-spec; ADR-048). Opus keeps the build-orchestrator and high-risk-reviewer roles; it is not a coder.
+spec; ADR-048). Opus keeps the high-risk Critic role; the Engine owns eligible attended build mechanics.
 
 ## Legacy `coder_tier_policy` / DeepSeek tiers — ARCHIVED (ADR-027)
 The old DeepSeek Flash/Pro tiers and the `flash < pro < codex` cost-routing are archived (recoverable,
@@ -60,7 +59,7 @@ host-direct argument that reduces to "it's smoother" is that bias, and is reject
 
 ## Per-task selection — collapses to a default + manual fallback
 
-The Claude fallback (Sonnet 5) fires on exactly three triggers: (1) Codex quota-out or unavailability; (2) a whole-spec `coder_model: sonnet` pin; (3) terminal verify-failure routing. **No orchestrator executes this path.** The v1 `apex-build-orchestrator` has no fallback action at all: on a quota-out or a terminal verify-failure it emits `park` with what it observed, and the ATTENDED OPERATOR then takes the in-session Sonnet path as a host/owner procedure; on an unattended build the host parks it the same way (ADR-046 D1). Nothing else reaches it.
+The Claude fallback (Sonnet 5) is HOST-directed on the attended manual path: a whole-spec `coder_model: sonnet` pin goes there directly; Codex quota-out or unavailability parks for owner decision on Sonnet fallback. Terminal verify failure or Critic reject goes to HOST for manual repair or an amended-spec Engine run. The Engine never swaps models automatically; unattended builds park for HOST/owner disposition (ADR-046 D1).
 
 - **Default: `codex`** for every task — text and image alike (gpt-5.6-sol is sighted, so the old image gate
   is moot). No cost-tier decision; do not route proactively to the Claude fallback.
@@ -81,19 +80,15 @@ absent unless the spec is clearly off-default.
 - `high` — `risk: high`, auth / security / data / concurrency, or algorithmically hard specs.
 - `xhigh` — explicit opt-in for the hardest async / eval-like work only.
 - `max` — reserve for the single hardest tasks a spec can carry: state migrations, IAM/auth-critical
-  work, gnarly concurrency. Sits above `xhigh`; also the second-highest rung of apex-code's verify-fail
-  recovery ladder.
-- `ultra` — above `max`, and the **final** rung of that ladder before the Claude fallback (Sonnet 5) (ADR-034; there is
-  no higher Codex model to escalate to now that `gpt-5.6-sol` is the coder). Spawns in-model subagents, so
-  it counts **double** against `max_parallel_codex` (ADR-028) — or keep `ultra` tasks sequential/foreground
-  instead of folding them into a parallel wave. Gated on a pending head-to-head eval against `max` that
-  hasn't run yet — **do not select it at spec-authoring time**; let the ladder reach it, or treat a
-  deliberate opt-in as a logged escalation.
+  work, gnarly concurrency. Sits above `xhigh`; accepted as Engine task effort, not an automatic retry rung.
+- `ultra` — above `max`; also accepted as Engine task effort. Spawns in-model subagents, so it counts
+  **double** against `max_parallel_codex` (ADR-028) and must fit the Engine's effective capacity.
+  Gated on a pending head-to-head eval against `max` that hasn't run yet — **do not select it at
+  spec-authoring time**; treat a deliberate opt-in as a logged HOST escalation.
 
 Cheap to dial up: under config-A the build runs on Codex's **separate pool**, so `high` on a hard spec
 barely touches the scarce Anthropic Max pool. Don't blanket-`high` everything — it burns Codex quota faster (→
-earlier Claude fallback). Effort is per-spec; apex-code additionally bumps it one notch on a Codex
-verify-fail retry, up through the final `ultra` rung (ADR-034), before any Claude fallback (build-time, not a planning choice). The `gpt-5.4-mini` cheap
+earlier Claude fallback). Effort defaults per-spec, with manifest task overrides. The Engine accepts `max`/`ultra` task effort, but its automatic verify-fail retry ladder is `low → medium → high → xhigh` and stops there. Beyond that ladder, HOST decides whether to amend task effort and start a new Engine run or use the attended HOST manual path; Sonnet fallback remains an owner decision. The `gpt-5.4-mini` cheap
 model is **deferred** (ADR-030) — do not route tasks to a second model; the dial is the cost lever.
 
 ## Family-aware review routing (when `cross_model_review: true`)
@@ -108,7 +103,7 @@ from the builder at review time.
 
 ## Wave plan emit format
 With a single proactive coder, emit the normal **untagged** `## Wave plan` (every task → Codex). Do not
-tag `▸sonnet` proactively — the Claude fallback is a session-level manual switch, not a per-task tag.
+tag `▸sonnet` proactively — the Claude fallback is a HOST/owner manual decision, not a per-task tag.
 
 ## Splitting a feature across models
 Largely moot with one proactive coder. If a Codex build must hand a frozen-contract slice to the

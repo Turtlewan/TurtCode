@@ -29,7 +29,7 @@ host's job. Everything else dispatches.
 |------|-----|
 | Host -- reason, plan, challenge only | this session (Opus 5.5, medium effort). Dispatches everything below; makes no mechanical edits and writes no code. |
 | Spec author | gpt-6-sol via the wrapper's `-AuthorSpec` (apex-plan, Writing the spec; ADR-048) |
-| Build orchestrator | Opus 5.5 -- the dispatched `apex-build-orchestrator` agent owns the BUILD PHASE of an ATTENDED build: task selection, wave sequencing, dispatch parameters, exit-code routing, verify adjudication, integration order (owner amendment 2026-07-29; v1 shipped 2026-08-02). Close-out and unattended/AFK builds stay HOST-executed per `~/.claude/skills/apex-code/SKILL.md`. |
+| Build (attended) | The Engine (`~/.claude/skills/apex-code/scripts/apex-engine.ps1`) is the default attended route for Engine-eligible specs (single repo, execution manifest, file-disjoint tasks): it owns task selection, wave sequencing, dispatch, exit routing, integrated verify, and integration. Engine-refused specs (no manifest, shared-file tasks, multi-repo, `coder_model: sonnet`, owner-directed escalation/fixes) take the attended HOST manual path in `~/.claude/skills/apex-code/references/parallel-codex.md`. Close-out (Critic, Scribe, family gate, docs, owner-approved commit, then proof-gated `-Teardown`) is HOST-executed per `~/.claude/skills/apex-code/SKILL.md`. Unattended/AFK builds stay on the HOST path. |
 | Coder | Codex `gpt-5.6-sol` -- dispatched per task as a `codex exec` subprocess (own auth, own quota; spends none of the Anthropic pool). Fallback on quota-out: Sonnet 5. |
 | Checker | Claude `apex-critic` serves both `mode: spec` and `mode: code`. Every Agent tool dispatch passes `model: sonnet` for Low, Medium, and doc-only reviews or `model: opus` for High; the Agent tool's `model:` parameter takes precedence over the agent file's default frontmatter `model: sonnet`. Both Sol reads (the pre-draft architecture pass and post-readiness cold read) run only for Deep Details specs at Medium or High risk; Low, doc-only, Light, and Bug Fix skip them. Codex-built code gets no extra Sol cross-family pass. An agent never reviews its own output. |
 
@@ -37,10 +37,12 @@ The session model is Opus 5.5 at medium effort. A dispatch that omits
 `model:` inherits it -- always pin the model explicitly; never use fork-type subagents for
 mechanical work (forks always inherit the session model).
 
-Tightened 2026-07-29 (ADR-046 D1): the host's build-time role is mechanics only -- launching and
-monitoring subprocesses strictly from the orchestrator's wave plan, executing the git operations it
-directs (worktree commit, path-scoped integration, the user-approved per-spec commit), and
-returning status/exit codes. Task selection, sequencing, routing, verification adjudication, and retries are orchestrator-owned. V1 (shipped 2026-08-02): on an ATTENDED build those duties run inside the dispatched `apex-build-orchestrator` agent, which emits one directive per turn and executes nothing; CLOSE-OUT -- the review chain, the docs agents, the family gate, spec archival -- is HOST-executed per `~/.claude/skills/apex-code/SKILL.md` and is not in that agent's protocol; and an UNATTENDED/AFK build keeps the current host path until v2.
+Tightened 2026-07-29 (ADR-046 D1); Stage 5 cutover 2026-10-07 (ADR-048): the host's build-time role is mechanics,
+status reading, and decisions -- on the Engine path the host runs the Engine, reads `engine-state` status and diagnosis
+(or the console `Engine refused:` message when no state exists), and makes owner/escalation decisions; on the HOST manual
+path (Engine-refused specs and AFK) the host performs the structural wave checks, dispatches through the wrapper,
+adjudicates verify, and integrates. CLOSE-OUT -- Critic, Scribe, family gate, docs agents, owner-approved commit, then
+proof-gated Engine teardown -- is HOST-executed per `~/.claude/skills/apex-code/SKILL.md` on both paths.
 
 ## The three files (ADR-037)
 

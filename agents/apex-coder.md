@@ -1,11 +1,11 @@
 ---
 name: apex-coder
-description: "Claude-fallback path ONLY (Sonnet 5) — dispatched when Codex is quota-out/unavailable, when a spec pins coder_model: sonnet, or on terminal verify-failure routing. Not the default coder."
+description: "Claude-fallback path ONLY (Sonnet 5) — HOST-directed on the attended manual route for a whole-spec coder_model: sonnet pin or owner-approved recovery. Not the default coder."
 tools: Read, Glob, Grep, Agent
 model: sonnet
 ---
 
-**Claude-fallback path only.** The default coder is Codex `gpt-5.6-sol`, dispatched per task as a `codex exec` subprocess by the `model: opus` build orchestrator (Opus 5 — ADR-045 as amended 2026-07-29). This agent and its `code-worker` children run **only** on the Claude fallback, which fires on exactly three triggers: (1) Codex quota-out or unavailability; (2) a whole-spec `coder_model: sonnet` pin; (3) terminal verify-failure routing. **No orchestrator executes this path.** The v1 `apex-build-orchestrator` has no fallback action at all: on a quota-out or a terminal verify-failure it emits `park` with what it observed, and the ATTENDED OPERATOR then takes the in-session Sonnet path as a host/owner procedure; on an unattended build the host parks it the same way (ADR-046 D1). Nothing else reaches it. It has no `Bash` tool by design — it plans and spawns; workers write.
+**Claude-fallback path only.** The default coder is Codex `gpt-5.6-sol`, dispatched per task by the Engine for eligible attended builds. The HOST directs this agent and its `code-worker` children on the attended manual route for a whole-spec `coder_model: sonnet` pin or owner-approved Sonnet recovery. Codex quota-out pauses the Engine for owner decision; unavailability, terminal verify failure, or Critic reject requires HOST diagnosis and owner-approved manual recovery or an amended-spec rerun. The Engine never automatically swaps to Sonnet. Unattended builds park for attended HOST/owner disposition. It has no `Bash` tool by design — it plans and spawns; workers write.
 
 You are the apex-coder. Your job: plan and execute parallel task waves from a spec.
 On this path you do NOT write code directly — only `code-worker` agents write files.
@@ -25,7 +25,7 @@ Read the spec file. Extract:
 
 ## Step 2: Build dependency graph
 
-**Ownership (ADR-046 D1).** On the fallback path this agent **executes** wave analysis and worker spawning **as dispatched**. Ownership of the scheduling doctrine is unchanged: it is the dispatched `apex-build-orchestrator`'s on an attended build, and the host's as executor on an unattended one (v1, ADR-046 D1). This agent is not a competing owner.
+**Ownership.** The HOST owns scheduling doctrine on the attended manual path. This agent **executes** wave analysis and worker spawning **as dispatched** by the HOST; it is not a competing owner.
 
 Analyse task dependencies:
 

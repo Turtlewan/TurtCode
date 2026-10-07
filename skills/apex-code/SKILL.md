@@ -1,6 +1,6 @@
 ---
 skill: apex-code
-version: 2.21.0
+version: 2.22.0
 last_updated: 2026-10-06
 sources:
   - docs/technical/adr/ADR-027-codex-primary-opus-fallback-deepseek-archived.md
@@ -17,9 +17,9 @@ sources:
   - docs/technical/adr/ADR-048-role-redesign.md
 staleness_threshold: 30d
 description: >
-  APEX build workflow — executes docs/changes/ specs: pre-flight, wave-parallel Codex
-  dispatch, verify loop vs AGENTS.md, forks, post-build review. Codex `gpt-5.6-sol` is
-  the coder; Sonnet 5 fallback. Loads when building a spec.
+  APEX build workflow — executes docs/changes/ specs: attended Engine builds, HOST
+  manual/AFK dispatch, verify vs AGENTS.md, forks, HOST close-out. Codex `gpt-5.6-sol`
+  is the coder; owner-approved Sonnet 5 fallback. Loads when building a spec.
 ---
 
 # APEX Build Workflow
@@ -56,15 +56,27 @@ not ambient project docs.
 - **`coder_effort`** frontmatter `{low|medium|high|xhigh|max|ultra}`, default `medium`.
 - AFK build → capture `run_base_sha = git rev-parse HEAD` now (for the end-gate).
 
-## Wave analysis
+## Engine path (default, attended)
 
-**Who does this (ADR-046 D1) — v1.** Wave grouping, dispatch sequencing, and completion routing are **orchestrator-owned**. On an **ATTENDED** build they are performed by the dispatched `apex-build-orchestrator` agent (`~/.claude/agents/apex-build-orchestrator.md`), whose protocol shapes are normative in `references/orchestrator-protocol-schema.json`; the analysis below is what that agent applies, and you execute its plan. On an **UNATTENDED (AFK)** build the agent is not dispatched and you perform this analysis yourself until v2. **CLOSE-OUT is host-executed on every build** — § Post-build below is canonical for it, and the agent's terminal `complete` directive is what hands it over. **"Raw results" throughout this skill means the bounded fixed result fields — exit code, `.final` fields, a bounded verify tail, porcelain output — unadjudicated; never a transcript or a whole log.** Getting them to the agent is host mechanics, in three parts.
+Eligible attended builds use the Engine: one repo, an execution manifest, file-disjoint tasks, and Codex. No manifest, shared-file tasks, multi-repo, `coder_model: sonnet`, or owner-directed escalation/fixes use the attended HOST manual path (`references/parallel-codex.md`). AFK/unattended uses HOST mechanics below.
 
-**(1) Event pass-through, not reconstruction.** At a **BUILD-PHASE terminal the wrapper writes the event file itself** and prints one `[event] <path>` line (§ Events). You READ that file, validate it against the `$def` its `kind` names, and pass it through **unchanged**: no field is re-derived from stdout, from a log, or from a filename, and the `truncated` array the producer wrote is already the record of what it cut. A file that fails validation, or a terminal that printed no `[event]` line, is a wrapper defect — surface it; do not patch the event by hand. **Reconstruction from stdout, the ledger row and `.final` survives in exactly two places:** review-phase results, and any terminal named on the **emission exclusion list** — the kinds that have no producer yet (`reviewer_result`, `family_gate_result`, `agent_result`, `integration_verify`) — until v2 gives them one.
+```powershell
+& "$env:USERPROFILE\.claude\skills\apex-code\scripts\apex-engine.ps1" -SpecPath <absolute> -Repo <absolute> -Attended -MaxParallel 2
+```
 
-**(2) Deterministic structural validation** — host-only, because none of it is expressible in JSON Schema. Run it over the wave plan before any wave launches, and over every turn: **(a) cap arithmetic** — a wave's slot count, an `ultra` task counting double, must not exceed `max_parallel_codex`, **and the TOTAL task count summed across every wave must not exceed 64** (the schema caps `waves` at 64 and each wave's `tasks` at 16 *independently*, which alone would admit a 1024-task plan; JSON Schema cannot multiply, so this arithmetic is yours) — rule `structural-cap`. **(b) File-disjointness, per-repo** — within a wave, no task's `authorized` path may **EQUAL**, be an **ANCESTOR** of, or be a **DESCENDANT** of another task's, so a directory and a file inside it collide exactly as two identical paths do; the comparison is per-repo, so equal relative paths in two different repos do NOT collide — rule `structural-disjointness`. **(c) `authorized` ⊆ `## Files to Change`** — every task's authorized set is a subset of the spec's table, both reduced to the same repo-relative form first (`authorized` is worktree-relative, the spec's rows absolute) — rule `structural-authorized-outside-spec`. **(d) Executability minimums** — no empty `authorized` set (the schema's `minItems: 1` refuses it first, and the wrapper would refuse it downstream as **exit 74**), no empty `repos`, no empty `waves`, no empty wave. **(e) Repo referential integrity** — every task's `repo` EQUALS one of that same plan's `repos[].repo` values, and every `repos[].verify_contract` is an **absolute path that exists on disk**; JSON Schema can neither cross-reference one part of an instance from another nor touch the filesystem, so this check is the mechanism. **(f) Terminal arithmetic on an `adjudication`** — **at most ONE `complete` per turn**, and **no `complete` at all** while any task still lacks a terminal verdict, while ANY task is **PARKED**, while any task's `build_state.tasks[].integration.ok` is anything other than `true`, or while any task's `integration.tree_digest` is `null` or `"unverifiable"` rather than hex (an unpinned tree needs `request_verify` first, then `park` if it comes back unpinned again) — and no two items naming the same `task_id` in one turn. **(g) Schema validation of the turn itself** — **exactly one** fenced JSON block per turn, parsing as JSON, its `kind` one of the two declared output kinds, validating against that `$def` in `references/orchestrator-protocol-schema.json`; the schema file is the chokepoint and the fenced examples in the agent file are not. A malformed turn is refused with rule **`structural-malformed-output`** and re-asked once; a second failure escalates to the fresh-instance rung. Every violation returns a **null-`exit_code` refusal** naming its rule, so the only responses are re-plan or `park`; none of it re-routes a decision or reads the agent's reasoning.
+Use `-MaxParallel 1` for `risk: high`. Read the run's `engine-state.json` **status and diagnosis** whenever it exists. With no state, use console `Engine refused: <message>` as the diagnosis; fix the inputs/spec or take the attended HOST manual path.
 
-**(3) Build-state persistence:** carry the `build_state` block across turns and resume the agent with it verbatim. None of the three is a judgement call.
+- **Exit 0:** Engine build/hand-off complete; HOST close-out pending. Run § Post-build Critic/Scribe/family gate/docs close-out against the integrated tip, using fresh worktrees where those steps require them. Obtain the owner-approved commit so main HEAD equals the integration tip and working files match it; only then run proof-gated `apex-engine.ps1 -Teardown <runId>`.
+- **Exit 1:** refused/parked/failed/partial/quota-paused, distinguished by state when present (`paused` plus quota diagnosis means quota-paused). Diagnose, adjust the spec or seek owner disposition; apply § Forks as HOST actions. No automatic Sonnet swap: quota fallback requires owner approval and uses the attended HOST manual path.
+- **Exit 2:** `awaiting-review`, only for `risk: high` specs. Run Opus Critic for the integrated wave, binding its record to that wave's review tree digest, then invoke `apex-engine.ps1 -Resume <runId> -ReviewVerdict clean|reject -ReviewDigest <64 lowercase hex> -ReviewRecord <existing absolute path outside every Git worktree>`. An `awaiting-review` run resumes only with all three review flags together; bare `-Resume` is refused; the record must be a normalized absolute path to a strict UTF-8 file. Rejection parks; HOST fixes manually or starts an amended-spec run.
+
+An unchanged spec in a parked/paused run resumes with `apex-engine.ps1 -Resume <runId>` (pending review still requires the three review flags). An amended spec starts a **new run**, only after the parked run's partial work is inspected and discarded via `apex-engine.ps1 -Teardown <runId> -Discard` when permitted; never amend a live run's immutable plan. Discard teardown is for non-complete runs and refuses live children/non-terminal ledger rows; successful complete teardown requires hand-off and commit proof, without `-Discard`.
+
+## Wave analysis — HOST manual/AFK path
+
+**Who does this:** the Engine owns eligible attended grouping, sequencing, integration, verification and completion routing. The **HOST** performs these mechanics for AFK/unattended and Engine-refused manual builds; **HOST close-out applies on every path** (§ Post-build). Raw results are bounded exit codes, `.final` fields, verify tails and porcelain output, never whole logs. Read producer events unchanged (§ Events); surface missing/malformed events rather than reconstructing or patching them.
+
+**Deterministic structural checks — HOST-performed** before any manual/AFK wave launches and at each adjudication: **(a) Cap arithmetic** — wave slots must not exceed `max_parallel_codex` (default 2; risk:high sequential), `ultra` counts double, and total tasks across all waves must not exceed **64**. **(b) Per-repo authorized-path disjointness** — no path may EQUAL, be an ANCESTOR of, or be a DESCENDANT of another task's path within a wave; equal relative paths in different repos do not collide. **(c) `authorized` ⊆ `## Files to Change`** — reduce both to the same repo-relative form first. **(d) Executability minimums** — no empty authorized set (wrapper exit 74), repos, waves or wave. **(e) Repo and verify-contract integrity** — each task's repo must equal a declared repo; each repo's verify contract must be an existing absolute path. **(f) Terminal adjudication arithmetic** — at most one complete per turn and no duplicate task IDs; no completion while any task lacks a terminal verdict, is PARKED, lacks successful integration, or lacks a valid hex integration tree digest (including null/unverifiable). Request verify for an unpinned tree, then park if still unpinned. A violation requires HOST re-plan or park; retain build state across manual/AFK turns.
 
 Two tasks may run in parallel iff `writes(A) ∩ writes(B) = ∅` **and** neither writes what the other
 reads **and** they share no exclusive resource.
@@ -150,7 +162,7 @@ Four things are load-bearing, and each has already broken a real build when done
    coder). See AGENTS.md's optional **`## Build outputs`** for committed declarations of ignored,
    untracked verify outputs; undeclared or tracked paths remain checked. Engine integration still
    parks on ignored output directories until `engine-build-output-residue` ships — use the attended
-   HOST Bash fallback in `references/parallel-codex.md` for those repos.
+   HOST manual integration procedure in `references/parallel-codex.md` for those repos.
 3. **Durability** — run ledger, no-output watchdog, `-Adopt` recovery after a host crash.
 4. **The verdict.** The wrapper reads the coder's own `.final` report and **fails on `blocked`**.
    Hand-rolled, you get an exit code — and the exit code lies: Codex exits **0** while its report
@@ -268,9 +280,10 @@ defensively, but pass it properly.
 
 **Parallel Codex** (2+ independent `▸codex` tasks) → `references/parallel-codex.md`.
 
-**Fallback:** `codex --version` fails, or quota is exhausted mid-run → the task falls back to
-**Sonnet 5**, a fresh `model: sonnet` worker in this session (A1, session-79b: the coding fallback no longer draws the scarce Opus pool; Opus keeps the build-orchestrator and high-risk-reviewer roles; specs are authored by gpt-6-sol (ADR-048)). Logged, never silent. No backend swap, no
-relaunch (ADR-038). Whole-spec pin: `coder_model: {codex|sonnet}` (A1). The enum is exactly those two values.
+**Fallback:** `codex --version` fails or quota is exhausted mid-run → park for owner disposition.
+Owner-approved **Sonnet 5** recovery uses a fresh `model: sonnet` worker on the attended HOST manual
+path, logged, never silent. No backend swap or relaunch (ADR-038). Whole-spec pin:
+`coder_model: {codex|sonnet}`; `sonnet` goes directly to attended HOST manual, never the Engine.
 
 ## Events
 
@@ -278,17 +291,15 @@ Build-phase wrapper terminals write v1 `dispatch_result` and `refusal` files und
 `%APEX_STATE_DIR%\events` (or the wrapper's normal machine-local APEX state root). The wrapper prints
 `[event] <full path>` after a successful write. Read that file as the durable producer record; do not
 reconstruct it from console output. Its contract is
-`references/orchestrator-protocol-schema.json`.
+`references/engine-event-schema.json`.
 
 ## Verify
 
 The recipe is the repo's **`AGENTS.md` → `## Verify commands`** (ADR-037), and that is its only home — there is no spec-side fallback section. Absent a recipe, the pre-dispatch pre-flight refuses the build with **exit 72** before launch — you cannot write the recipe from inside a build. Recovery: **the HOST authors `## Verify commands` into AGENTS.md attended** (root AGENTS.md is critical host state — live confirmation required, AFK parks), then re-dispatches. `-SkipBaselineCheck` is the bootstrap escape and is host-authorized only.
 
-**Two cadences, both required, and the ownership is split three ways.** (a) *During build:* the coder runs the recipe inside its own isolated worktree, per task, and iterates to green — that is its job under AGENTS.md and the dispatch pack. (b) *Authoritative pass:* the recipe is re-run after the task's changes are in the integration tree — per task for a sequential build, once on the integrated wave for a parallel one (`references/parallel-codex.md`). Ownership is split (ADR-046 D1). The host EXECUTES the recipe as mechanics from the orchestrator's wave plan and returns the raw results; the ORCHESTRATOR owns the pass/fail adjudication and the routing that follows. The coder's own pass never satisfies the gate: **the coder does not judge its own output**, and neither the host nor the coder adjudicates (evaluator independence). Executing the recipe, the per-task worktree commit, the path-scoped integration, and the approved per-spec commit are all **host mechanics** — executions taken from the wave plan, not decisions about it.
+**Two cadences, both required.** (a) *During build:* the coder runs the repo recipe in its isolated worktree per task and iterates to green. (b) *Authoritative pass:* re-run it in the integration tree, per task for sequential builds, once on the integrated wave for parallel builds (`references/parallel-codex.md`). **Engine executes and adjudicates verify pass/fail on the Engine path; HOST executes and adjudicates on the manual/AFK path**, owning subsequent routing. The coder's own pass never satisfies this gate: the coder does not judge its own output. HOST owns the approved per-spec commit and close-out on both paths.
 
-**On failure, escalate in order**, logging each rung: bump `coder_effort` one notch → … → `max` →
-`ultra` → **Sonnet 5** (fresh `model: sonnet` worker — A1/ADR-045). `ultra` is the only place it fires automatically, and it is
-un-evaled — first rung to cut if the eval disappoints (see status.md).
+**On failure:** the Engine accepts `max`/`ultra` task effort, but its automatic retry ladder stops at `xhigh`. Beyond that ladder, **HOST decides** whether to amend task effort and start a new Engine run (after the inspection/discard boundary above), or use the attended HOST manual path. Log each escalation; Sonnet quota fallback requires owner approval, never an automatic Engine model swap.
 
 ### Baseline-green commit hook and dispatch pre-flight (M2a/M2b)
 
@@ -317,6 +328,8 @@ It runs the dedicated `AGENTS.md → ## Preflight commands` block when present, 
   already places in the verify recipe.
 
 ## Forks — when the spec is wrong
+
+These are **HOST actions**, including Engine parks/exit 1; the Engine does not resolve planning defects or GRAY calls.
 
 - **Assumption wrong / file not where the spec says** → build in the real place and **flag loudly**:
   "spec said X, built at Y — review needed ⚠️". Never create a decoy file to make the spec

@@ -1,7 +1,7 @@
 ---
 skill: apex-plan
-version: 2.7.1
-last_updated: 2026-10-05
+version: 2.8.0
+last_updated: 2026-10-06
 sources:
   - docs/technical/adr/ADR-010-multi-pass-review.md
   - docs/technical/adr/ADR-011-instinct-loop-no-engine.md
@@ -225,9 +225,11 @@ verify-fence checks. Exact-line manifests and whole-tree hashes are reserved for
 
 **`## Wave plan`** (specs with â‰¥3 tasks): derive a **PROPOSED** wave plan from the *stated*
 dependencies â€” `Wave 1: [1, 2] | Wave 2: [3]`. The **dependencies are binding**; the **grouping is advisory**.
-Final task selection and sequencing are **orchestrator-owned** — the dispatched `apex-build-orchestrator` on an attended build, the host as executor on an unattended one (ADR-046 D1). Do the analysis here so the
-executor has a defensible starting point, not so it is spared judgement. Independence you can't
-establish â†’ sequential.
+Prefer Engine-compatible, manifest-backed, file-disjoint single-repo specs where they fit; this
+shape is not required. The **Engine** determines task selection and sequencing for eligible
+attended specs from manifest `depends_on`; **HOST** schedules the manual path for refused specs
+and executes unattended builds. Do the analysis here so HOST has a defensible starting point.
+Independence you can't establish means sequential.
 
 **Frontmatter levers:** `coder_effort: {low|medium|high|xhigh|max|ultra}` (default `medium`; `high`
 for risk:high/auth/security/data) Â· `coder_model: {codex|sonnet}` pins a whole spec Â·

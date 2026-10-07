@@ -110,8 +110,9 @@ Simplicity check: {considered simpler approach? yes/no — if yes, why this vers
 
 ## Wave plan
 <!-- Required for specs with ≥3 tasks. Planning derives this from stated dependencies. The emitted
-     plan is a PROPOSAL: dependencies are binding, grouping is advisory, and final selection and
-     sequencing are orchestrator-owned (ADR-046 D1). Tasks in the same proposed wave run in parallel.
+     plan is a PROPOSAL: grouping is advisory; manifest depends_on is authoritative to the Engine
+     for eligible specs. HOST schedules the attended manual path for refused specs. Parallel tasks
+     must be file-disjoint; risk:high runs sequentially on both paths.
      Under ADR-027 as amended (A1/ADR-045) the coder is Codex by default for every task (Sonnet 5 is the
      fallback, reached only via the three fallback triggers and handled at build time by apex-code) — emit
      the normal untagged wave plan; don't tag ▸sonnet
