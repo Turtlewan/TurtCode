@@ -38,17 +38,15 @@ it into the worktree.
 `max` and `ultra` are server-validated-accepted; a bogus value is rejected). Semantics above `xhigh`:
 
 - **`max`** — reserve for the hardest *single* tasks: state migrations, IAM/auth-critical work, gnarly
-  concurrency. The second-highest rung of the verify-fail recovery ladder (`medium→high→xhigh→max`).
-- **`ultra`** — the **final** rung of the verify-fail ladder, above `max` (ADR-034). Reached only when
-  `max` has already failed verification; then the Sonnet 5 fallback (quota-out cases skip straight to Sonnet 5 —
-  the Codex pool is dead — see § Model-routing dispatch in SKILL.md).
-  `ultra` spawns in-model subagents, so token usage multiplies — codex 0.144 warns about concurrency at
+  concurrency.
+- **`ultra`** — spawns in-model subagents, so token usage multiplies — codex 0.144 warns about concurrency at
   ultra effort. Because of that multiplier, an `ultra` task counts **double** against `max_parallel_codex`
   (ADR-028) — or run `ultra` tasks sequential/foreground instead of folding them into a parallel wave.
-  **Never a default `coder_effort`, and never reached except as that last automatic rung** — a spec that
-  *starts* a task at `ultra` is a deliberate, logged escalation, not routine. Its worth against `max` is
-  still gated on a head-to-head eval that has not yet run: ADR-034 promoted it on structural grounds (it is
-  the only rung between `max` and the Claude fallback (Sonnet 5)), so if the eval disappoints, cut this rung first.
+  **Never a default `coder_effort`.** `ultra` remains unproven against `max` pending a head-to-head eval.
+
+The Engine's automatic retry ladder stops at `xhigh`. Beyond `xhigh`, **HOST decides** whether to amend
+task effort and start a new Engine run or use the attended HOST manual path; log each escalation. Sonnet
+fallback, including quota-out, requires OWNER approval and is never an automatic Engine model swap.
 
 The old Sol model rung (ADR-032) is **gone**: `gpt-5.6-sol` *is* the coder now (ADR-034), so there is no
 higher Codex model to escalate to — the dial is the whole ladder.
