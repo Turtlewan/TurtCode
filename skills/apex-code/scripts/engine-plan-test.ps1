@@ -845,6 +845,88 @@ try {
             $task.prompt.Contains('powershell.exe -NoProfile -File exact-two.ps1') -and
             $task.prompt_digest -eq (Get-EngineSha256 -Text $task.prompt)
     }
+    $vectors = Get-Content -LiteralPath (Join-Path (Split-Path -Parent $PSScriptRoot) 'references/accept-grammar-vectors.json') -Raw | ConvertFrom-Json
+    foreach ($vector in $vectors) {
+        Assert-Case ('shared acceptance grammar: ' + $vector.text) {
+            $refused = @(Get-EngineAcceptanceGrammarRefusals $vector.text).Count -gt 0
+            return $refused -eq ($vector.expected -ceq 'refuse')
+        }
+    }
+    Assert-Case 'tagged criterion binding IDs verbatim HOST text labels and prompt' {
+        $fixture = New-Fixture
+        $acceptanceText = @'
+- [X] Task 1 - tagged fixture
+```powershell apex-accept
+Write-Output 'task one'
+exit 0
+```
+- [ ] unlabelled spec fixture
+```powershell apex-accept
+Write-Output 'spec check'
+```
+- [ ] Task 1 - retained HOST criterion
+  retained continuation
+- [ ] Task 9 - HOST-only criterion
+```powershell
+Set-Location C:/untagged
+```
+'@
+        $acceptanceText = $acceptanceText.Replace('retained HOST criterion', 'retained HOST criterion  ')
+        $text = [IO.File]::ReadAllText($fixture.Spec)
+        $text = [regex]::Replace($text, '(?ms)(## Acceptance Criteria\n).*?(?=\n## Progress)', ('$1' + $acceptanceText + "`n"))
+        $text += "`n## Other`n``````powershell apex-accept`nSet-Location C:/outside`n```````n"
+        Write-Utf8 $fixture.Spec $text
+        $plan = Invoke-Plan $fixture
+        if (-not $plan.allowed) { throw $plan.refusal }
+        $check = $plan.waves[0].tasks[0].acceptance_checks[0]
+        return $check.id -ceq '1-1' -and $check.task -ceq '1' -and $check.label -ceq '- [X] Task 1 -' -and
+            $check.body -ceq "Write-Output 'task one'`nexit 0" -and
+            $plan.spec_acceptance_checks[0].id -ceq 'spec-1' -and $null -eq $plan.spec_acceptance_checks[0].task -and
+            $null -eq $plan.spec_acceptance_checks[0].label -and @($plan.host_checks).Count -eq 2 -and
+            $plan.host_checks[0].text -ceq "- [ ] Task 1 - retained HOST criterion  `n  retained continuation" -and
+            $plan.host_checks[0].label -ceq '- [ ] Task 1 -' -and
+            $plan.host_checks[1].text.Contains('Set-Location C:/untagged') -and
+            $plan.waves[0].tasks[0].prompt.Contains("``````powershell apex-accept`n$($check.body)`n``````")
+    }
+    foreach ($label in @('Task 1 and Task 2', 'Task 12', 'Task 9 (HOST)')) {
+        Assert-Case ('tagged leading label refusal: ' + $label) {
+            $fixture = New-Fixture
+            $text = [IO.File]::ReadAllText($fixture.Spec)
+            $criterion = "- [ ] $label - bad binding`n``````powershell apex-accept`nexit 0`n```````n"
+            Write-Utf8 $fixture.Spec ([regex]::Replace($text, '(?ms)(## Acceptance Criteria\n).*?(?=\n## Progress)', ('$1' + $criterion)))
+            $plan = Invoke-Plan $fixture
+            return -not $plan.allowed -and $plan.refusal -match '(unknown manifest task|compound or invalid task label)'
+        }
+    }
+    Assert-Case 'tagged valid HOST task label absent from execution manifest refuses' {
+        $fixture = New-Fixture
+        $text = [IO.File]::ReadAllText($fixture.Spec)
+        $text = $text.Replace('## Wave plan', "- [ ] **Task 9 (HOST)** - owner review.`n`n## Wave plan")
+        $criterion = "- [ ] Task 9 - HOST review`n``````powershell apex-accept`nexit 0`n```````n"
+        Write-Utf8 $fixture.Spec ([regex]::Replace($text, '(?ms)(## Acceptance Criteria\n).*?(?=\n## Progress)', ('$1' + $criterion)))
+        $plan = Invoke-Plan $fixture
+        return -not $plan.allowed -and $plan.refusal -ceq 'tagged acceptance check has unknown manifest task: 9'
+    }
+    Assert-Case 'only exact tag and actual Acceptance Criteria heading execute' {
+        $text = @'
+```markdown
+## Acceptance Criteria
+```powershell apex-accept
+Set-Location C:/fake
+```
+## Acceptance Criteria
+- [ ] ordinary criterion
+```PowerShell apex-accept
+Set-Location C:/untagged
+```
+- [ ] also ordinary
+```powershell apex-accept extra
+Set-Location C:/untagged
+```
+'@
+        $parsed = Get-EngineAcceptanceLines $text -ManifestIds @('1')
+        return @($parsed.checks).Count -eq 0 -and @($parsed.host_checks).Count -eq 2
+    }
     Assert-Case 'JSON CLI emits the pinned object' {
         $fixture = New-Fixture
         $savedEap = $ErrorActionPreference

@@ -1,6 +1,6 @@
 # APEX specification validation contract
 
-Contract version: **1.1.0**
+Contract version: **1.2.0**
 
 This reference describes the mechanical contract enforced by `apex-spec-validate.ps1`. It is not a substitute for the planning workflow's judgment checks.
 
@@ -15,7 +15,7 @@ The rationale and consumer split are recorded in [ADR-040](~/apex/docs/technical
 
 ## Fixed checks and findings
 
-The validator runs these five checks in this fixed order. Findings use the labels shown exactly:
+The validator runs these six checks in this fixed order. Findings use the labels shown exactly:
 
 ```text
 1. FAIL FILES-COMPLETENESS
@@ -23,6 +23,7 @@ The validator runs these five checks in this fixed order. Findings use the label
 3. FAIL TASK-CRITERIA-COVERAGE
 4. FAIL STRUCTURE
 5. FAIL EXEC-MANIFEST
+6. FAIL ACCEPTANCE-CHECK
 ```
 
 Fenced code-block content is excluded from the original four checks. `EXEC-MANIFEST` instead reads the single fence in the optional `## Execution manifest` section. Prose, tables, and inline-code spans outside fences remain visible to the applicable checks. A fence may use backticks or tildes, but its closer must use the same character, be at least as long as the opener, and have no trailing content other than spaces. An unterminated code fence is itself a `STRUCTURE` failure.
@@ -119,6 +120,18 @@ The validator classifies each recognized bold Tasks declaration from its title. 
 For every coder task, the nonempty set of paths after its last `files:` marker must equal that task's manifest `files` set after resolving relative paths through the task's repo root; comparison is by canonical, case-insensitive absolute identity. Every manifest file must appear in Files to Change with the same case-sensitive operation. Every Files-to-Change row must use a canonical absolute or repo-relative path and one of the same three exact lowercase operations, and its file must be owned either by a coder manifest task or exclusively outside the manifest by a host/owner task's `files:` list. An absolute Files-to-Change path is matched directly. A relative row is accepted only when its full repo-relative path identifies exactly one owned path across the declared repo roots; suffix-only matching is never used, and an orphaned or ambiguous row fails.
 
 Each manifest task's repo key must resolve. Every dependency must resolve to a coder task ID, self-dependencies and longer cycles are rejected, and the resulting `depends_on` graph must be acyclic. `depends_on` is the machine dependency source; `## Wave plan` remains human-readable.
+
+## Tagged acceptance checks
+
+Only fences under the exact `## Acceptance Criteria` heading whose complete, case-sensitive info string is `powershell apex-accept` opt in. Surrounding fence whitespace is trimmed; both backtick and tilde fences use the normal fence rules. Untagged fences and fences in other sections are excluded from this check.
+
+The immediately preceding criterion line binds a block to a task only with the exact leading label `^- \[[ xX]\] Task (\d+[a-z]?) -`. Its ID must occur in the execution manifest (case-insensitive identity); HOST tasks outside the manifest cannot bind. A leading task label with a compound or malformed ID is refused. An unlabelled criterion binds to spec level; labels mentioned later in prose do not bind.
+
+The safety grammar inspects PowerShell command tokens, including whole single- or double-quoted argument values with their outer quotes removed. It refuses tokens beginning a drive-letter path (`X:\` or `X:/`, any letter), a UNC path (`\\`), or `/`. Quote-delimited operands of `-match` or `-notmatch` (including explicit case variants) are regex patterns, not path tokens. It refuses `cd`, `Set-Location`, and `Push-Location` case-insensitively only as whole command names in command position, including statement/pipeline operators and invocation with `&`. Incidental command words in strings or arguments are accepted. Comments are not command tokens. Shared examples are the array of `{ "text": string, "expected": "accept"|"refuse" }` entries in `accept-grammar-vectors.json`.
+
+`FAIL ACCEPTANCE-CHECK` reports each prohibited path token or location command, compound/malformed leading task label, or unknown manifest task ID, with the fence line number. This finding follows `EXEC-MANIFEST` and does not affect legacy untagged content.
+
+Tagged checks are trusted author-written, Critic-reviewed, owner-promoted spec content. They run unsandboxed with integration-root cwd and the same trust as the `AGENTS.md` verify fence. The grammar guards accidents rather than confines execution. Tree/index movement or residue parks the run without restoration. Checks must throw on failed assertions, including explicit `$LASTEXITCODE` tests after native commands (for example, `if ($LASTEXITCODE -ne 0) { throw 'native check failed' }`). A check's `exit` ends its child process, not the Engine process.
 
 ## Changing the contract
 

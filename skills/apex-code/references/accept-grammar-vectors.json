@@ -1,0 +1,102 @@
+[
+  {
+    "text": "Get-Content src/check.ps1",
+    "expected": "accept"
+  },
+  {
+    "text": "Get-Content './src/check.ps1'",
+    "expected": "accept"
+  },
+  {
+    "text": "Get-Content \"src/check.ps1\"",
+    "expected": "accept"
+  },
+  {
+    "text": "Get-Content C:/repo/file",
+    "expected": "refuse"
+  },
+  {
+    "text": "Get-Content Z:\\repo\\file",
+    "expected": "refuse"
+  },
+  {
+    "text": "Get-Content \\\\server\\share",
+    "expected": "refuse"
+  },
+  {
+    "text": "Get-Content /root/file",
+    "expected": "refuse"
+  },
+  {
+    "text": "Get-Content 'C:/repo/file'",
+    "expected": "refuse"
+  },
+  {
+    "text": "Get-Content \"D:\\repo\\file\"",
+    "expected": "refuse"
+  },
+  {
+    "text": "Get-Content '\\\\server\\share'",
+    "expected": "refuse"
+  },
+  {
+    "text": "Get-Content \"/root/file\"",
+    "expected": "refuse"
+  },
+  {
+    "text": "$s -match '/root'",
+    "expected": "accept"
+  },
+  {
+    "text": "$s -notmatch \"C:/repo\"",
+    "expected": "accept"
+  },
+  {
+    "text": "$s -cmatch '\\\\server'",
+    "expected": "accept"
+  },
+  {
+    "text": "cd src",
+    "expected": "refuse"
+  },
+  {
+    "text": "Set-Location src",
+    "expected": "refuse"
+  },
+  {
+    "text": "push-location src",
+    "expected": "refuse"
+  },
+  {
+    "text": "& 'Set-Location' src",
+    "expected": "refuse"
+  },
+  {
+    "text": "Write-Output ok | Set-Location src",
+    "expected": "refuse"
+  },
+  {
+    "text": "Write-Output ok; CD src",
+    "expected": "refuse"
+  },
+  {
+    "text": "Write-Output cd Set-Location Push-Location",
+    "expected": "accept"
+  },
+  {
+    "text": "Write-Output 'cd Set-Location Push-Location'",
+    "expected": "accept"
+  },
+  {
+    "text": "# cd /root\nWrite-Output ok",
+    "expected": "accept"
+  },
+  {
+    "text": "Write-Output 'prefix C:/repo'",
+    "expected": "accept"
+  },
+  {
+    "text": "if ($true) { Push-Location src }",
+    "expected": "refuse"
+  }
+]

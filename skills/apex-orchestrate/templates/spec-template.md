@@ -29,7 +29,7 @@ autonomy_level: L2
 ---
 
 # Spec: {title}
-<!-- Governing contract: references/spec-contract.md (the validator's contract doc owns the version; never restate a number here). -->
+<!-- Governing contract: ~/.claude/skills/apex-code/references/spec-contract.md (the validator's contract doc owns the version; never restate a number here). -->
 
 **Identity:** {one line — what this builds, for routing/review/recall. NOT rationale.}
 <!-- Optional, on its own line: → why: see docs/technical/adr/ADR-NNN-*.md (a pointer, never the content). -->
@@ -172,6 +172,23 @@ docs/audit/ is different and stricter: TIER-1, refused outright on a path match.
 | ADR | docs/technical/adr/ADR-{NNN}-{title}.md | Write (if architectural decision) |
 
 ## Acceptance Criteria
+<!-- Executable checks opt in only with the exact, case-sensitive info string `powershell apex-accept`
+     under this Acceptance Criteria section. Checks run with integration-root cwd.
+     Binding uses the immediately preceding criterion line: a leading label matching
+     `^- \[[ xX]\] Task (\d+[a-z]?) -` binds to that execution-manifest task ID;
+     an unlabelled criterion binds to spec level. Compound task labels and unknown task IDs,
+     including HOST tasks absent from the manifest, are refused. Untagged criteria remain HOST checks.
+     Tagged checks are trusted author-written, Critic-reviewed, owner-promoted spec content,
+     run unsandboxed with the same trust as the AGENTS.md verify fence. The grammar guards accidents
+     rather than confines execution. Tree/index movement or residue parks the run without restoration.
+     Refuse whole path tokens beginning a drive-letter path (X:\ or X:/), UNC (\\), or /,
+     including single- or double-quoted argument values. Quoted -match/-notmatch regex operands
+     are patterns, not paths. Refuse cd, Set-Location, and Push-Location case-insensitively as
+     whole command names in command position, including after operators and invocation with &;
+     incidental words in arguments/strings are allowed. See the governing contract for the grammar.
+     Throw on failure: PowerShell checks must throw when assertions fail. Native commands require
+     explicit $LASTEXITCODE tests, e.g. `if ($LASTEXITCODE -ne 0) { throw 'native check failed' }`.
+     A check's exit ends its child process, not the Engine process. -->
 <!-- Use step→verify format. "Done" must be observable, not vague.
      For doc-only specs, use presence/absence greps, version/date checks, caps, pointers, and the
      exact commands in the repo AGENTS.md `## Verify commands` fence. Reserve exact-line manifests

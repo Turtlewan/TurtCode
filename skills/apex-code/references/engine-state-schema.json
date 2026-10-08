@@ -143,7 +143,33 @@
             "specialist_context": {}
           }
         },
-        "waves": { "type": "array" }
+        "waves": { "type": "array" },
+        "spec_acceptance_checks": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["id", "task", "label", "body"],
+            "properties": {
+              "id": { "type": "string" },
+              "task": { "type": ["string", "null"] },
+              "label": { "type": ["string", "null"] },
+              "body": { "type": "string" }
+            }
+          }
+        },
+        "host_checks": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["label", "text"],
+            "properties": {
+              "label": { "type": ["string", "null"] },
+              "text": { "type": "string" }
+            }
+          }
+        }
       },
       "oneOf": [
         {
@@ -198,7 +224,24 @@
                         "coder_model": { "enum": ["gpt-5.6-sol", "gpt-6-sol", "gpt-6.1-sol"] },
                         "text": { "type": "string" },
                         "done_when": { "type": "string" },
-                        "acceptance": { "type": "array", "items": { "type": "string" } },
+                        "acceptance_checks": {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "additionalProperties": false,
+                            "required": ["id", "task", "label", "body"],
+                            "properties": {
+                              "id": { "type": "string" },
+                              "task": { "type": ["string", "null"] },
+                              "label": { "type": ["string", "null"] },
+                              "body": { "type": "string" }
+                            }
+                          }
+                        },
+                        "acceptance": {
+                          "type": "array",
+                          "items": { "type": "string" }
+                        },
                         "prompt": { "type": "string" },
                         "prompt_path": { "type": "string" },
                         "prompt_digest": { "type": "string", "pattern": "^[0-9a-f]{64}$" }
@@ -233,6 +276,21 @@
           "status": { "enum": ["pending", "running", "integrated", "failed", "parked"] },
           "diagnosis": { "type": ["string", "null"] },
           "concerns": { "type": "array", "items": { "type": "string" } },
+          "acceptance": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["id", "status", "output_tail", "child_pid", "child_start_time"],
+              "properties": {
+                "id": { "type": "string" },
+                "status": { "enum": ["pending", "running", "passed", "failed"] },
+                "output_tail": { "type": "string" },
+                "child_pid": { "type": ["integer", "null"] },
+                "child_start_time": { "type": ["string", "null"] }
+              }
+            }
+          },
           "attempts": {
             "type": "array",
             "items": {
@@ -260,8 +318,32 @@
                 "end_tree_digest": { "type": ["string", "null"] },
                 "diagnosis": { "type": ["string", "null"] },
                 "capacity_retries": { "type": "integer", "minimum": 0 },
+                "acceptance_output_tail": {"type": "string"},
                 "process_retries": { "type": "integer", "minimum": 0 }
               }
+            }
+          }
+        }
+      }
+    },
+    "spec_acceptance": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status", "checks"],
+      "properties": {
+        "status": { "enum": ["pending", "running", "passed", "failed"] },
+        "checks": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["id", "status", "output_tail", "child_pid", "child_start_time"],
+            "properties": {
+              "id": { "type": "string" },
+              "status": { "enum": ["pending", "running", "passed", "failed"] },
+              "output_tail": { "type": "string" },
+              "child_pid": { "type": ["integer", "null"] },
+              "child_start_time": { "type": ["string", "null"] }
             }
           }
         }
@@ -300,6 +382,7 @@
       "properties": {
         "status": { "enum": ["pending", "running", "complete", "failed"] },
         "discard": { "type": "boolean" },
+        "reason": { "type": "string" },
         "items": {
           "type": "array",
           "items": {

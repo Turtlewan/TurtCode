@@ -3,8 +3,8 @@
 Deterministically validates an APEX change specification.
 
 .DESCRIPTION
-Runs five mechanical checks in a fixed order: FILES-COMPLETENESS,
-NO-UNRESOLVED-MARKERS, TASK-CRITERIA-COVERAGE, STRUCTURE, and EXEC-MANIFEST.
+Runs six mechanical checks in a fixed order: FILES-COMPLETENESS,
+NO-UNRESOLVED-MARKERS, TASK-CRITERIA-COVERAGE, STRUCTURE, EXEC-MANIFEST, and ACCEPTANCE-CHECK.
 Exit 0 means valid; exit 1 means one or more findings, each printed as
 "FAIL <check>: <evidence>".
 
@@ -12,7 +12,8 @@ Fenced code-block content is IGNORED by the original four checks alike (checks
 1-3 scan only prose/tables/backtick-inline spans outside fences; check 4
 STRUCTURE likewise does not count a required heading that appears only inside
 a fence). Check 5 EXEC-MANIFEST reads the single fence in the optional
-Execution manifest section.
+Execution manifest section. Check 6 ACCEPTANCE-CHECK reads only exact
+powershell apex-accept fences under Acceptance Criteria.
 
 FILES-COMPLETENESS mechanically classifies a token as a file path only when it
 has a directory component and a 1-5 character alphanumeric extension. Runtime
@@ -29,7 +30,7 @@ param(
     [switch]$Version
 )
 
-$SpecContractVersion = '1.1.0'
+$SpecContractVersion = '1.2.0'
 $ErrorActionPreference = 'Stop'
 
 if ($Version) {
@@ -348,6 +349,33 @@ if (-not [System.IO.File]::Exists($SpecPath)) {
     exit 1
 }
 
+# Trusted checks: this grammar guards accidental paths/location changes, not execution.
+function Get-AcceptanceGrammarRefusals {
+    param([string]$Text)
+    $tokens = $null
+    $parseErrors = $null
+    $ast = [System.Management.Automation.Language.Parser]::ParseInput($Text, [ref]$tokens, [ref]$parseErrors)
+    foreach ($command in $ast.FindAll({ param($node) $node -is [System.Management.Automation.Language.CommandAst] }, $true)) {
+        $name = $command.GetCommandName()
+        if ($name -imatch '^(cd|Set-Location|Push-Location)$') {
+            'prohibited location command {0}' -f $name
+        }
+    }
+    $previous = $null
+    foreach ($token in $tokens) {
+        if ($token.Kind -in @('Generic', 'Identifier', 'StringLiteral', 'StringExpandable')) {
+            $quoted = $token.Kind -in @('StringLiteral', 'StringExpandable')
+            $value = $token.Text
+            if ($quoted) { $value = $token.Value }
+            $patternOperand = $quoted -and ($previous -in @('Imatch', 'Inotmatch', 'Cmatch', 'Cnotmatch'))
+            if (-not $patternOperand -and $value -match '^(?:[A-Za-z]:[\\/]|\\\\|/)') {
+                'prohibited path token {0}' -f $token.Text
+            }
+        }
+        if ($token.Kind -notin @('NewLine', 'Comment', 'LineContinuation')) { $previous = $token.Kind.ToString() }
+    }
+}
+
 try {
     $utf8 = New-Object System.Text.UTF8Encoding($false, $true)
     $content = [System.IO.File]::ReadAllText($SpecPath, $utf8)
@@ -364,9 +392,14 @@ $unclosedFenceLine = $null
 $fenceCharacter = $null
 $fenceLength = 0
 $currentSection = ''
+$acceptanceSection = ''
+$acceptanceLeadingLine = ''
+$acceptanceManifestIds = New-Object 'System.Collections.Generic.HashSet[string]' ([System.StringComparer]::OrdinalIgnoreCase)
 $executionManifestSectionPresent = $false
 $executionManifestFences = New-Object 'System.Collections.Generic.List[object]'
 $activeExecutionManifestFence = $null
+$acceptanceFences = New-Object 'System.Collections.Generic.List[object]'
+$activeAcceptanceFence = $null
 
 for ($index = 0; $index -lt $lines.Count; $index++) {
     $line = $lines[$index]
@@ -375,7 +408,7 @@ for ($index = 0; $index -lt $lines.Count; $index++) {
     if ($inFence) {
         if ($fenceMatch.Success) {
             $candidateFence = $fenceMatch.Groups['Fence'].Value
-            $hasOnlyTrailingSpaces = [regex]::IsMatch($fenceMatch.Groups['Trailing'].Value, '^ *$')
+            $hasOnlyTrailingSpaces = [regex]::IsMatch($fenceMatch.Groups['Trailing'].Value, '^[ \t]*$')
             if (($candidateFence[0] -eq $fenceCharacter) -and
                 ($candidateFence.Length -ge $fenceLength) -and
                 $hasOnlyTrailingSpaces) {
@@ -384,9 +417,12 @@ for ($index = 0; $index -lt $lines.Count; $index++) {
                 $fenceCharacter = $null
                 $fenceLength = 0
                 $activeExecutionManifestFence = $null
+                $activeAcceptanceFence = $null
+                continue
             }
         }
-        elseif ($null -ne $activeExecutionManifestFence) {
+        if ($null -ne $activeAcceptanceFence) { $activeAcceptanceFence.Lines.Add($line) }
+        if (-not $fenceMatch.Success -and $null -ne $activeExecutionManifestFence) {
             $activeExecutionManifestFence.Lines.Add($line)
         }
         continue
@@ -406,7 +442,24 @@ for ($index = 0; $index -lt $lines.Count; $index++) {
             }
             $executionManifestFences.Add($activeExecutionManifestFence)
         }
+        if ([string]::Equals($acceptanceSection, 'Acceptance Criteria', [System.StringComparison]::Ordinal) -and
+            [string]::Equals($fenceMatch.Groups['Trailing'].Value.Trim(), 'powershell apex-accept', [System.StringComparison]::Ordinal)) {
+            $activeAcceptanceFence = [pscustomobject]@{
+                LineNumber = $index + 1
+                LeadingLine = $acceptanceLeadingLine
+                Lines = New-Object 'System.Collections.Generic.List[string]'
+            }
+            $acceptanceFences.Add($activeAcceptanceFence)
+        }
         continue
+    }
+
+    # Mirror Get-EngineAcceptanceLines: blanks, continuations, and fences keep
+    # the most recent bullet/numbered criterion current until a criterion or H2.
+    if ($line -match '^ {0,3}##[ \t]+(.+?)[ \t]*$') {
+        $acceptanceSection = $Matches[1]; $acceptanceLeadingLine = ''
+    } elseif ($acceptanceSection -ceq 'Acceptance Criteria' -and $line -match '^(?:- |[0-9]+[.)] )') {
+        $acceptanceLeadingLine = $line
     }
 
     $headingMatch = $headingRegex.Match($line)
@@ -812,6 +865,7 @@ if ($executionManifestSectionPresent) {
                             continue
                         }
                         $canonicalId = $idValue.ToLowerInvariant()
+                        [void]$acceptanceManifestIds.Add($canonicalId)
                         if (-not $manifestIds.Add($canonicalId)) {
                             Add-Finding -Check 'EXEC-MANIFEST' -Evidence ('duplicate manifest task ID {0}' -f $idValue)
                             $shapeValid = $false
@@ -1137,6 +1191,21 @@ if ($executionManifestSectionPresent) {
     }
     catch {
         Add-Finding -Check 'EXEC-MANIFEST' -Evidence ('invalid manifest data: {0}' -f $_.Exception.Message)
+    }
+}
+
+# (6) ACCEPTANCE-CHECK: only exact tagged fences in Acceptance Criteria opt in.
+foreach ($check in $acceptanceFences) {
+    foreach ($reason in Get-AcceptanceGrammarRefusals -Text ($check.Lines -join "`n")) {
+        Add-Finding -Check 'ACCEPTANCE-CHECK' -Evidence ('line {0}: {1}' -f $check.LineNumber, $reason)
+    }
+    if ($check.LeadingLine -match '^- \[[ xX]\] Task\b') {
+        if ($check.LeadingLine -cnotmatch '^- \[[ xX]\] Task (\d+[a-z]?) -') {
+            Add-Finding -Check 'ACCEPTANCE-CHECK' -Evidence ('line {0}: compound or malformed task label' -f $check.LineNumber)
+        }
+        elseif (-not $acceptanceManifestIds.Contains($Matches[1])) {
+            Add-Finding -Check 'ACCEPTANCE-CHECK' -Evidence ('line {0}: unknown manifest task ID {1} (HOST tasks cannot bind)' -f $check.LineNumber, $Matches[1])
+        }
     }
 }
 

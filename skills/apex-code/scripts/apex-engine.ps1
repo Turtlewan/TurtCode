@@ -13,6 +13,7 @@ param(
     [string]$ReviewRecord,
     [string]$Teardown,
     [switch]$Discard,
+    [string]$Reason,
     [string]$WrapperPath,
     [string]$StateRoot,
     [string]$CodexExecutable,
@@ -68,6 +69,14 @@ if ($env:APEX_ENGINE_TEST_MODE -ceq '1') {
     if ($env:APEX_ENGINE_TEST_TREE_PIN_PATH) { $script:EngineTreePinScript = [IO.Path]::GetFullPath($env:APEX_ENGINE_TEST_TREE_PIN_PATH) }
     if ($env:APEX_ENGINE_TEST_BASELINE_PATH) { $script:EngineBaselineScript = [IO.Path]::GetFullPath($env:APEX_ENGINE_TEST_BASELINE_PATH) }
     if ($env:APEX_ENGINE_TEST_CRITICAL_PATH) { $script:EngineCriticalScript = [IO.Path]::GetFullPath($env:APEX_ENGINE_TEST_CRITICAL_PATH) }
+    if ($env:APEX_ENGINE_TEST_STAGE_TRACE_PATH) {
+        $script:EngineTestStageImplementation = ${function:Stage-EngineWave}
+        function Stage-EngineWave {
+            param([string]$IntegrationWorktree, [object[]]$Files)
+            [IO.File]::AppendAllText($env:APEX_ENGINE_TEST_STAGE_TRACE_PATH, "stage`n")
+            & $script:EngineTestStageImplementation -IntegrationWorktree $IntegrationWorktree -Files $Files
+        }
+    }
 }
 
 function Get-RunnerUtc { [DateTime]::UtcNow.ToString('o') }
@@ -92,7 +101,7 @@ function Open-RunnerRunLock {
         $candidateState = Join-Path $RunDirectory 'engine-state.json'
         if (Test-Path -LiteralPath $candidateState -PathType Leaf) {
             try {
-                $candidate = Get-Content -LiteralPath $candidateState -Raw | ConvertFrom-Json
+                $candidate = Get-Content -LiteralPath $candidateState -Raw -Encoding UTF8 | ConvertFrom-Json
                 if ($candidate.PSObject.Properties['engine_owner']) {
                     $owner = $candidate.engine_owner
                     $ownerText = "pid $($owner.pid), start $($owner.start_time)"
@@ -611,12 +620,18 @@ function Start-RunnerAttempt {
     param([object]$TaskPlan, [object]$TaskState, [object]$Attempt)
     if (-not (Test-RunnerCriticalGate $TaskPlan $TaskState)) { return $null }
     $timeoutProperty = $script:EngineState.PSObject.Properties['no_output_timeout_min']
+    $prompt = [string]$TaskPlan.prompt
+    $previousFailed = @($TaskState.attempts | Where-Object { $_.number -lt $Attempt.number -and $_.status -ceq 'failed' } | Select-Object -Last 1)
+    if ($previousFailed.Count -gt 0 -and $previousFailed[0].PSObject.Properties['acceptance_output_tail'] -and
+            -not [string]::IsNullOrEmpty([string]$previousFailed[0].acceptance_output_tail)) {
+        $prompt += "`n`nPrevious acceptance check output:`n" + [string]$previousFailed[0].acceptance_output_tail
+    }
     $parameters = @{
         Phase = 'build'; Spec = [string]$script:EngineState.spec.name; Task = [string]$TaskPlan.id
         Worktree = [string]$Attempt.worktree; BaseSha = (Invoke-RunnerGitText $Attempt.worktree 'rev-parse' 'HEAD')
         SpecSourcePath = [string]$script:EngineState.spec.snapshot_path
         Authorized = [string[]]@($TaskPlan.files | ForEach-Object { [string]$_.path })
-        Effort = [string]$Attempt.effort; Model = [string]$Attempt.model; Prompt = [string]$TaskPlan.prompt
+        Effort = [string]$Attempt.effort; Model = [string]$Attempt.model; Prompt = $prompt
         ScratchDirectory = (Join-Path (Split-Path -Parent $script:EngineStatePath) 'wrapper-scratch')
         NoOutputTimeoutMin = $(if ($null -ne $timeoutProperty) { [int]$timeoutProperty.Value } else { 30 })
     }
@@ -961,6 +976,115 @@ function Get-RunnerNextEffort {
     switch -CaseSensitive ($Effort) { 'low' { 'medium' } 'medium' { 'high' } 'high' { 'xhigh' } default { $null } }
 }
 
+function New-RunnerAcceptanceRecord {
+    param([string]$Id)
+    [pscustomobject][ordered]@{ id = $Id; status = 'pending'; output_tail = ''; child_pid = $null; child_start_time = $null }
+}
+
+function Stop-RunnerAcceptanceChild {
+    param([object]$Record)
+    if (Test-RunnerPidLive $Record.child_pid $Record.child_start_time) {
+        $processes = @()
+        # Hold process objects before taskkill: even a partial tree kill must not
+        # lose the identities of descendants that still need the fallback.
+        $snapshot = Get-EngineDescendantProcessIds ([int]$Record.child_pid)
+        foreach ($childPidValue in @([int]$Record.child_pid) + @($snapshot.process_ids)) {
+            $process = Get-Process -Id $childPidValue -ErrorAction SilentlyContinue
+            if ($null -eq $process) { continue }
+            try { $null = $process.StartTime; $processes += $process }
+            catch { $process.Dispose() }
+        }
+        $old = $ErrorActionPreference; $ErrorActionPreference = 'Continue'
+        try {
+            $killOutput = @(& taskkill.exe /PID ([string]$Record.child_pid) /T /F 2>&1); $killCode = $LASTEXITCODE
+            if ($killCode -ne 0) {
+                for ($index = $processes.Count - 1; $index -ge 0; $index--) {
+                    if (-not $processes[$index].HasExited) { $processes[$index].Kill(); [void]$processes[$index].WaitForExit(5000) }
+                }
+            }
+            foreach ($process in $processes) {
+                if (-not $process.WaitForExit(5000)) { throw "acceptance child process tree kill failed: $($killOutput -join ' ')" }
+            }
+        }
+        finally { foreach ($process in $processes) { $process.Dispose() }; $ErrorActionPreference = $old }
+    }
+}
+
+function Invoke-RunnerAcceptanceCheck {
+    param([object]$Check, [object]$Record)
+    Stop-RunnerAcceptanceChild $Record
+    $Record.output_tail = ''; $Record.child_pid = $null; $Record.child_start_time = $null
+    $Record.status = 'pending'; Save-RunnerState
+    $directory = Join-Path (Split-Path -Parent $script:EngineStatePath) 'acceptance'
+    [void][IO.Directory]::CreateDirectory($directory)
+    $path = Join-Path $directory ($Check.id + '.ps1')
+    $output = Join-Path $directory ($Check.id + '.out')
+    $launcher = Join-Path $directory 'launch.ps1'
+    [IO.File]::WriteAllText($path, "`$ErrorActionPreference = 'Stop'`n" + [string]$Check.body, [Text.UTF8Encoding]::new($true))
+    # A separate PowerShell process captures both streams in order. An exit in the check
+    # terminates its child, and the launcher propagates that exit code to the Engine.
+    [IO.File]::WriteAllText($launcher, @'
+param([string]$CheckPath, [string]$OutputPath)
+$ErrorActionPreference = 'Continue'
+& powershell.exe -NoProfile -ExecutionPolicy Bypass -File $CheckPath 2>&1 |
+    ForEach-Object { [string]$_ } | Set-Content -LiteralPath $OutputPath -Encoding UTF8
+exit $LASTEXITCODE
+'@, [Text.UTF8Encoding]::new($false))
+    [IO.File]::WriteAllText($output, '', [Text.UTF8Encoding]::new($false))
+    $expired = $false; $child = $null
+    try {
+        $child = Start-Process -FilePath 'powershell.exe' -ArgumentList @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', ('"' + $launcher + '"'), ('"' + $path + '"'), ('"' + $output + '"')) `
+            -WorkingDirectory ([string]$script:EngineState.integration.worktree) -WindowStyle Hidden -PassThru
+        $Record.status = 'running'; $Record.child_pid = [int]$child.Id
+        $Record.child_start_time = $child.StartTime.ToUniversalTime().ToString('o')
+        Save-RunnerState
+        if ($env:APEX_ENGINE_TEST_MODE -ceq '1' -and $env:APEX_ENGINE_TEST_CRASH_DURING_ACCEPTANCE -ceq $Check.id) {
+            throw 'simulated crash during running acceptance check'
+        }
+        $timeout = 600000
+        if ($env:APEX_ENGINE_TEST_MODE -ceq '1' -and $env:APEX_ENGINE_TEST_ACCEPT_TIMEOUT_MS -match '^[1-9][0-9]*$') {
+            $timeout = [Math]::Min(600000, [int]$env:APEX_ENGINE_TEST_ACCEPT_TIMEOUT_MS)
+        }
+        if (-not $child.WaitForExit($timeout)) {
+            $expired = $true; Stop-RunnerAcceptanceChild $Record
+            [void]$child.WaitForExit(5000)
+        }
+        $lines = @([IO.File]::ReadAllLines($output))
+        if ($expired) { $lines += 'timed out after 10 min' }
+        $Record.output_tail = @($lines | Select-Object -Last 40) -join "`n"
+        $Record.status = if (-not $expired -and $child.ExitCode -eq 0) { 'passed' } else { 'failed' }
+        Save-RunnerState
+        return $Record.status -ceq 'passed'
+    } catch {
+        if ($_.Exception.Message -ceq 'simulated crash during running acceptance check') { throw }
+        if ($null -ne $child) { Stop-RunnerAcceptanceChild $Record }
+        $Record.output_tail = $_.Exception.Message; $Record.status = 'failed'; Save-RunnerState
+        return $false
+    } finally { if ($null -ne $child) { $child.Dispose() } }
+}
+
+function Invoke-RunnerTaskAcceptance {
+    param([object[]]$Files)
+    if (-not $script:EngineState.PSObject.Properties['plan']) { return $null }
+    $selected = @($Files | ForEach-Object { [string]$_.path })
+    foreach ($wave in @($script:EngineState.plan.waves)) { foreach ($task in @($wave.tasks)) {
+        if (-not $task.PSObject.Properties['acceptance_checks'] -or @($task.acceptance_checks).Count -eq 0) { continue }
+        if (@($task.files | Where-Object { $selected -cnotcontains [string]$_.path }).Count -gt 0) { continue }
+        $runtime = Get-RunnerTaskState ([string]$task.id)
+        if (-not $runtime.PSObject.Properties['acceptance']) {
+            $runtime | Add-Member -NotePropertyName acceptance -NotePropertyValue @($task.acceptance_checks | ForEach-Object { New-RunnerAcceptanceRecord $_.id })
+            Save-RunnerState
+        }
+        foreach ($check in @($task.acceptance_checks)) {
+            $record = @($runtime.acceptance | Where-Object { $_.id -ceq $check.id })[0]
+            if (-not (Invoke-RunnerAcceptanceCheck $check $record)) {
+                return [pscustomobject]@{ code = 1; diagnosis = 'acceptance check failed'; moved = $false; gate = 'accept'; failing_task_id = [string]$task.id; output_tail = [string]$record.output_tail }
+            }
+        }
+    } }
+    return $null
+}
+
 function Invoke-RunnerGate {
     param([object[]]$Files, [int]$WaveNumber)
     try { $stage = Stage-EngineWave -IntegrationWorktree $script:EngineState.integration.worktree -Files $Files }
@@ -978,6 +1102,8 @@ function Invoke-RunnerGate {
     if ($pin.exit_code -ne 0) { return [pscustomobject]@{ code = $pin.exit_code; diagnosis = $pin.output; moved = $false; gate = 'pin' } }
     $baseline = Invoke-RunnerScript $script:EngineBaselineScript `
         @('-Full', '-Worktree', [string]$script:EngineState.integration.worktree)
+    $acceptanceFailure = $null
+    if ($baseline.exit_code -eq 0) { $acceptanceFailure = Invoke-RunnerTaskAcceptance $Files }
     $verify = Invoke-RunnerScript $script:EngineTreePinScript `
         @('-Verify', '-Worktree', [string]$script:EngineState.integration.worktree, '-Label', $label, '-PinDirectory', (Split-Path -Parent $script:EngineStatePath))
     try { $after = Get-RunnerIndexIdentity ([string]$script:EngineState.integration.worktree) }
@@ -1001,6 +1127,7 @@ function Invoke-RunnerGate {
     if (@($residue).Count -gt 0) {
         return [pscustomobject]@{ code = 69; diagnosis = "unexpected residue: integration tree has untracked/ignored residue outside wave manifest: $(@($residue | Select-Object -First 10) -join ', ')"; moved = $true; gate = 'verify' }
     }
+    if ($null -ne $acceptanceFailure) { return $acceptanceFailure }
     return [pscustomobject]@{ code = $baseline.exit_code; diagnosis = $baseline.output; moved = $false; gate = 'baseline' }
 }
 
@@ -1011,7 +1138,7 @@ function Restore-RunnerWave {
 }
 
 function Find-RunnerWaveFailure {
-    param([object]$Wave, [string]$WaveBase, [object[]]$WaveFiles)
+    param([object]$Wave, [string]$WaveBase, [object[]]$WaveFiles, [hashtable]$FailureGates)
     [void](Restore-RunnerWave $WaveBase $WaveFiles)
     $failed = @()
     foreach ($taskPlan in @($Wave.tasks)) {
@@ -1022,7 +1149,14 @@ function Find-RunnerWaveFailure {
         if (-not $copy.ok) { $failed += $taskPlan.id }
         else {
             $gate = Invoke-RunnerGate ([object[]]@($taskPlan.files)) ([int]$Wave.number)
-            if ($gate.code -ne 0) { $failed += $taskPlan.id }
+            if ([string]$gate.gate -in @('pin', 'verify')) {
+                Set-RunnerParked "$($gate.gate) gate exit $($gate.code): $($gate.diagnosis)" $null
+                return [string[]]@()
+            }
+            if ($gate.code -ne 0) {
+                $failed += $taskPlan.id
+                if ($null -ne $FailureGates) { $FailureGates[[string]$taskPlan.id] = $gate }
+            }
         }
         [void](Restore-RunnerWave $WaveBase $WaveFiles)
     }
@@ -1115,6 +1249,7 @@ function Invoke-RunnerWave {
             if (-not $copied.ok) { $copyFailures += $taskPlan.id }
         }
         $failureIds = [string[]]$copyFailures
+        $failureGates = @{}
         $gate = $null
         if ($failureIds.Count -eq 0) { $gate = Invoke-RunnerGate $waveFiles ([int]$Wave.number) }
         if ($failureIds.Count -eq 0 -and $gate.code -eq 0) {
@@ -1165,22 +1300,32 @@ function Invoke-RunnerWave {
             Set-RunnerParked "baseline gate exit $($gate.code): $($gate.diagnosis)" $null; return $false
         }
         if ($failureIds.Count -eq 0) {
-            if (@($Wave.tasks).Count -eq 1) { $failureIds = @([string]$Wave.tasks[0].id) }
-            else { $failureIds = @(Find-RunnerWaveFailure $Wave $waveBase $waveFiles) }
+            if ($null -ne $gate -and $gate.PSObject.Properties['failing_task_id']) { $failureIds = @([string]$gate.failing_task_id) }
+            elseif (@($Wave.tasks).Count -eq 1) { $failureIds = @([string]$Wave.tasks[0].id) }
+            else { $failureIds = @(Find-RunnerWaveFailure $Wave $waveBase $waveFiles $failureGates) }
         }
+        if ($script:EngineState.status -cne 'running') { return $false }
         if ($failureIds.Count -ne 1) {
             $script:EngineState.status = 'partial'; $script:EngineState.diagnosis = 'ambiguous wave verification failure'
             Add-RunnerTransition 'partial' $script:EngineState.diagnosis; Save-RunnerState; return $false
         }
         $failedPlan = Get-RunnerTaskPlan $failureIds[0]; $failedState = Get-RunnerTaskState $failureIds[0]
         $currentAttempt = @($failedState.attempts | Where-Object { $_.status -ceq 'succeeded' })[-1]
+        # Only a check failure from this verification pass can supply a tail.
+        # Runtime acceptance records also contain results from earlier attempts.
+        $failureGate = if ($failureGates.ContainsKey($failureIds[0])) { $failureGates[$failureIds[0]] } else { $gate }
+        $currentAttempt.PSObject.Properties.Remove('acceptance_output_tail')
+        if ($null -ne $failureGate -and [string]$failureGate.gate -ceq 'accept' -and
+                [string]$failureGate.failing_task_id -ceq [string]$failedState.id -and $failureGate.PSObject.Properties['output_tail']) {
+            $currentAttempt | Add-Member -NotePropertyName acceptance_output_tail -NotePropertyValue ([string]$failureGate.output_tail) -Force
+        }
+        $currentAttempt.status = 'failed'; $currentAttempt.diagnosis = 'verification failure'
         $next = Get-RunnerNextEffort ([string]$currentAttempt.effort)
         if (-not $next) {
             $failedState.status = 'failed'; $failedState.diagnosis = 'verification effort ladder exhausted'
             $script:EngineState.status = 'partial'; $script:EngineState.diagnosis = $failedState.diagnosis
             Add-RunnerTransition 'partial' $failedState.diagnosis; Save-RunnerState; return $false
         }
-        $currentAttempt.status = 'failed'; $currentAttempt.diagnosis = 'verification failure'
         $script:EngineState.counters.retries++; Save-RunnerState
         $crashEffort = [string]$env:APEX_ENGINE_TEST_CRASH_AFTER_VERIFICATION_FAILURE
         if ($env:APEX_ENGINE_TEST_MODE -ceq '1' -and
@@ -1360,6 +1505,67 @@ function Invoke-RunnerHandoff {
     return $true
 }
 
+function Invoke-RunnerSpecAcceptance {
+    if (-not $script:EngineState.plan.PSObject.Properties['spec_acceptance_checks'] -or
+            @($script:EngineState.plan.spec_acceptance_checks).Count -eq 0) { return $true }
+    if (-not $script:EngineState.PSObject.Properties['spec_acceptance']) {
+        $script:EngineState | Add-Member -NotePropertyName spec_acceptance -NotePropertyValue ([pscustomobject][ordered]@{
+            status = 'pending'; checks = @($script:EngineState.plan.spec_acceptance_checks | ForEach-Object { New-RunnerAcceptanceRecord $_.id })
+        })
+        Save-RunnerState
+    }
+    $runtime = $script:EngineState.spec_acceptance
+    if ($runtime.status -ceq 'passed') { return $true }
+    $remainingChecks = @($runtime.checks | Where-Object { $_.status -cne 'passed' })
+    $active = if ($remainingChecks.Count -gt 0) { $remainingChecks[0] } else { @($runtime.checks)[-1] }
+    try {
+        foreach ($record in @($runtime.checks | Where-Object { $_.status -cne 'passed' })) {
+            Stop-RunnerAcceptanceChild $record
+            $record.output_tail = ''; $record.child_pid = $null; $record.child_start_time = $null; $record.status = 'pending'
+        }
+        $runtime.status = 'running'; Save-RunnerState
+        $root = [string]$script:EngineState.integration.worktree
+        $before = Get-RunnerIndexIdentity $root
+        $label = "engine-$($script:EngineState.run_id)-spec"
+        $pinArgs = @('-Worktree', $root, '-Label', $label, '-PinDirectory', (Split-Path -Parent $script:EngineStatePath))
+        $pin = Invoke-RunnerScript $script:EngineTreePinScript (@('-Pin') + $pinArgs)
+        if ($pin.exit_code -ne 0) { throw "spec pin gate exit $($pin.exit_code): $($pin.output)" }
+        # On Resume the old failed check may have left tracked/index changes.
+        # A new pin cannot bless those as the tree the final wave already verified.
+        $trackedChanges = Invoke-RunnerGitBytes $root 'diff --name-only -z HEAD --'
+        $stagedChanges = Invoke-RunnerGitBytes $root 'diff --cached --name-only -z HEAD --'
+        if ($trackedChanges.Length -gt 0 -or $stagedChanges.Length -gt 0) { throw 'spec acceptance tree/index differs from final wave commit' }
+        $checkFailure = $null
+        foreach ($check in @($script:EngineState.plan.spec_acceptance_checks)) {
+            $record = @($runtime.checks | Where-Object { $_.id -ceq $check.id })[0]
+            if ($record.status -ceq 'passed') { continue }
+            $active = $record
+            if (-not (Invoke-RunnerAcceptanceCheck $check $record)) { $checkFailure = $record; break }
+        }
+        $verify = Invoke-RunnerScript $script:EngineTreePinScript (@('-Verify') + $pinArgs)
+        $after = Get-RunnerIndexIdentity $root
+        if ($before.head -cne $after.head) { throw 'spec acceptance moved HEAD' }
+        if ($before.index_digest -cne $after.index_digest) { throw 'spec acceptance changed the index' }
+        if ($verify.exit_code -ne 0) { throw "spec acceptance changed the working tree: $($verify.output)" }
+        $finalWave = @($script:EngineState.plan.waves)[-1]
+        $residue = @(Get-RunnerUnexpectedResidue (Get-RunnerAllFiles) ([int]$finalWave.number))
+        if ($residue.Count -gt 0) { throw "spec acceptance unexpected residue: $($residue -join ', ')" }
+        if ($null -ne $checkFailure) { throw "spec acceptance check failed: $($checkFailure.id)" }
+        $runtime.status = 'passed'; Save-RunnerState
+        return $true
+    } catch {
+        if ($_.Exception.Message -ceq 'simulated crash during running acceptance check') { throw }
+        $runtime.status = 'failed'
+        if ($null -ne $active) {
+            $active.status = 'failed'
+            if ([string]::IsNullOrEmpty($active.output_tail)) { $active.output_tail = $_.Exception.Message }
+        }
+        Save-RunnerState
+        Set-RunnerParked $_.Exception.Message $null
+        return $false
+    }
+}
+
 function Write-RunnerSummary {
     Write-Host "State: $($script:EngineStatePath)"
     $taskSummaries = @()
@@ -1373,7 +1579,17 @@ function Write-RunnerSummary {
     Write-Host "Wrapper spec: $($script:EngineState.spec.name)"
     Write-Host "Ledger: $($script:EngineLedgerPath)"
     if ($script:EngineState.diagnosis) { Write-Host "Diagnosis: $($script:EngineState.diagnosis)" }
-    if ([string]$script:EngineState.status -ceq 'awaiting-review') {
+    if ([string]$script:EngineState.status -ceq 'complete' -and $script:EngineState.plan.PSObject.Properties['host_checks']) {
+        Write-Host 'HOST checks:'
+        foreach ($check in @($script:EngineState.plan.host_checks)) { Write-Host ([string]$check.text) }
+    }
+    if ($script:EngineState.teardown.status -ceq 'complete') {
+        Write-Host 'Next: teardown complete; no further action.'
+    } elseif ([string]$script:EngineState.status -ceq 'complete' -and $script:EngineState.teardown.status -ceq 'failed') {
+        Write-Host "Next: resolve teardown refusal, then retry -Teardown $($script:EngineState.run_id); after repair use -Discard -Reason <text>."
+    } elseif ([string]$script:EngineState.status -ceq 'complete') {
+        Write-Host "Next: run HOST checks, review, commit, then -Teardown $($script:EngineState.run_id)."
+    } elseif ([string]$script:EngineState.status -ceq 'awaiting-review') {
         $awaitingWave = $null; $awaitingReview = $null
         foreach ($wave in @($script:EngineState.plan.waves)) {
             $runtime = Get-RunnerWaveRuntime ([int]$wave.number)
@@ -1389,19 +1605,13 @@ function Write-RunnerSummary {
         }
         Write-Host "Next: Opus Critic on that diff, then -Resume $($script:EngineState.run_id) -ReviewVerdict clean|reject -ReviewDigest <hex> -ReviewRecord <abs path>"
     } elseif ([string]$script:EngineState.status -ceq 'parked') {
-        $hasRejectedReview = $false
-        foreach ($wave in @($script:EngineState.plan.waves)) {
-            $runtime = Get-RunnerWaveRuntime ([int]$wave.number)
-            if ($null -ne $runtime -and $runtime.PSObject.Properties['review'] -and
-                    [string]$runtime.review.status -ceq 'rejected') {
-                $hasRejectedReview = $true; break
-            }
-        }
-        if ($hasRejectedReview) {
-            Write-Host "Next: fix via an adjusted spec, then -Resume $($script:EngineState.run_id) -ReviewVerdict clean -ReviewDigest <digest> -ReviewRecord <new abs path>, or -Teardown $($script:EngineState.run_id) -Discard"
-        } else { Write-Host 'Next: Critic review, docs/owner commit, then -Teardown <runId>.' }
+        Write-Host "Next: inspect the diagnosis, then -Resume $($script:EngineState.run_id) or -Teardown $($script:EngineState.run_id) -Discard."
+    } elseif ([string]$script:EngineState.status -ceq 'partial') {
+        Write-Host "Next: inspect failed tasks, then -Resume $($script:EngineState.run_id) or -Teardown $($script:EngineState.run_id) -Discard."
+    } elseif ([string]$script:EngineState.status -ceq 'refused') {
+        Write-Host 'Next: fix the inputs and start a new run'
     } else {
-        Write-Host 'Next: Critic review, docs/owner commit, then -Teardown <runId>.'
+        Write-Host "Next: inspect the diagnosis, then -Resume $($script:EngineState.run_id) or -Teardown $($script:EngineState.run_id) -Discard."
     }
     Write-Host "Run: $($script:EngineState.status)"
 }
@@ -1422,6 +1632,7 @@ function Invoke-RunnerMainLoop {
         Write-RunnerSummary
         return 1
     }
+    if (-not (Invoke-RunnerSpecAcceptance)) { Write-RunnerSummary; return 1 }
     if ($script:EngineState.handoff.status -cne 'complete') {
         if (-not (Invoke-RunnerHandoff)) { Write-RunnerSummary; return 1 }
     } else { $script:EngineState.status = 'complete'; Save-RunnerState }
@@ -1435,10 +1646,22 @@ function Invoke-RunnerTeardown {
     $script:EngineStatePath = Join-Path $runDirectory 'engine-state.json'
     if (-not (Test-Path -LiteralPath $script:EngineStatePath -PathType Leaf)) { throw "Engine state not found: $script:EngineStatePath" }
     $owner = Open-RunnerRunLock $runDirectory
-    $script:EngineState = Get-Content -LiteralPath $script:EngineStatePath -Raw | ConvertFrom-Json
+    $script:EngineState = Get-Content -LiteralPath $script:EngineStatePath -Raw -Encoding UTF8 | ConvertFrom-Json
     $script:EngineLedgerPath = Join-Path $script:EngineStateRoot 'progress\codex-run-ledger.jsonl'
     if ($script:EngineState.run_id -cne $RunId) { throw 'State run_id does not match its directory.' }
     $script:EngineState.engine_owner = $owner; Save-RunnerState
+    $completeDiscard = $script:EngineState.status -ceq 'complete' -and $Discard
+    if ($completeDiscard -and [string]::IsNullOrWhiteSpace($Reason)) { throw 'Complete -Discard requires a non-empty -Reason.' }
+    if ($completeDiscard) { $script:EngineState.teardown | Add-Member -NotePropertyName reason -NotePropertyValue $Reason -Force; Save-RunnerState }
+    if ($script:EngineState.status -cne 'complete' -and -not $Discard) { throw 'Partial, parked, paused, awaiting-review, or refused teardown requires -Discard.' }
+    if (-not $script:EngineWrapperBound) { $script:EngineWrapper = Get-RunnerPath ([string]$script:EngineState.wrapper_path) }
+    # Acceptance children use the same PID/start identity guard as dispatch children.
+    $checkRecords = @()
+    if ($script:EngineState.PSObject.Properties['spec_acceptance']) { $checkRecords += @($script:EngineState.spec_acceptance.checks) }
+    foreach ($task in @($script:EngineState.tasks)) { if ($task.PSObject.Properties['acceptance']) { $checkRecords += @($task.acceptance) } }
+    foreach ($record in $checkRecords) {
+        if (Test-RunnerPidLive $record.child_pid $record.child_start_time) { throw 'Refusing teardown: acceptance check has a live recorded child_pid.' }
+    }
     foreach ($task in @($script:EngineState.tasks)) {
         foreach ($attempt in @($task.attempts)) {
             $stamp = if ($attempt.PSObject.Properties['child_start_time']) { $attempt.child_start_time } else { $null }
@@ -1449,12 +1672,22 @@ function Invoke-RunnerTeardown {
                 if (-not (Test-EnginePathEqual ([string]$row.worktree) ([string]$attempt.worktree)) -or
                         [string]$row.spec -cne [string]$script:EngineState.spec.name -or
                         [string]$row.task -cne [string]$task.id) { continue }
-                if (-not (Get-RunnerRowStatusTerminal $row)) { throw "Refusing teardown: task $($task.id) has a non-terminal ledger row." }
+                if (Test-EngineLedgerRowLive $row) { throw "Refusing teardown: task $($task.id) has a live ledger row." }
+                if (-not (Get-RunnerRowStatusTerminal $row)) {
+                    $adoptOutput = Join-Path $runDirectory ("teardown-adopt-$($row.run_id).out")
+                    $adopt = Invoke-EngineAdopt -WrapperPath $script:EngineWrapper -RunId ([string]$row.run_id) `
+                        -Spec ([string]$script:EngineState.spec.name) -Task ([string]$task.id) -Worktree ([string]$attempt.worktree) `
+                        -StateRoot $script:EngineStateRoot -ChildOutputPath $adoptOutput
+                    $updatedRow = @(Read-EngineLedgerRows -LedgerPath $script:EngineLedgerPath | Where-Object { $_.run_id -ceq $row.run_id } | Select-Object -Last 1)
+                    if (($adopt.PSObject.Properties['adopt_timed_out'] -and $adopt.adopt_timed_out) -or $adopt.exit_code -ne 0 -or
+                            $updatedRow.Count -ne 1 -or -not (Get-RunnerRowStatusTerminal $updatedRow[0])) {
+                        throw "Refusing teardown: task $($task.id) dead ledger row adoption failed."
+                    }
+                }
             }
         }
     }
-    if ($script:EngineState.status -ceq 'complete') {
-        if ($Discard) { throw '-Discard is not valid for a complete run.' }
+    if ($script:EngineState.status -ceq 'complete' -and -not $completeDiscard) {
         if ($script:EngineState.handoff.status -cne 'complete' -or @($script:EngineState.handoff.journaled_paths).Count -ne @(Get-RunnerAllFiles).Count) {
             throw 'Complete teardown requires a full hand-off journal.'
         }
@@ -1462,7 +1695,7 @@ function Invoke-RunnerTeardown {
             -Spec ([pscustomobject]@{ name = $script:EngineState.spec.name; run_id = $RunId }) `
             -Files (Get-RunnerAllFiles) -IntegrationTip $script:EngineState.integration.tip
         if (-not $proof.ok) { throw 'Complete teardown proof failed.' }
-    } elseif (-not $Discard) { throw 'Partial, parked, paused, awaiting-review, or refused teardown requires -Discard.' }
+    }
     $branches = @(); $worktrees = @()
     if ($script:EngineState.integration.branch) { $branches += [string]$script:EngineState.integration.branch }
     if ($script:EngineState.integration.worktree) { $worktrees += [string]$script:EngineState.integration.worktree }
@@ -1635,7 +1868,7 @@ function Initialize-RunnerResume {
     $script:EngineStatePath = Join-Path $runDirectory 'engine-state.json'
     if (-not (Test-Path -LiteralPath $script:EngineStatePath -PathType Leaf)) { throw "Engine state not found: $script:EngineStatePath" }
     $owner = Open-RunnerRunLock $runDirectory
-    $script:EngineState = Get-Content -LiteralPath $script:EngineStatePath -Raw | ConvertFrom-Json
+    $script:EngineState = Get-Content -LiteralPath $script:EngineStatePath -Raw -Encoding UTF8 | ConvertFrom-Json
     if ([string]$script:EngineState.run_id -cne $RunId) { throw 'State run_id does not match its directory.' }
     if ([string]$script:EngineState.status -notin @('running', 'partial', 'parked', 'paused', 'awaiting-review')) {
         Write-Host "Engine refused: Run status cannot be resumed: $($script:EngineState.status)"
@@ -1704,6 +1937,7 @@ function Initialize-RunnerResume {
 if ($env:APEX_ENGINE_TEST_MODE -ceq '1' -and $env:APEX_ENGINE_TEST_IMPORT_ONLY -ceq '1') { return }
 
 try {
+    if ($PSBoundParameters.ContainsKey('Reason') -and (-not $Teardown -or -not $Discard)) { throw '-Reason requires both -Teardown and -Discard.' }
     if ($Resume -and $Teardown) { throw 'Choose either -Resume or -Teardown.' }
     foreach ($candidate in @($Resume, $Teardown)) {
         if ($candidate -and $candidate -cnotmatch '^[0-9a-f]{32}$') { throw 'Resume/Teardown run IDs must be 32 lowercase hexadecimal characters.' }

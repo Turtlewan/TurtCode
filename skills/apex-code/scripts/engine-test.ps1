@@ -1,5 +1,5 @@
 [CmdletBinding()]
-param()
+param([switch]$AcceptanceOnly)
 
 $ErrorActionPreference = 'Stop'
 $testRoot = Join-Path $env:TEMP ('engine-test-' + [Guid]::NewGuid().ToString('N'))
@@ -28,12 +28,30 @@ $oldWriteTreeFailure = $env:APEX_ENGINE_TEST_FAIL_WRITE_TREE
 $oldResidueCaptureFailure = $env:APEX_ENGINE_TEST_FAIL_RESIDUE_CAPTURE
 $oldAgentsFetchFailure = $env:APEX_ENGINE_TEST_FAIL_AGENTS_FETCH
 $oldAgentsFetchTrace = $env:APEX_ENGINE_TEST_AGENTS_FETCH_TRACE_PATH
+$oldStageTrace = $env:APEX_ENGINE_TEST_STAGE_TRACE_PATH
 
 function Write-TestText {
     param([string]$Path, [string]$Text)
     $parent = Split-Path -Parent $Path
     if ($parent) { [void][IO.Directory]::CreateDirectory($parent) }
     [IO.File]::WriteAllText($Path, $Text, $utf8)
+}
+
+function New-TestGateBaseline {
+    param([string]$Path)
+    Write-TestText $Path @'
+param([switch]$Full, [string]$Worktree)
+$counter = Join-Path $env:ENGINE_TEST_GATE_COUNTER 'baseline.txt'
+$count = if (Test-Path $counter) { [int](Get-Content $counter -Raw) } else { 0 }
+$count++; [IO.File]::WriteAllText($counter, [string]$count)
+if ($env:ENGINE_TEST_BASELINE_SEQUENCE) {
+    $sequence = @($env:ENGINE_TEST_BASELINE_SEQUENCE -split ',')
+    if ($count -le $sequence.Count) { exit ([int]$sequence[$count - 1]) }
+}
+Write-Host "baseline diagnosis $env:ENGINE_TEST_BASELINE_EXIT"
+exit ([int]$env:ENGINE_TEST_BASELINE_EXIT)
+'@
+
 }
 
 function Invoke-TestGit {
@@ -153,12 +171,14 @@ function New-TestSpec {
         [string]$Repo, [string]$Path, [switch]$Critical, [switch]$Single,
         [string]$FirstId = '1', [string]$SecondId = '2',
         [ValidateSet('low', 'medium', 'high', 'xhigh', 'max', 'ultra')][string]$Effort = 'medium',
-        [string]$Risk = 'medium', [switch]$TwoWave, [switch]$IgnoredFile
+        [string]$Risk = 'medium', [switch]$TwoWave, [switch]$IgnoredFile,
+        [string]$AcceptanceText, [switch]$Delete
     )
     $emDash = [string][char]0x2014
     $firstPath = if ($Critical) { '.github/workflows/build.yml' } else { 'src/a.py' }
     $firstOp = if ($Critical) { 'create' } else { 'modify' }
     if ($IgnoredFile) { $firstPath = 'src/widget/bin/payload.dat'; $firstOp = 'create' }
+    if ($Delete) { $firstOp = 'delete' }
     $omitSecond = $Critical -or $Single
     $secondTask = if ($omitSecond) { '' } else { "- [ ] **Task $SecondId** - Create the second fixture file. $emDash files: src/b.py $emDash done when: the second fixture file exists." }
     $secondDepends = if ($TwoWave) { '["1"]' } else { '[]' }
@@ -229,6 +249,7 @@ $secondAcceptance
 ## Progress
 - Test fixture.
 "@
+    if ($AcceptanceText) { $text = [regex]::Replace($text, '(?ms)(## Acceptance Criteria\r?\n).*?(?=\r?\n## Progress)', ('$1' + $AcceptanceText + "`n")) }
     Write-TestText $Path $text
 }
 
@@ -365,7 +386,9 @@ if ($scenario -ceq 'agent_message_command_429') {
 if ($scenario -ceq 'process_failure') { [Console]::Error.WriteLine('ERROR: transport disconnected'); exit 1 }
 if (-not $task) { exit 1 }
 if ($task -ceq '1') {
-    if ($scenario -ceq 'authorized-ignored') {
+    if ($scenario -ceq 'delete') {
+        [IO.File]::Delete((Join-Path $repo 'src/a.py')); $changed = @('src/a.py')
+    } elseif ($scenario -ceq 'authorized-ignored') {
         [IO.File]::WriteAllBytes((Join-Path $repo 'src/widget/bin/payload.dat'), [byte[]]@(0,255,13,10,128,65,0))
         [IO.File]::WriteAllBytes((Join-Path $repo 'src/widget/bin/generated.dat'), [byte[]]@(42))
         $changed = @('src/widget/bin/payload.dat')
@@ -435,7 +458,7 @@ function Get-TestOnlyState {
     param([string]$Root)
     $files = @(Get-ChildItem -LiteralPath $Root -Filter engine-state.json -Recurse -File -ErrorAction SilentlyContinue)
     if ($files.Count -ne 1) { return $null }
-    Get-Content -LiteralPath $files[0].FullName -Raw | ConvertFrom-Json
+    Get-Content -LiteralPath $files[0].FullName -Raw -Encoding UTF8 | ConvertFrom-Json
 }
 
 function Get-TestOnlyStateFile {
@@ -467,12 +490,13 @@ function Invoke-TestScenario {
         [string]$Risk = 'medium', [switch]$TwoWave,
         [AllowNull()][string]$BaselinePath, [AllowNull()][string]$TreePinPath,
         [AllowNull()][string]$CriticalPath, [string]$BuildOutput, [switch]$IgnoredFile,
-        [AllowNull()][string]$AgentsFetchFailure, [AllowNull()][string]$AgentsFetchTrace
+        [AllowNull()][string]$AgentsFetchFailure, [AllowNull()][string]$AgentsFetchTrace,
+        [string]$AcceptanceText, [switch]$Delete
     )
     $repoPath = New-TestRepo "$Name-repo" -BuildOutput $BuildOutput
     $specPath = Join-Path $testRoot "$Name.md"
     New-TestSpec $repoPath $specPath -Single:$Single -FirstId $FirstId -SecondId $SecondId -Effort $Effort `
-        -Risk $Risk -TwoWave:$TwoWave -IgnoredFile:$IgnoredFile
+        -Risk $Risk -TwoWave:$TwoWave -IgnoredFile:$IgnoredFile -AcceptanceText $AcceptanceText -Delete:$Delete
     $statePath = Join-Path $testRoot "$Name-state"
     $worktrees = Join-Path $testRoot "$Name-worktrees"
     $oldScenario = $env:ENGINE_TEST_FAKE_SCENARIO
@@ -699,7 +723,7 @@ try {
         CodexExecutable = 'powershell.exe'; CodexExecutableArgumentPrefix = $prefix
     } 'main'
     $stateFiles = @(Get-ChildItem -LiteralPath $stateRoot -Filter engine-state.json -Recurse -File -ErrorAction SilentlyContinue)
-    $state = if ($stateFiles.Count -eq 1) { Get-Content $stateFiles[0].FullName -Raw | ConvertFrom-Json } else { $null }
+    $state = if ($stateFiles.Count -eq 1) { Get-Content $stateFiles[0].FullName -Raw -Encoding UTF8 | ConvertFrom-Json } else { $null }
     $childDiagnostics = ''
     if ($null -ne $state) { foreach ($task in @($state.tasks)) { foreach ($attempt in @($task.attempts)) {
         if (Test-Path -LiteralPath $attempt.child_output_path) { $childDiagnostics += "`n[$($task.id)/$($attempt.number)] " + [IO.File]::ReadAllText($attempt.child_output_path) }
@@ -708,6 +732,8 @@ try {
         ($run.code -eq 0 -and $null -ne $state -and $state.status -ceq 'complete' -and
             (Test-Path (Join-Path $repo 'src\b.py')) -and ([IO.File]::ReadAllText((Join-Path $repo 'src\a.py')) -match 'fake-one')) `
         "exit=$($run.code); output=$($run.output); children=$childDiagnostics"
+    # The default verify recipe runs every case; this optional switch focuses development checks.
+    if (-not $AcceptanceOnly) {
     $printedEvents = 0
     if ($null -ne $state) {
         foreach ($task in @($state.tasks)) { foreach ($attempt in @($task.attempts)) {
@@ -1058,7 +1084,7 @@ exit `$LASTEXITCODE
     $afterCleanRejected = Get-TestOnlyState $rejectCase.state_root
     Assert-Test 'review reject parks' `
         ($rejectRun.code -eq 1 -and $afterReject.status -ceq 'parked' -and
-            $rejectRun.output -match [regex]::Escape("Next: fix via an adjusted spec, then -Resume $($rejectPause.run_id) -ReviewVerdict clean -ReviewDigest <digest> -ReviewRecord <new abs path>, or -Teardown $($rejectPause.run_id) -Discard") -and
+            $rejectRun.output -match [regex]::Escape("Next: inspect the diagnosis, then -Resume $($rejectPause.run_id) or -Teardown $($rejectPause.run_id) -Discard.") -and
             [string]$afterReject.wave_runtime.'1'.review.status -ceq 'rejected' -and
             @($afterReject.wave_runtime.'1'.review.verdicts).Count -eq 1 -and
             $plainRejectRun.code -eq 1 -and $plainRejected.status -ceq 'parked' -and
@@ -1670,14 +1696,7 @@ if ($Verify) {
 }
 Write-Host "$kind ok"; exit 0
 '@
-    Write-TestText $gateBaseline @'
-param([switch]$Full, [string]$Worktree)
-$counter = Join-Path $env:ENGINE_TEST_GATE_COUNTER 'baseline.txt'
-$count = if (Test-Path $counter) { [int](Get-Content $counter -Raw) } else { 0 }
-$count++; [IO.File]::WriteAllText($counter, [string]$count)
-Write-Host "baseline diagnosis $env:ENGINE_TEST_BASELINE_EXIT"
-exit ([int]$env:ENGINE_TEST_BASELINE_EXIT)
-'@
+    New-TestGateBaseline $gateBaseline
     function Stage-EngineWave { param($IntegrationWorktree, $Files) [pscustomobject]@{ ok = $script:TestStageOk; failures = @() } }
     $script:EngineTreePinScript = $gatePin; $script:EngineBaselineScript = $gateBaseline; $script:TestStageOk = $true
     $gateContext = New-TestRouteContext
@@ -2269,6 +2288,7 @@ exit $code
         $lease = [ordered]@{
             row_kind = 'lease'; status = 'leasing'; worktree = $state.tasks[0].attempts[0].worktree
             spec = $state.spec.name; task = $state.tasks[0].id; phase = 'build'
+            pid = $PID; pid_start = (Get-RunnerProcessStamp $PID)
         }
         [IO.File]::AppendAllText($ledgerPath, (($lease | ConvertTo-Json -Compress) + "`n"), $utf8)
         $liveRowRefusal = Invoke-TestEngine @('-Teardown', $state.run_id, '-StateRoot', $stateRoot, '-WorktreeRoot', $worktreeRoot)
@@ -2276,7 +2296,7 @@ exit $code
         Write-TestText $stateFiles[0].FullName ($state | ConvertTo-Json -Depth 100)
         Assert-Test 'teardown refuses live recorded child PID and leasing ledger row' `
             ($livePidRefusal.code -ne 0 -and $livePidRefusal.output -match 'live recorded child_pid' -and
-                $liveRowRefusal.code -ne 0 -and $liveRowRefusal.output -match 'non-terminal ledger row') `
+                $liveRowRefusal.code -ne 0 -and $liveRowRefusal.output -match 'live ledger row') `
             "pid=$($livePidRefusal.output); row=$($liveRowRefusal.output)"
 
         $parent = (Invoke-TestGit $repo @('rev-parse', 'HEAD'))[-1]
@@ -2287,7 +2307,7 @@ exit $code
         Assert-Test 'proof-gated teardown fixture has a declared ignored output in its task worktree' `
             (($dirtyTaskStatus -join "`n") -match '(?m)^!! src/widget/bin/') ($dirtyTaskStatus -join "`n")
         $completeTeardownResult = Invoke-TestEngine @('-Teardown', $state.run_id, '-StateRoot', $stateRoot, '-WorktreeRoot', $worktreeRoot)
-        $afterTeardown = Get-Content $stateFiles[0].FullName -Raw | ConvertFrom-Json
+        $afterTeardown = Get-Content $stateFiles[0].FullName -Raw -Encoding UTF8 | ConvertFrom-Json
         Assert-Test 'complete teardown with proof and durable per-item journal' `
             ($completeTeardownResult.code -eq 0 -and $afterTeardown.teardown.status -ceq 'complete' -and @($afterTeardown.teardown.items).Count -eq 6 -and
                 -not (Test-Path -LiteralPath $dirtyTaskWorktree) -and
@@ -2423,6 +2443,399 @@ exit $code
             $discardResult.code -eq 0 -and $discardState.teardown.status -ceq 'complete') `
         $discardResult.output
 
+    }
+    if ($AcceptanceOnly) { $gateBaseline = Join-Path $testRoot 'fake-baseline.ps1'; New-TestGateBaseline $gateBaseline }
+
+    # Real child checks: exits never terminate the Engine, output is bounded, and
+    # timeouts kill the launcher and its descendants.
+    $env:APEX_ENGINE_TEST_IMPORT_ONLY = '1'; . $engine
+    Remove-Item Env:APEX_ENGINE_TEST_IMPORT_ONLY -ErrorAction SilentlyContinue
+    $acceptRepo = New-TestRepo 'accept-child-repo'
+    $script:EngineState = ($state | ConvertTo-Json -Depth 100) | ConvertFrom-Json
+    $script:EngineState.integration.worktree = $acceptRepo
+    $script:EngineStatePath = Join-Path $testRoot 'accept-child-state/engine-state.json'
+    foreach ($childCase in @(
+        @{ name = 'exit-zero'; body = 'exit 0'; passed = $true },
+        @{ name = 'throw'; body = "throw 'accept-throw'"; passed = $false },
+        @{ name = 'exit-seven'; body = 'exit 7'; passed = $false },
+        @{ name = 'native-exit'; body = 'cmd.exe /c exit 9; exit $LASTEXITCODE'; passed = $false }
+    )) {
+        $record = New-RunnerAcceptanceRecord $childCase.name
+        $check = [pscustomobject]@{ id = $childCase.name; body = $childCase.body }
+        $passed = Invoke-RunnerAcceptanceCheck $check $record
+        Assert-Test ("acceptance child $($childCase.name)") ($passed -eq $childCase.passed -and
+            $record.status -ceq $(if ($childCase.passed) { 'passed' } else { 'failed' })) ($record | ConvertTo-Json -Compress)
+        Assert-Test 'acceptance script preserves body with Stop preference prepended' `
+            ([IO.File]::ReadAllText((Join-Path $testRoot "accept-child-state/acceptance/$($childCase.name).ps1")) -ceq ("`$ErrorActionPreference = 'Stop'`n" + $childCase.body)) ''
+    }
+    $record = New-RunnerAcceptanceRecord 'tail'
+    [void](Invoke-RunnerAcceptanceCheck ([pscustomobject]@{ id = 'tail'; body = "1..55 | ForEach-Object { Write-Output ('line-' + `$_) }; [Console]::Error.WriteLine('stderr-sentinel'); exit 7" }) $record)
+    Assert-Test 'acceptance combined output last forty lines' (@($record.output_tail -split "`n").Count -eq 40 -and
+        $record.output_tail.Contains('line-55') -and $record.output_tail.Contains('stderr-sentinel') -and -not $record.output_tail.Contains('line-1' + "`n")) $record.output_tail
+    $record = New-RunnerAcceptanceRecord 'timeout'
+    $env:APEX_ENGINE_TEST_ACCEPT_TIMEOUT_MS = '1000'
+    [void](Invoke-RunnerAcceptanceCheck ([pscustomobject]@{ id = 'timeout'; body = 'Start-Sleep -Seconds 30' }) $record)
+    Remove-Item Env:APEX_ENGINE_TEST_ACCEPT_TIMEOUT_MS -ErrorAction SilentlyContinue
+    Assert-Test 'acceptance timeout fails kills process tree and ends with specified tail' ($record.status -ceq 'failed' -and
+        $record.output_tail.EndsWith('timed out after 10 min') -and -not (Test-RunnerPidLive $record.child_pid $record.child_start_time)) $record.output_tail
+
+    # A baseline RED never executes the checks. A per-task file subset cannot run
+    # another task's check, including the calls used by Find-RunnerWaveFailure.
+    $script:EngineState.plan.waves = @([pscustomobject]@{ number = 1; tasks = @(
+        [pscustomobject]@{ id = '1'; files = @([pscustomobject]@{ path = 'AGENTS.md'; op = 'modify' }); acceptance_checks = @([pscustomobject]@{ id = '1-1'; body = "[IO.File]::AppendAllText(`$env:ENGINE_TEST_ACCEPT_COUNTER, '1'); exit 0" }) },
+        [pscustomobject]@{ id = '2'; files = @([pscustomobject]@{ path = 'verify.ps1'; op = 'modify' }); acceptance_checks = @([pscustomobject]@{ id = '2-1'; body = "[IO.File]::AppendAllText(`$env:ENGINE_TEST_ACCEPT_COUNTER, '2'); throw 'task two failure'" }) }
+    ) })
+    foreach ($task in $script:EngineState.tasks) { $task.PSObject.Properties.Remove('acceptance') }
+    $env:ENGINE_TEST_ACCEPT_COUNTER = Join-Path $testRoot 'accept-selected.txt'
+    $env:ENGINE_TEST_GATE_COUNTER = Join-Path $testRoot 'accept-baseline-count'; [void][IO.Directory]::CreateDirectory($env:ENGINE_TEST_GATE_COUNTER)
+    $env:ENGINE_TEST_BASELINE_EXIT = '1'; $script:EngineBaselineScript = $gateBaseline
+    $selectedFiles = @($script:EngineState.plan.waves[0].tasks[0].files)
+    $skipGate = Invoke-RunnerGate $selectedFiles 1
+    Assert-Test 'baseline failure skips tagged task checks' ($skipGate.gate -ceq 'baseline' -and $skipGate.code -eq 1 -and
+        -not (Test-Path -LiteralPath $env:ENGINE_TEST_ACCEPT_COUNTER)) $skipGate.diagnosis
+    $env:ENGINE_TEST_BASELINE_EXIT = '0'
+    $oneGate = Invoke-RunnerGate $selectedFiles 1
+    $twoGate = Invoke-RunnerGate @($script:EngineState.plan.waves[0].tasks[1].files) 1
+    Assert-Test 'per-task gate selects only its manifest checks and returns failing task ID/tail' ($oneGate.code -eq 0 -and
+        [IO.File]::ReadAllText($env:ENGINE_TEST_ACCEPT_COUNTER) -ceq '12' -and $twoGate.gate -ceq 'accept' -and
+        $twoGate.code -eq 1 -and $twoGate.failing_task_id -ceq '2' -and $twoGate.output_tail -match 'task two failure') ($twoGate | ConvertTo-Json -Compress)
+    $savedRestore = ${function:Restore-RunnerWave}; $savedCopy = ${function:Copy-EngineTaskFiles}
+    function Restore-RunnerWave { param($Base, $Files) return $true }
+    function Copy-EngineTaskFiles { param($IntegrationWorktree, $TaskWorktree, $WaveBaseSha, $Files) [pscustomobject]@{ ok = $true } }
+    $isolatedFailureGates = @{}
+    try { $isolatedChecks = @(Find-RunnerWaveFailure $script:EngineState.plan.waves[0] $script:EngineState.base_sha @($script:EngineState.plan.waves[0].tasks | ForEach-Object { $_.files }) $isolatedFailureGates) }
+    finally { Set-Item Function:Restore-RunnerWave $savedRestore; Set-Item Function:Copy-EngineTaskFiles $savedCopy }
+    Assert-Test 'Find-RunnerWaveFailure per-task calls execute only that task checks' (($isolatedChecks -join ',') -ceq '2' -and
+        [IO.File]::ReadAllText($env:ENGINE_TEST_ACCEPT_COUNTER) -ceq '1212' -and $isolatedFailureGates['2'].gate -ceq 'accept' -and
+        $isolatedFailureGates['2'].output_tail -match 'task two failure') ($isolatedChecks -join ',')
+    $script:EngineState.status = 'running'; $script:IsolationRestores = 0
+    $script:EngineState.plan.waves[0].tasks[1].acceptance_checks[0].body = "[IO.File]::AppendAllText('AGENTS.md', 'check movement'); exit 0"
+    function Restore-RunnerWave { param($Base, $Files) $script:IsolationRestores++; return $true }
+    function Copy-EngineTaskFiles { param($IntegrationWorktree, $TaskWorktree, $WaveBaseSha, $Files) [pscustomobject]@{ ok = $true } }
+    try { [void](Find-RunnerWaveFailure $script:EngineState.plan.waves[0] $script:EngineState.base_sha @($script:EngineState.plan.waves[0].tasks | ForEach-Object { $_.files })) }
+    finally { Set-Item Function:Restore-RunnerWave $savedRestore; Set-Item Function:Copy-EngineTaskFiles $savedCopy }
+    Assert-Test 'per-task isolation integrity failure parks without restoring mutation' ($script:EngineState.status -ceq 'parked' -and
+        $script:IsolationRestores -eq 2 -and [IO.File]::ReadAllText((Join-Path $acceptRepo 'AGENTS.md')).Contains('check movement')) $script:EngineState.diagnosis
+    Remove-Item Env:ENGINE_TEST_GATE_COUNTER, Env:ENGINE_TEST_BASELINE_EXIT -ErrorAction SilentlyContinue
+
+    $retryCriteria = @'
+- [ ] Task 1 - first task check
+```powershell apex-accept
+exit 0
+```
+- [ ] Task 2 - second task check
+```powershell apex-accept
+if (-not (Test-Path -LiteralPath $env:ENGINE_TEST_ACCEPT_COUNTER)) {
+    [IO.File]::WriteAllText($env:ENGINE_TEST_ACCEPT_COUNTER, 'failed once')
+    throw 'task-two-acceptance-sentinel'
+}
+exit 0
+```
+- [ ] Task 1 - HOST review remains visible
+'@
+    $env:ENGINE_TEST_ACCEPT_COUNTER = Join-Path $testRoot 'accept-retry-counter'
+    $env:APEX_ENGINE_TEST_CRASH_AFTER_VERIFICATION_FAILURE = 'low'
+    $acceptRetry = Invoke-TestScenario -Name 'accept-retry' -Effort low -AcceptanceText $retryCriteria
+    Remove-Item Env:APEX_ENGINE_TEST_CRASH_AFTER_VERIFICATION_FAILURE -ErrorAction SilentlyContinue
+    $acceptFailed = Get-TestOnlyState $acceptRetry.state_root
+    Assert-Test 'acceptance failure journals tail failed attempt diagnosis before crash' ($acceptFailed.tasks[1].attempts[0].status -ceq 'failed' -and
+        $acceptFailed.tasks[1].attempts[0].diagnosis -ceq 'verification failure' -and
+        $acceptFailed.tasks[1].attempts[0].acceptance_output_tail -match 'task-two-acceptance-sentinel') $acceptRetry.result.output
+    $retryResume = Invoke-TestEngine @('-Resume', $acceptFailed.run_id, '-StateRoot', $acceptRetry.state_root)
+    $acceptAfter = Get-TestOnlyState $acceptRetry.state_root
+    $retryPrompt = (Get-Content -LiteralPath $acceptAfter.tasks[1].attempts[1].args_path -Raw -Encoding UTF8 | ConvertFrom-Json).Prompt
+    $frozenPrompt = $acceptAfter.plan.waves[0].tasks[1].prompt
+    $retryAssertions = [ordered]@{
+        completed = $retryResume.code -eq 0 -and $acceptAfter.status -ceq 'complete'
+        first_task_once = @($acceptAfter.tasks[0].attempts).Count -eq 1
+        second_task_retried = @($acceptAfter.tasks[1].attempts).Count -eq 2
+        next_effort = $acceptAfter.tasks[1].attempts[1].effort -ceq 'medium'
+        prompt_prefix = $retryPrompt.Contains('Previous acceptance check output:')
+        prompt_tail = $retryPrompt.Contains($acceptFailed.tasks[1].attempts[0].acceptance_output_tail)
+        frozen = -not $frozenPrompt.Contains('Previous acceptance check output:') -and $frozenPrompt -ceq $acceptFailed.plan.waves[0].tasks[1].prompt
+        frozen_digest = (Get-EngineSha256 -Text $frozenPrompt) -ceq $acceptAfter.plan.waves[0].tasks[1].prompt_digest
+    }
+    Assert-Test 'two-task acceptance failure retries only failing task and appends tail to next prompt' `
+        (@($retryAssertions.GetEnumerator() | Where-Object { -not $_.Value }).Count -eq 0) `
+        (($retryAssertions | ConvertTo-Json -Compress) + '; ' + $retryResume.output)
+    Assert-Test 'complete run prints HOST checks and exact next line' ($retryResume.output.Contains('HOST checks:') -and
+        $retryResume.output.Contains('- [ ] Task 1 - HOST review remains visible') -and
+        $retryResume.output.Contains("Next: run HOST checks, review, commit, then -Teardown $($acceptAfter.run_id).")) $retryResume.output
+    $completeStatus = Invoke-TestEngine @('-Resume', $acceptAfter.run_id, '-StateRoot', $acceptRetry.state_root)
+    Assert-Test 'complete status output retains HOST checks' ($completeStatus.output.Contains('HOST checks:') -and $completeStatus.output.Contains('HOST review remains visible')) $completeStatus.output
+
+    # The second attempt fails baseline without running checks. Exercise both
+    # direct single-task routing and the multi-task isolation fallback.
+    $staleTailCriteria = @'
+- [ ] Task 1 - task check fails once
+```powershell apex-accept
+if (-not (Test-Path -LiteralPath $env:ENGINE_TEST_ACCEPT_COUNTER)) {
+    [IO.File]::WriteAllText($env:ENGINE_TEST_ACCEPT_COUNTER, 'failed once')
+    throw ('attempt-one-' + 'stale-tail-sentinel')
+}
+exit 0
+```
+'@
+    foreach ($singleTask in @($true, $false)) {
+        $caseName = if ($singleTask) { 'accept-stale-tail-single' } else { 'accept-stale-tail-isolation' }
+        $env:ENGINE_TEST_ACCEPT_COUNTER = Join-Path $testRoot "$caseName-check"
+        $env:ENGINE_TEST_GATE_COUNTER = Join-Path $testRoot "$caseName-baseline"
+        [void][IO.Directory]::CreateDirectory($env:ENGINE_TEST_GATE_COUNTER)
+        $env:ENGINE_TEST_BASELINE_EXIT = '0'
+        $env:ENGINE_TEST_BASELINE_SEQUENCE = if ($singleTask) { '0,1,0' } else { '0,1,1,0,0' }
+        $caseCriteria = if ($singleTask) { $staleTailCriteria } else { $staleTailCriteria + "`n- [ ] Task 2 - HOST reviews second task`n" }
+        try {
+            $staleTailCase = Invoke-TestScenario -Name $caseName -Single:$singleTask -Effort low `
+                -AcceptanceText $caseCriteria -BaselinePath $gateBaseline
+            $staleAttempts = @($staleTailCase.state.tasks[0].attempts)
+            $thirdPrompt = if ($staleAttempts.Count -eq 3) {
+                (Get-Content -LiteralPath $staleAttempts[2].args_path -Raw -Encoding UTF8 | ConvertFrom-Json).Prompt
+            } else { '' }
+            $secondTail = if ($staleAttempts.Count -ge 2 -and $staleAttempts[1].PSObject.Properties['acceptance_output_tail']) {
+                [string]$staleAttempts[1].acceptance_output_tail
+            } else { '' }
+            Assert-Test "$caseName baseline failure never reuses a prior attempt acceptance tail" `
+                ($staleTailCase.result.code -eq 0 -and $staleTailCase.state.status -ceq 'complete' -and
+                $staleAttempts.Count -eq 3 -and $staleAttempts[0].acceptance_output_tail -match 'attempt-one-stale-tail-sentinel' -and
+                $staleAttempts[1].status -ceq 'failed' -and $staleAttempts[1].diagnosis -ceq 'verification failure' -and
+                [string]::IsNullOrEmpty($secondTail) -and -not $thirdPrompt.Contains('attempt-one-stale-tail-sentinel') -and
+                -not $thirdPrompt.Contains('Previous acceptance check output:')) $staleTailCase.result.output
+        } finally {
+            Remove-Item Env:ENGINE_TEST_BASELINE_SEQUENCE, Env:ENGINE_TEST_GATE_COUNTER, Env:ENGINE_TEST_BASELINE_EXIT -ErrorAction SilentlyContinue
+        }
+    }
+
+    $specCriteria = @'
+- [ ] Task 1 - HOST fixture criterion
+- [ ] first spec check
+```powershell apex-accept
+[IO.File]::AppendAllText($env:ENGINE_TEST_ACCEPT_COUNTER, 'first')
+exit 0
+```
+- [ ] second spec check
+```powershell apex-accept
+if ($env:ENGINE_TEST_SPEC_FAIL -eq '1') { throw 'spec-failure-sentinel' }
+exit 0
+```
+'@
+    $env:ENGINE_TEST_ACCEPT_COUNTER = Join-Path $testRoot 'spec-passed-counter'
+    $env:ENGINE_TEST_SPEC_FAIL = '1'
+    $specFailure = Invoke-TestScenario -Name 'spec-accept-failure' -Single -AcceptanceText $specCriteria
+    Remove-Item Env:ENGINE_TEST_SPEC_FAIL -ErrorAction SilentlyContinue
+    $specBefore = Get-TestOnlyState $specFailure.state_root
+    Assert-Test 'post-commit spec failure parks with durable records and no handoff' ($specFailure.result.code -eq 1 -and
+        $specBefore.status -ceq 'parked' -and $specBefore.tasks[0].status -ceq 'integrated' -and
+        $specBefore.spec_acceptance.status -ceq 'failed' -and $specBefore.spec_acceptance.checks[0].status -ceq 'passed' -and
+        $specBefore.spec_acceptance.checks[1].status -ceq 'failed' -and $specBefore.handoff.status -ceq 'pending' -and
+        $specBefore.integration.tip -cne $specBefore.base_sha) $specFailure.result.output
+    $specResume = Invoke-TestEngine @('-Resume', $specBefore.run_id, '-StateRoot', $specFailure.state_root)
+    $specAfter = Get-TestOnlyState $specFailure.state_root
+    Assert-Test 'spec Resume skips passed checks clears stale tail and completes' ($specResume.code -eq 0 -and
+        $specAfter.spec_acceptance.status -ceq 'passed' -and $specAfter.spec_acceptance.checks[1].output_tail -ceq '' -and
+        [IO.File]::ReadAllText($env:ENGINE_TEST_ACCEPT_COUNTER) -ceq 'first' -and $specAfter.counters.dispatches -eq 1) $specResume.output
+    $pendingSpec = ($specAfter | ConvertTo-Json -Depth 100) | ConvertFrom-Json
+    $pendingSpec.status = 'parked'; $pendingSpec.spec_acceptance.status = 'pending'
+    $pendingSpec.spec_acceptance.checks[1].status = 'pending'; $pendingSpec.spec_acceptance.checks[1].output_tail = 'stale pending tail'
+    Write-TestText (Get-TestOnlyStateFile $specFailure.state_root).FullName ($pendingSpec | ConvertTo-Json -Depth 100)
+    $pendingResume = Invoke-TestEngine @('-Resume', $pendingSpec.run_id, '-StateRoot', $specFailure.state_root)
+    $specAfter = Get-TestOnlyState $specFailure.state_root
+    Assert-Test 'spec pending Resume clears previous tail and reruns only pending check' ($pendingResume.code -eq 0 -and
+        $specAfter.spec_acceptance.status -ceq 'passed' -and $specAfter.spec_acceptance.checks[1].output_tail -ceq '' -and
+        [IO.File]::ReadAllText($env:ENGINE_TEST_ACCEPT_COUNTER) -ceq 'first') $pendingResume.output
+
+    $deleteCriteria = "- [ ] Task 1 - HOST reviews deletion`n- [ ] deleted fixture stays absent`n``````powershell apex-accept`n[IO.File]::AppendAllText(`$env:APEX_ENGINE_TEST_STAGE_TRACE_PATH, 'spec' + [char]10)`nif (Test-Path src/a.py) { throw 'delete still present' }; exit 0`n```````n"
+    $env:ENGINE_TEST_GATE_COUNTER = Join-Path $testRoot 'spec-delete-baseline'; [void][IO.Directory]::CreateDirectory($env:ENGINE_TEST_GATE_COUNTER)
+    $env:ENGINE_TEST_BASELINE_EXIT = '0'
+    $env:APEX_ENGINE_TEST_STAGE_TRACE_PATH = Join-Path $testRoot 'spec-delete-stage-trace.txt'
+    try {
+        $deleteAccept = Invoke-TestScenario -Name 'spec-accept-delete' -Scenario delete -Single -Delete -AcceptanceText $deleteCriteria -BaselinePath $gateBaseline
+    } finally { $env:APEX_ENGINE_TEST_STAGE_TRACE_PATH = $oldStageTrace }
+    Assert-Test 'post-commit spec check accepts manifest delete without staging or repeating baseline' ($deleteAccept.result.code -eq 0 -and
+        $deleteAccept.state.spec_acceptance.status -ceq 'passed' -and -not (Test-Path (Join-Path $deleteAccept.state.integration.worktree 'src/a.py')) -and
+        (Get-Content (Join-Path $env:ENGINE_TEST_GATE_COUNTER 'baseline.txt') -Raw) -ceq '1' -and
+        [IO.File]::ReadAllText((Join-Path $testRoot 'spec-delete-stage-trace.txt')) -ceq "stage`nspec`n") $deleteAccept.result.output
+    Remove-Item Env:ENGINE_TEST_GATE_COUNTER, Env:ENGINE_TEST_BASELINE_EXIT -ErrorAction SilentlyContinue
+
+    foreach ($mutation in @('working', 'index', 'head', 'residue', 'pin')) {
+        $body = switch ($mutation) {
+            'working' { "[IO.File]::AppendAllText('src/a.py', 'movement')" }
+            'index' { "git update-index --force-remove src/a.py; if (`$LASTEXITCODE) { throw 'native' }" }
+            'head' { "git update-ref HEAD HEAD^; if (`$LASTEXITCODE) { throw 'native' }" }
+            'residue' { "[IO.File]::WriteAllText('residue-untracked.txt', 'residue')" }
+            'pin' { 'exit 0' }
+        }
+        $criteria = "- [ ] Task 1 - HOST reviews fixture`n- [ ] spec integrity fixture`n``````powershell apex-accept`n$body`n```````n"
+        $pinPath = $null
+        if ($mutation -ceq 'pin') {
+            $pinPath = Join-Path $testRoot 'spec-pin-fail.ps1'
+            Write-TestText $pinPath @'
+param([switch]$Pin, [switch]$Verify, [switch]$Digest, [string]$Worktree, [string]$Label, [string]$PinDirectory)
+if ($Pin -and $Label.EndsWith('-spec')) { Write-Output 'spec pin failed'; exit 23 }
+& $env:ENGINE_TEST_REAL_TREE_PIN @PSBoundParameters
+exit $LASTEXITCODE
+'@
+            $env:ENGINE_TEST_REAL_TREE_PIN = Join-Path $PSScriptRoot 'tree-pin.ps1'
+        }
+        $movement = Invoke-TestScenario -Name "spec-accept-$mutation" -Single -AcceptanceText $criteria -TreePinPath $pinPath
+        Assert-Test "spec $mutation failure journals failed check/spec before parking without restoration" ($movement.result.code -eq 1 -and
+            $movement.state.status -ceq 'parked' -and $movement.state.spec_acceptance.status -ceq 'failed' -and
+            $movement.state.spec_acceptance.checks[0].status -ceq 'failed' -and $movement.state.integration.tip -cne $movement.state.base_sha -and
+            $movement.state.handoff.status -ceq 'pending') $movement.result.output
+        if ($mutation -ceq 'working') { Assert-Test 'spec working movement is retained' ([IO.File]::ReadAllText((Join-Path $movement.state.integration.worktree 'src/a.py')).Contains('movement')) '' }
+        if ($mutation -ceq 'residue') { Assert-Test 'spec residue is retained' (Test-Path (Join-Path $movement.state.integration.worktree 'residue-untracked.txt')) '' }
+        if ($mutation -in @('working', 'index')) {
+            $movementResume = Invoke-TestEngine @('-Resume', $movement.state.run_id, '-StateRoot', $movement.state_root)
+            $movementAgain = Get-TestOnlyState $movement.state_root
+            Assert-Test "spec Resume refuses unrepaired $mutation tree instead of pinning it as new baseline" ($movementResume.code -eq 1 -and
+                $movementAgain.spec_acceptance.status -ceq 'failed' -and $movementAgain.spec_acceptance.checks[0].status -ceq 'failed' -and
+                $movementAgain.diagnosis -match 'differs from final wave commit') $movementResume.output
+        }
+    }
+    Remove-Item Env:ENGINE_TEST_REAL_TREE_PIN -ErrorAction SilentlyContinue
+
+    # A recorded running check survives the parent crash; Resume kills the old
+    # launcher tree using both PID and stamp before executing the frozen check.
+    $runningCriteria = @'
+- [ ] Task 1 - crash child fixture
+```powershell apex-accept
+if ($env:ENGINE_TEST_ACCEPT_SLEEP -eq '1') { Start-Sleep -Seconds 60 }
+exit 0
+```
+'@
+    $env:ENGINE_TEST_ACCEPT_SLEEP = '1'; $env:APEX_ENGINE_TEST_CRASH_DURING_ACCEPTANCE = '1-1'
+    $runningCrash = Invoke-TestScenario -Name 'accept-running-crash' -Single -AcceptanceText $runningCriteria
+    Remove-Item Env:APEX_ENGINE_TEST_CRASH_DURING_ACCEPTANCE, Env:ENGINE_TEST_ACCEPT_SLEEP -ErrorAction SilentlyContinue
+    $runningRecord = $runningCrash.state.tasks[0].acceptance[0]
+    $wasLive = Test-RunnerPidLive $runningRecord.child_pid $runningRecord.child_start_time
+    $descendantDeadline = (Get-Date).AddSeconds(5); $descendants = @()
+    while ((Get-Date) -lt $descendantDeadline -and $descendants.Count -eq 0) {
+        $descendants = @((Get-EngineDescendantProcessIds ([int]$runningRecord.child_pid)).process_ids | ForEach-Object {
+            [pscustomobject]@{ pid_value = $_; stamp = (Get-RunnerProcessStamp $_) }
+        })
+        if ($descendants.Count -eq 0) { Start-Sleep -Milliseconds 100 }
+    }
+    $runningResume = Invoke-TestEngine @('-Resume', $runningCrash.state.run_id, '-StateRoot', $runningCrash.state_root)
+    $runningAfter = Get-TestOnlyState $runningCrash.state_root
+    Assert-Test 'running check crash saves PID/stamp then Resume kills original tree and reruns' ($wasLive -and
+        $runningRecord.status -ceq 'running' -and $runningResume.code -eq 0 -and
+        -not (Test-RunnerPidLive $runningRecord.child_pid $runningRecord.child_start_time) -and
+        $runningAfter.tasks[0].acceptance[0].status -ceq 'passed' -and $runningAfter.counters.dispatches -eq 1) $runningResume.output
+    Assert-Test 'running check Resume kills recorded launcher descendants' ($descendants.Count -gt 0 -and
+        @($descendants | Where-Object { Test-RunnerPidLive $_.pid_value $_.stamp }).Count -eq 0) ($descendants | ConvertTo-Json -Compress)
+
+    # Optional additions enforce exact object shapes; stripped schema-v1 states
+    # still resume and teardown with the original rules.
+    $acceptSchema = Get-Content $schemaPath -Raw | ConvertFrom-Json
+    foreach ($newState in @($acceptAfter, $specAfter)) {
+        $shapeError = ''; try { Test-Structure $newState $acceptSchema } catch { $shapeError = $_.Exception.Message }
+        Assert-Test 'acceptance state optional exact schema shapes' ([string]::IsNullOrEmpty($shapeError)) $shapeError
+    }
+    foreach ($shape in @('plan-check', 'host-check', 'task-record', 'spec-record', 'spec-runtime')) {
+        $invalid = ($acceptAfter | ConvertTo-Json -Depth 100) | ConvertFrom-Json
+        $target = switch ($shape) {
+            'plan-check' { $invalid.plan.waves[0].tasks[0].acceptance_checks[0] }
+            'host-check' { $invalid.plan.host_checks[0] }
+            'task-record' { $invalid.tasks[0].acceptance[0] }
+            'spec-record' { $invalid = ($specAfter | ConvertTo-Json -Depth 100) | ConvertFrom-Json; $invalid.spec_acceptance.checks[0] }
+            'spec-runtime' { $invalid = ($specAfter | ConvertTo-Json -Depth 100) | ConvertFrom-Json; $invalid.spec_acceptance }
+        }
+        $target | Add-Member -NotePropertyName unexpected -NotePropertyValue 'reject'
+        $errorText = ''; try { Test-Structure $invalid $acceptSchema } catch { $errorText = $_.Exception.Message }
+        Assert-Test "acceptance $shape forbids additional properties" ($errorText -match 'unexpected key') $errorText
+    }
+
+    # Complete discard permits repaired main trees, but its reason guard precedes
+    # adoption. Exercise dead-row adoption using the real teardown ordering and
+    # deterministic adopter results, without another model dispatch.
+    $script:EngineState = ($acceptAfter | ConvertTo-Json -Depth 100) | ConvertFrom-Json
+    $script:EngineStatePath = (Get-TestOnlyStateFile $acceptRetry.state_root).FullName
+    $script:EngineStateRoot = $acceptRetry.state_root
+    $script:EngineState.handoff.journaled_paths = @(); Save-RunnerState
+    $adoptCount = 0; $originalAdopt = ${function:Invoke-EngineAdopt}; $originalRows = ${function:Read-EngineLedgerRows}
+    $originalRemove = ${function:Remove-EngineRunWorktrees}
+    $script:TeardownTestRow = [pscustomobject]@{ run_id = ('e' * 32); status = 'running'; pid = 0; launcher_pid = 0;
+        spec = $acceptAfter.spec.name; task = '1'; worktree = $acceptAfter.tasks[0].attempts[0].worktree }
+    function Read-EngineLedgerRows { param($LedgerPath) return @($script:TeardownTestRow) }
+    function Invoke-EngineAdopt {
+        param($WrapperPath, $RunId, $Spec, $Task, $Worktree, $StateRoot, $ChildOutputPath)
+        $script:adoptCount++
+        Assert-Test 'teardown adopter receives attempt identities and run-local output' ($Spec -ceq $script:TeardownTestRow.spec -and
+            $Task -ceq $script:TeardownTestRow.task -and $RunId -ceq $script:TeardownTestRow.run_id -and
+            $Worktree -ceq $script:TeardownTestRow.worktree -and $ChildOutputPath.StartsWith((Split-Path $script:EngineStatePath -Parent))) $ChildOutputPath
+        if ($script:AdoptTestMode -ceq 'success') { $script:TeardownTestRow.status = 'adopted-done' }
+        [pscustomobject]@{ exit_code = $(if ($script:AdoptTestMode -ceq 'nonzero') { 1 } else { 0 }); adopt_timed_out = ($script:AdoptTestMode -ceq 'timeout') }
+    }
+    function Remove-EngineRunWorktrees { param($Repo, $Spec, $Branches, $Worktrees, $OnItemRemoved) [pscustomobject]@{ ok = $true } }
+    $Discard = $true
+    try {
+        foreach ($reasonText in @('', '   ')) {
+            $Reason = $reasonText; $refusal = ''
+            try { Invoke-RunnerTeardown $acceptAfter.run_id } catch { $refusal = $_.Exception.Message } finally { Close-RunnerRunLock }
+            Assert-Test 'missing complete discard reason refuses before adoption' ($refusal -match 'non-empty -Reason' -and $script:adoptCount -eq 0) $refusal
+        }
+        $Reason = 'owner repaired the main tree'; $script:AdoptTestMode = 'success'
+        $script:TeardownTestRow.status = 'done'; $script:TeardownTestRow.pid = $PID
+        $script:TeardownTestRow | Add-Member -NotePropertyName pid_start -NotePropertyValue (Get-RunnerProcessStamp $PID) -Force
+        $liveTerminalRefusal = ''
+        try { Invoke-RunnerTeardown $acceptAfter.run_id } catch { $liveTerminalRefusal = $_.Exception.Message } finally { Close-RunnerRunLock }
+        Assert-Test 'teardown tests PID liveness even for terminal matching ledger row' ($liveTerminalRefusal -match 'live ledger row' -and $script:adoptCount -eq 0) $liveTerminalRefusal
+        $script:TeardownTestRow.pid = 0
+        foreach ($adoptMode in @('timeout', 'nonzero', 'nonterminal', 'success')) {
+            $script:AdoptTestMode = $adoptMode; $script:TeardownTestRow.status = 'running'; $refusal = ''
+            try { Invoke-RunnerTeardown $acceptAfter.run_id } catch { $refusal = $_.Exception.Message } finally { Close-RunnerRunLock }
+            Assert-Test "complete discard dead-row adoption $adoptMode" `
+                ($(if ($adoptMode -ceq 'success') { $refusal -ceq '' -and $script:EngineState.teardown.reason -ceq $Reason }
+                else { $refusal -match 'adoption failed' })) $refusal
+        }
+    } finally {
+        Close-RunnerRunLock; $Discard = $false; $Reason = $null
+        Set-Item Function:Invoke-EngineAdopt $originalAdopt; Set-Item Function:Read-EngineLedgerRows $originalRows
+        Set-Item Function:Remove-EngineRunWorktrees $originalRemove
+    }
+    $invalidReason = Invoke-TestEngine @('-Reason', 'invalid')
+    $invalidReasonTeardown = Invoke-TestEngine @('-Teardown', $acceptAfter.run_id, '-StateRoot', $acceptRetry.state_root, '-Reason', 'invalid')
+    Assert-Test 'Reason CLI requires Teardown and Discard' ($invalidReason.code -eq 1 -and $invalidReason.output.Contains('-Reason requires both') -and
+        $invalidReasonTeardown.code -eq 1 -and $invalidReasonTeardown.output.Contains('-Reason requires both')) $invalidReasonTeardown.output
+    $mainHead = (Invoke-TestGit $acceptRetry.repo @('rev-parse', 'HEAD'))[-1]
+    Assert-Test 'complete discard fixture main HEAD differs from integration tip' ($mainHead -cne $acceptAfter.integration.tip) ''
+    $repairDiscard = Invoke-TestEngine @('-Teardown', $acceptAfter.run_id, '-Discard', '-Reason', 'repaired close-out', '-StateRoot', $acceptRetry.state_root)
+    $repairState = Get-TestOnlyState $acceptRetry.state_root
+    Assert-Test 'complete repaired discard bypasses proof journals reason and tears down' ($repairDiscard.code -eq 0 -and
+        $repairState.teardown.status -ceq 'complete' -and $repairState.teardown.reason -ceq 'repaired close-out') $repairDiscard.output
+    $reasonSchemaError = ''; try { Test-Structure $repairState $acceptSchema } catch { $reasonSchemaError = $_.Exception.Message }
+    Assert-Test 'complete discard reason passes schema' ($reasonSchemaError -ceq '') $reasonSchemaError
+
+    $legacy = ($runningAfter | ConvertTo-Json -Depth 100) | ConvertFrom-Json
+    $legacy.plan.PSObject.Properties.Remove('spec_acceptance_checks'); $legacy.plan.PSObject.Properties.Remove('host_checks')
+    foreach ($wave in $legacy.plan.waves) { foreach ($task in $wave.tasks) { $task.PSObject.Properties.Remove('acceptance_checks') } }
+    foreach ($task in $legacy.tasks) { $task.PSObject.Properties.Remove('acceptance'); foreach ($attempt in $task.attempts) { $attempt.PSObject.Properties.Remove('acceptance_output_tail') } }
+    $legacy.PSObject.Properties.Remove('spec_acceptance'); $legacy.teardown.PSObject.Properties.Remove('reason'); $legacy.status = 'parked'
+    Write-TestText (Get-TestOnlyStateFile $runningCrash.state_root).FullName ($legacy | ConvertTo-Json -Depth 100)
+    $legacySchemaError = ''; try { Test-Structure $legacy $acceptSchema } catch { $legacySchemaError = $_.Exception.Message }
+    $legacyResume = Invoke-TestEngine @('-Resume', $legacy.run_id, '-StateRoot', $runningCrash.state_root)
+    $legacyParent = (Invoke-TestGit $runningCrash.repo @('rev-parse', 'HEAD'))[-1]
+    [void](Set-TestCommit $runningCrash.repo @('src/a.py') $legacyParent)
+    $legacyDiscard = Invoke-TestEngine @('-Teardown', $legacy.run_id, '-StateRoot', $runningCrash.state_root)
+    Assert-Test 'legacy schema-v1 state without additions Resume and Teardown' ($legacySchemaError -ceq '' -and
+        $legacyResume.code -eq 0 -and $legacyDiscard.code -eq 0) "$legacySchemaError; $($legacyResume.output); $($legacyDiscard.output)"
+
+    $script:EngineState = ($specAfter | ConvertTo-Json -Depth 100) | ConvertFrom-Json
+    $script:EngineStatePath = (Get-TestOnlyStateFile $specFailure.state_root).FullName
+    $script:EngineLedgerPath = Join-Path $specFailure.state_root 'progress/codex-run-ledger.jsonl'
+    foreach ($summaryCase in @(
+        @{ status = 'complete'; teardown = 'pending'; next = "Next: run HOST checks, review, commit, then -Teardown $($specAfter.run_id)." },
+        @{ status = 'parked'; teardown = 'pending'; next = "Next: inspect the diagnosis, then -Resume $($specAfter.run_id) or -Teardown $($specAfter.run_id) -Discard." },
+        @{ status = 'partial'; teardown = 'pending'; next = "Next: inspect failed tasks, then -Resume $($specAfter.run_id) or -Teardown $($specAfter.run_id) -Discard." },
+        @{ status = 'refused'; teardown = 'pending'; next = 'Next: fix the inputs and start a new run' },
+        @{ status = 'complete'; teardown = 'complete'; next = 'Next: teardown complete; no further action.' },
+        @{ status = 'complete'; teardown = 'failed'; next = "Next: resolve teardown refusal, then retry -Teardown $($specAfter.run_id); after repair use -Discard -Reason <text>." }
+    )) {
+        $script:EngineState.status = $summaryCase.status; $script:EngineState.teardown.status = $summaryCase.teardown
+        $printed = @(Write-RunnerSummary 6>&1 | ForEach-Object { [string]$_ }) -join "`n"
+        Assert-Test "summary $($summaryCase.status)/$($summaryCase.teardown) exact next line" ($printed.Contains($summaryCase.next)) $printed
+    }
+    Remove-Item Env:ENGINE_TEST_ACCEPT_COUNTER, Env:ENGINE_TEST_SPEC_FAIL -ErrorAction SilentlyContinue
+
     $testRunIds = New-Object 'System.Collections.Generic.HashSet[string]' ([StringComparer]::Ordinal)
     foreach ($engineStateFile in @(Get-ChildItem -LiteralPath $testRoot -Filter engine-state.json -Recurse -File -ErrorAction SilentlyContinue)) {
         try { $engineStateDocument = Get-Content -LiteralPath $engineStateFile.FullName -Raw | ConvertFrom-Json }
@@ -2477,6 +2890,9 @@ exit $code
         Env:ENGINE_TEST_STAGE_VERIFY_SEQUENCE, Env:ENGINE_TEST_CRITICAL_COUNTER, Env:ENGINE_TEST_CRITICAL_SEQUENCE `
         -ErrorAction SilentlyContinue
     Remove-Item Env:APEX_ENGINE_TEST_CRASH_AFTER_VERIFICATION_FAILURE -ErrorAction SilentlyContinue
+    Remove-Item Env:APEX_ENGINE_TEST_ACCEPT_TIMEOUT_MS, Env:APEX_ENGINE_TEST_CRASH_DURING_ACCEPTANCE,
+        Env:ENGINE_TEST_ACCEPT_COUNTER, Env:ENGINE_TEST_ACCEPT_SLEEP, Env:ENGINE_TEST_SPEC_FAIL, Env:ENGINE_TEST_BASELINE_SEQUENCE -ErrorAction SilentlyContinue
+    $env:APEX_ENGINE_TEST_STAGE_TRACE_PATH = $oldStageTrace
     $env:APEX_STATE_DIR = $oldState
     $env:LOCALAPPDATA = $oldLocalAppData
     $env:APEX_ENGINE_TEST_RETRY_DELAY_SECONDS = $oldRetry

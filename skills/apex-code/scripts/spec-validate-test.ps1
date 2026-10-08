@@ -10,7 +10,7 @@ $sweep = Join-Path $PSScriptRoot 'spec-contract-sweep.ps1'
 if (-not [System.IO.Path]::IsPathRooted($CorpusManifestPath)) {
     $CorpusManifestPath = Join-Path $PSScriptRoot $CorpusManifestPath
 }
-$fixtureRoot = Join-Path $env:TEMP ('apex-spec-validate-test-' + [guid]::NewGuid().ToString('N'))
+$fixtureRoot = Join-Path (Join-Path $PSScriptRoot '../../../.codex-scratch') ('apex-spec-validate-test-' + [guid]::NewGuid().ToString('N'))
 $utf8 = New-Object System.Text.UTF8Encoding($false)
 $failures = 0
 $assertions = 0
@@ -374,6 +374,42 @@ try {
 
     Assert-Case 'manifest-valid-single-repo' $validSingleRepo 0
 
+    # The shared corpus is also consumed by the Engine planner's tests.
+    $grammarPath = Join-Path $PSScriptRoot '../references/accept-grammar-vectors.json'
+    $grammarVectors = Get-Content -LiteralPath $grammarPath -Raw | ConvertFrom-Json
+    $vectorIndex = 0
+    foreach ($vector in $grammarVectors) {
+        if ($vector.expected -notin @('accept', 'refuse')) { throw 'Invalid grammar corpus expectation' }
+        $vectorIndex++
+        $block = "${tripleBacktick}powershell apex-accept`n" + $vector.text + "`n${tripleBacktick}"
+        $fixture = $validSingleRepo.Replace($singleRepoCriteria, $singleRepoCriteria + "`n- [ ] Shared grammar check.`n" + $block)
+        $expectedExit = 0
+        $expectedFailure = ''
+        if ($vector.expected -eq 'refuse') { $expectedExit = 1; $expectedFailure = 'FAIL ACCEPTANCE-CHECK' }
+        Assert-Case ('accept-grammar-{0}' -f $vectorIndex) $fixture $expectedExit $expectedFailure
+    }
+    $safeBlock = "${tripleBacktick}powershell apex-accept`nWrite-Output ok`n${tripleBacktick}"
+    $badBlock = "${tripleBacktick}powershell apex-accept`nSet-Location 'C:/outside'`n${tripleBacktick}"
+    $taskCriterion = '- [ ] Task 1 - check passes.'
+    Assert-Case 'accept-task-binding' ($validSingleRepo.Replace($singleRepoCriteria, $taskCriterion + "`n" + $safeBlock)) 0
+    Assert-Case 'accept-compound-label' ($validSingleRepo.Replace($singleRepoCriteria, '- [ ] Task 1 and Task 2 - check passes.' + "`n" + $safeBlock)) 1 'FAIL ACCEPTANCE-CHECK'
+    Assert-Case 'accept-unknown-label' ($validSingleRepo.Replace($singleRepoCriteria, '- [ ] Task 9 - check passes.' + "`n" + $safeBlock)) 1 'FAIL ACCEPTANCE-CHECK'
+    Assert-Case 'accept-spec-level' ($validSingleRepo.Replace($singleRepoCriteria, $singleRepoCriteria + "`n- [ ] All checks pass.`n" + $safeBlock)) 0
+    Assert-Case 'accept-nonleading-label' ($validSingleRepo.Replace($singleRepoCriteria, $singleRepoCriteria + "`n- [ ] Review Task 1 results.`n" + $safeBlock)) 0
+    Assert-Case 'accept-label-not-immediately-preceding' ($validSingleRepo.Replace($singleRepoCriteria, '- [ ] Task 1 and Task 1 - check passes.' + "`n`n" + $safeBlock)) 1 'FAIL ACCEPTANCE-CHECK'
+    Assert-Case 'accept-task-binding-after-blank' ($validSingleRepo.Replace($singleRepoCriteria, $taskCriterion + "`n`n" + $safeBlock)) 0
+    Assert-Case 'accept-unknown-label-after-continuation' ($validSingleRepo.Replace($singleRepoCriteria, '- [ ] Task 9 - check passes.' + "`n  Continued criterion.`n" + $safeBlock)) 1 'FAIL ACCEPTANCE-CHECK'
+    Assert-Case 'accept-spec-level-after-blank' ($validSingleRepo.Replace($singleRepoCriteria, $singleRepoCriteria + "`n- [ ] All checks pass.`n`n" + $safeBlock)) 0
+    Assert-Case 'accept-numbered-criterion-replaces-task-label' ($validSingleRepo.Replace($singleRepoCriteria, '- [ ] Task 1 and Task 1 - HOST review.' + "`n1. Spec-level check.`n  Continued criterion.`n`n" + $safeBlock)) 0
+    Assert-Case 'accept-label-survives-untagged-fence' ($validSingleRepo.Replace($singleRepoCriteria, '- [ ] Task 9 - check passes.' + "`n" + $safeBlock.Replace('powershell apex-accept', 'text') + "`n`n" + $safeBlock)) 1 'FAIL ACCEPTANCE-CHECK'
+    Assert-Case 'accept-lowercase-malformed-label' ($validSingleRepo.Replace($singleRepoCriteria, $singleRepoCriteria + "`n- [ ] task 1 - check passes.`n`n" + $safeBlock)) 1 'FAIL ACCEPTANCE-CHECK'
+    foreach ($tag in @('powershell', 'PowerShell apex-accept', 'powershell Apex-Accept', 'powershell apex-accept extra', "powershell`t ap ex-accept")) {
+        $untaggedBlock = $badBlock.Replace('powershell apex-accept', $tag)
+        Assert-Case ('accept-untagged-{0}' -f [array]::IndexOf(@('powershell', 'PowerShell apex-accept', 'powershell Apex-Accept', 'powershell apex-accept extra', "powershell`t ap ex-accept"), $tag)) ($validSingleRepo.Replace($singleRepoCriteria, $singleRepoCriteria + "`n- [ ] Untagged check.`n" + $untaggedBlock)) 0
+    }
+    Assert-Case 'accept-other-section' ($validSingleRepo.Replace('No specialist context is required.', $badBlock)) 0
+    Assert-Case 'accept-tilde-tagged' ($validSingleRepo.Replace($singleRepoCriteria, $singleRepoCriteria + "`n" + $badBlock.Replace($tripleBacktick, $tripleTilde))) 1 'FAIL ACCEPTANCE-CHECK'
+
     $twoRepoManifest = @'
 ~~~json apex-manifest
 {
@@ -402,6 +438,7 @@ try {
     $hostCriteria = $singleRepoCriteria + "`n- [ ] Task 2: ``host/status.md`` is updated."
     $validHostOnly = New-ManifestFixture -FilesRows $hostFiles -TaskRows $hostTasks -ManifestBody $singleRepoManifest -AcceptanceRows $hostCriteria
     Assert-Case 'manifest-valid-host-only-file' $validHostOnly 0
+    Assert-Case 'accept-host-label' ($validHostOnly.Replace($hostCriteria, $hostCriteria + "`n- [ ] Task 2 - HOST check.`n" + $safeBlock)) 1 'FAIL ACCEPTANCE-CHECK'
 
     $ownerRunTasks = $singleRepoTasks + "`n- **Task 2 OWNER-run** - files: ``owner/status.md`` - Record bookkeeping."
     $ownerFiles = $singleRepoFiles + "`n| ``owner/status.md`` | modify | OWNER-owned bookkeeping. |"
@@ -428,6 +465,9 @@ try {
     }
 
     $specTemplate = [System.IO.File]::ReadAllText($specTemplatePath, $utf8).Replace("`r`n", "`n")
+    foreach ($requiredText in @('~/.claude/skills/apex-code/references/spec-contract.md', 'powershell apex-accept', 'integration-root cwd', 'immediately preceding', 'Compound task labels', 'unknown task IDs', 'HOST tasks', 'spec level', 'author-written, Critic-reviewed, owner-promoted', 'unsandboxed', 'same trust as the AGENTS.md verify fence', 'guards accidents', 'confines execution', 'Tree/index movement or residue parks the run without restoration', 'Throw on failure', '$LASTEXITCODE')) {
+        Assert-SuiteCase -Name ('template-accept-guidance-' + $requiredText) -Passed ($specTemplate.Contains($requiredText)) -Details @('Missing executable-check guidance: ' + $requiredText)
+    }
     $filesSection = [regex]::Match(
         $specTemplate,
         '(?ms)^## Files to Change[ \t]*\n(?<Body>.*?)(?=^## |\z)'

@@ -379,18 +379,93 @@ function Get-EngineTaskDeclarations {
     return $result
 }
 
+# Mirrors the validator's shared tagged-check token grammar. These are trusted checks;
+# this guards accidental paths/location changes, not execution.
+function Get-EngineAcceptanceGrammarRefusals {
+    param([string]$Text)
+    $tokens = $null; $parseErrors = $null
+    $ast = [System.Management.Automation.Language.Parser]::ParseInput($Text, [ref]$tokens, [ref]$parseErrors)
+    foreach ($command in $ast.FindAll({ param($node) $node -is [System.Management.Automation.Language.CommandAst] }, $true)) {
+        $name = $command.GetCommandName()
+        if ($name -imatch '^(cd|Set-Location|Push-Location)$') { 'prohibited location command {0}' -f $name }
+    }
+    $previous = $null
+    foreach ($token in $tokens) {
+        if ($token.Kind -in @('Generic', 'Identifier', 'StringLiteral', 'StringExpandable')) {
+            $quoted = $token.Kind -in @('StringLiteral', 'StringExpandable')
+            $value = $token.Text
+            if ($quoted) { $value = $token.Value }
+            $patternOperand = $quoted -and ($previous -in @('Imatch', 'Inotmatch', 'Cmatch', 'Cnotmatch'))
+            if (-not $patternOperand -and $value -match '^(?:[A-Za-z]:[\\/]|\\\\|/)') { 'prohibited path token {0}' -f $token.Text }
+        }
+        if ($token.Kind -notin @('NewLine', 'Comment', 'LineContinuation')) { $previous = $token.Kind.ToString() }
+    }
+}
+
 function Get-EngineAcceptanceLines {
     param(
         [Parameter(Mandatory = $true)][string]$Text,
-        [Parameter(Mandatory = $true)][string]$TaskId
+        [string]$TaskId,
+        [string[]]$ManifestIds
     )
 
-    $body = Get-EngineSectionBody -Text $Text -Heading 'Acceptance Criteria'
-    $lines = New-Object 'System.Collections.Generic.List[string]'
-    foreach ($line in ($body -split "`n")) {
-        if ($line -match ('(?i)\bTask[ \t]+' + [regex]::Escape($TaskId) + '(?![A-Za-z0-9])')) { $lines.Add($line) }
+    $criteria = New-Object 'System.Collections.Generic.List[object]'
+    $checks = New-Object 'System.Collections.Generic.List[object]'
+    $section = ''; $fence = $null; $criterion = $null; $tagged = $false
+    $bodyLines = New-Object 'System.Collections.Generic.List[string]'
+    $numbers = @{}
+    foreach ($line in ((ConvertTo-EngineLfText $Text) -split "`n")) {
+        if ($null -ne $fence) {
+            if ($line -match ('^ {0,3}' + [regex]::Escape($fence.character) + '{' + $fence.length + ',}[ \t]*$')) {
+                if ($tagged) {
+                    $body = $bodyLines.ToArray() -join "`n"
+                    $refusals = @(Get-EngineAcceptanceGrammarRefusals $body)
+                    if ($refusals.Count -gt 0) { throw ($refusals -join '; ') }
+                    $boundId = $null; $label = $null
+                    if ($null -ne $criterion) {
+                        $label = $criterion.label
+                        if ($criterion.leading -cmatch '^- \[[ xX]\] Task (\d+[a-z]?) -') {
+                            $boundId = $Matches[1]
+                            if ($ManifestIds -cnotcontains $boundId) { throw "tagged acceptance check has unknown manifest task: $boundId" }
+                        } elseif ($criterion.leading -match '^- \[[ xX]\] Task\b') {
+                            throw 'tagged acceptance check has compound or invalid task label'
+                        }
+                        $criterion.tagged = $true
+                    }
+                    $key = if ($null -eq $boundId) { 'spec' } else { $boundId }
+                    if (-not $numbers.ContainsKey($key)) { $numbers[$key] = 0 }
+                    $numbers[$key]++
+                    $checks.Add([pscustomobject][ordered]@{ id = "$key-$($numbers[$key])"; task = $boundId; label = $label; body = $body })
+                } elseif ($null -ne $criterion -and $section -ceq 'Acceptance Criteria') { $criterion.lines.Add($line) }
+                $fence = $null; $tagged = $false
+            } elseif ($tagged) { $bodyLines.Add($line) }
+            elseif ($null -ne $criterion -and $section -ceq 'Acceptance Criteria') { $criterion.lines.Add($line) }
+            continue
+        }
+        if ($line -match '^ {0,3}(?<Fence>`{3,}|~{3,})(?<Info>.*)$') {
+            $fence = @{ character = $Matches.Fence.Substring(0, 1); length = $Matches.Fence.Length }
+            $tagged = $section -ceq 'Acceptance Criteria' -and $Matches.Info.Trim() -ceq 'powershell apex-accept'
+            $bodyLines.Clear()
+            if (-not $tagged -and $null -ne $criterion -and $section -ceq 'Acceptance Criteria') { $criterion.lines.Add($line) }
+            continue
+        }
+        if ($line -match '^ {0,3}##[ \t]+(.+?)[ \t]*$') { $section = $Matches[1]; $criterion = $null; continue }
+        if ($section -cne 'Acceptance Criteria') { continue }
+        if ($line -match '^(?:- |[0-9]+[.)] )') {
+            $label = $null
+            if ($line -match '^(?<Label>- \[[ xX]\] Task\b.*? -)') { $label = $Matches.Label }
+            $criterion = [pscustomobject]@{ leading = $line; label = $label; tagged = $false; lines = (New-Object 'System.Collections.Generic.List[string]') }
+            $criterion.lines.Add($line); $criteria.Add($criterion)
+        } elseif ($null -ne $criterion) { $criterion.lines.Add($line) }
     }
-    return $lines.ToArray()
+    if ($tagged) { throw 'tagged acceptance fence is not closed' }
+    $hostChecks = @($criteria | Where-Object { -not $_.tagged } | ForEach-Object {
+        [pscustomobject][ordered]@{ label = $_.label; text = ($_.lines.ToArray() -join "`n").TrimEnd("`n") }
+    })
+    if ($TaskId) {
+        return @($hostChecks | Where-Object { $_.text -match ('(?i)\bTask[ \t]+' + [regex]::Escape($TaskId) + '(?![A-Za-z0-9])') } | ForEach-Object { $_.text })
+    }
+    return [pscustomobject]@{ checks = $checks.ToArray(); host_checks = $hostChecks }
 }
 
 function New-EnginePrompt {
@@ -418,6 +493,11 @@ function New-EnginePrompt {
     $doneLines = New-Object 'System.Collections.Generic.List[string]'
     $doneLines.Add('- Done when: ' + $Task.done_when)
     if (-not [string]::IsNullOrWhiteSpace($acceptance)) { $doneLines.Add($acceptance) }
+    if ($Task.PSObject.Properties['acceptance_checks']) {
+        foreach ($check in @($Task.acceptance_checks)) {
+            $doneLines.Add("``````powershell apex-accept`n$($check.body)`n``````")
+        }
+    }
     $doneLines.Add("- Verify: run the exact build-repo recipe commands:`n" + $VerifyFence)
     if (-not [string]::IsNullOrEmpty($Template.Final)) { $doneLines.Add($Template.Final) }
 
@@ -618,6 +698,8 @@ function Get-EnginePlan {
     }
 
     $taskDeclarations = Get-EngineTaskDeclarations -Text $specText
+    try { $acceptancePlan = Get-EngineAcceptanceLines -Text $specText -ManifestIds @($manifest.tasks | ForEach-Object { [string]$_.id }) }
+    catch { return New-EngineRefusal -Reason $_.Exception.Message -Spec $planSpec }
     $taskObjects = New-Object 'System.Collections.Generic.List[object]'
     $taskById = @{}
     $pathOwner = @{}
@@ -668,7 +750,7 @@ function Get-EnginePlan {
         if ($files.Count -eq 0) { return New-EngineRefusal -Reason ('task ' + $id + ' has no manifest paths') -Spec $planSpec }
         $dependencies = @($manifestTask.depends_on | ForEach-Object { ([string]$_).ToLowerInvariant() })
         $decl = $taskDeclarations[$id]
-        $acceptance = @(Get-EngineAcceptanceLines -Text $specText -TaskId $id)
+        $acceptance = @($acceptancePlan.host_checks | Where-Object { $_.text -match ('(?i)\bTask[ \t]+' + [regex]::Escape($id) + '(?![A-Za-z0-9])') } | ForEach-Object { $_.text })
         $taskObject = [pscustomobject][ordered]@{
             id = $id
             repo = $repoKey
@@ -678,6 +760,7 @@ function Get-EnginePlan {
             text = $decl.Text
             done_when = $decl.DoneWhen
             acceptance = @($acceptance)
+            acceptance_checks = @($acceptancePlan.checks | Where-Object { $_.task -ceq $id })
             prompt = $null
             prompt_digest = $null
         }
@@ -823,6 +906,8 @@ function Get-EnginePlan {
         refusal = $null
         spec = $planSpec
         waves = $waves.ToArray()
+        spec_acceptance_checks = @($acceptancePlan.checks | Where-Object { $null -eq $_.task })
+        host_checks = @($acceptancePlan.host_checks)
     }
 }
 

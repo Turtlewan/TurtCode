@@ -1,7 +1,7 @@
 ---
 skill: apex-code
-version: 2.22.0
-last_updated: 2026-10-06
+version: 2.23.0
+last_updated: 2026-10-08
 sources:
   - docs/technical/adr/ADR-027-codex-primary-opus-fallback-deepseek-archived.md
   - docs/technical/adr/ADR-028-parallel-codex-dispatch.md
@@ -66,11 +66,11 @@ Eligible attended builds use the Engine: one repo, an execution manifest, file-d
 
 Use `-MaxParallel 1` for `risk: high`. Read the run's `engine-state.json` **status and diagnosis** whenever it exists. With no state, use console `Engine refused: <message>` as the diagnosis; fix the inputs/spec or take the attended HOST manual path.
 
-- **Exit 0:** Engine build/hand-off complete; HOST close-out pending. Run § Post-build Critic/Scribe/family gate/docs close-out against the integrated tip, using fresh worktrees where those steps require them. Obtain the owner-approved commit so main HEAD equals the integration tip and working files match it; only then run proof-gated `apex-engine.ps1 -Teardown <runId>`.
+- **Exit 0:** Engine build/hand-off complete, including the spec's tagged `powershell apex-accept` checks; HOST close-out pending. First run every criterion the console lists under `HOST checks:` (untagged acceptance criteria the Engine never executes) against the integrated tip. Then run § Post-build Critic/Scribe/family gate/docs close-out, using fresh worktrees where those steps require them. Obtain the owner-approved commit so main HEAD equals the integration tip and working files match it; only then run proof-gated `apex-engine.ps1 -Teardown <runId>`. If close-out needed a repair, commit the repaired content, then use `apex-engine.ps1 -Teardown <runId> -Discard -Reason <text>`; the tip-match proof would refuse the repaired tree.
 - **Exit 1:** refused/parked/failed/partial/quota-paused, distinguished by state when present (`paused` plus quota diagnosis means quota-paused). Diagnose, adjust the spec or seek owner disposition; apply § Forks as HOST actions. No automatic Sonnet swap: quota fallback requires owner approval and uses the attended HOST manual path.
 - **Exit 2:** `awaiting-review`, only for `risk: high` specs. Run Opus Critic for the integrated wave, binding its record to that wave's review tree digest, then invoke `apex-engine.ps1 -Resume <runId> -ReviewVerdict clean|reject -ReviewDigest <64 lowercase hex> -ReviewRecord <existing absolute path outside every Git worktree>`. An `awaiting-review` run resumes only with all three review flags together; bare `-Resume` is refused; the record must be a normalized absolute path to a strict UTF-8 file. Rejection parks; HOST fixes manually or starts an amended-spec run.
 
-An unchanged spec in a parked/paused run resumes with `apex-engine.ps1 -Resume <runId>` (pending review still requires the three review flags). An amended spec starts a **new run**, only after the parked run's partial work is inspected and discarded via `apex-engine.ps1 -Teardown <runId> -Discard` when permitted; never amend a live run's immutable plan. Discard teardown is for non-complete runs and refuses live children/non-terminal ledger rows; successful complete teardown requires hand-off and commit proof, without `-Discard`.
+An unchanged spec in a parked/paused run resumes with `apex-engine.ps1 -Resume <runId>` (pending review still requires the three review flags). An amended spec starts a **new run**, only after the parked run's partial work is inspected and discarded via `apex-engine.ps1 -Teardown <runId> -Discard` when permitted; never amend a live run's immutable plan. Discard teardown refuses live children and live non-terminal ledger rows; a row whose recorded process is dead is adopted before teardown proceeds. A complete run accepts `-Discard` only with a non-empty `-Reason`, which bypasses the hand-off journal and commit proof; otherwise successful complete teardown requires hand-off and commit proof, without `-Discard`.
 
 ## Wave analysis — HOST manual/AFK path
 
@@ -298,6 +298,8 @@ reconstruct it from console output. Its contract is
 The recipe is the repo's **`AGENTS.md` → `## Verify commands`** (ADR-037), and that is its only home — there is no spec-side fallback section. Absent a recipe, the pre-dispatch pre-flight refuses the build with **exit 72** before launch — you cannot write the recipe from inside a build. Recovery: **the HOST authors `## Verify commands` into AGENTS.md attended** (root AGENTS.md is critical host state — live confirmation required, AFK parks), then re-dispatches. `-SkipBaselineCheck` is the bootstrap escape and is host-authorized only.
 
 **Two cadences, both required.** (a) *During build:* the coder runs the repo recipe in its isolated worktree per task and iterates to green. (b) *Authoritative pass:* re-run it in the integration tree, per task for sequential builds, once on the integrated wave for parallel builds (`references/parallel-codex.md`). **Engine executes and adjudicates verify pass/fail on the Engine path; HOST executes and adjudicates on the manual/AFK path**, owning subsequent routing. The coder's own pass never satisfies this gate: the coder does not judge its own output. HOST owns the approved per-spec commit and close-out on both paths.
+
+**Engine acceptance checks.** After a wave's verify fence passes, the Engine runs each task-labelled tagged check; a failure retries that task on the ladder below, with the check's output tail appended to the next prompt. Unlabelled tagged checks run once after the final commit; a failure, tree movement, or residue parks the run.
 
 **On failure:** the Engine accepts `max`/`ultra` task effort, but its automatic retry ladder stops at `xhigh`. Beyond that ladder, **HOST decides** whether to amend task effort and start a new Engine run (after the inspection/discard boundary above), or use the attended HOST manual path. Log each escalation; Sonnet quota fallback requires owner approval, never an automatic Engine model swap.
 
