@@ -201,6 +201,9 @@ try {
     Assert-Equal $baseSha (Invoke-TestGit $integration.worktree @('rev-parse', 'HEAD')).text 'off-manifest refusal writes no commit'
     [void](Invoke-TestGit $integration.worktree @('rm', '--cached', '--', 'off-manifest.txt'))
     [IO.File]::Delete((Join-Path $integration.worktree 'off-manifest.txt'))
+    $missingOnlyAllowedPaths = @($allowedPaths) + @('not-staged.txt')
+    Assert-Throws { Commit-EngineWave -IntegrationWorktree $integration.worktree -Message 'must reject missing path' -BaseSha $baseSha -AllowedPaths $missingOnlyAllowedPaths } '^(?!.*outside wave manifest)integration index is missing wave-manifest paths:.*not-staged\.txt' 'missing-only staged paths receive their own diagnosis'
+    Assert-Equal $baseSha (Invoke-TestGit $integration.worktree @('rev-parse', 'HEAD')).text 'missing-only refusal writes no commit'
     $caseVariantAllowedPaths = @($allowedPaths)
     $caseVariantAllowedPaths[0] = 'Created.txt'
     Assert-Throws { Commit-EngineWave -IntegrationWorktree $integration.worktree -Message 'must compare paths case-sensitively' -BaseSha $baseSha -AllowedPaths $caseVariantAllowedPaths } 'integration index contains paths outside wave manifest:.*created\.txt' 'allowed-path set comparison is case-sensitive'

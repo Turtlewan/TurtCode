@@ -450,15 +450,18 @@ function Commit-EngineWave {
     foreach ($allowedPath in @($AllowedPaths)) { [void]$allowedSet.Add([string]$allowedPath) }
     $indexedSet = New-Object 'Collections.Generic.HashSet[string]' ([StringComparer]::Ordinal)
     foreach ($indexedPath in @($indexedPaths)) { [void]$indexedSet.Add([string]$indexedPath) }
-    $pathDifferences = New-Object System.Collections.ArrayList
+    $extraPaths = New-Object System.Collections.ArrayList
+    $missingPaths = New-Object System.Collections.ArrayList
     foreach ($indexedPath in @($indexedPaths)) {
-        if (-not $allowedSet.Contains($indexedPath)) { [void]$pathDifferences.Add($indexedPath) }
+        if (-not $allowedSet.Contains($indexedPath)) { [void]$extraPaths.Add($indexedPath) }
     }
     foreach ($allowedPath in @($AllowedPaths)) {
-        if (-not $indexedSet.Contains($allowedPath)) { [void]$pathDifferences.Add("missing: $allowedPath") }
+        if (-not $indexedSet.Contains($allowedPath)) { [void]$missingPaths.Add($allowedPath) }
     }
-    if ($pathDifferences.Count -gt 0) {
-        throw "integration index contains paths outside wave manifest: $(@($pathDifferences) -join ', ')"
+    if ($extraPaths.Count -gt 0) {
+        throw "integration index contains paths outside wave manifest: $((@($extraPaths) + @($missingPaths | ForEach-Object { "missing: $_" })) -join ', ')"
+    } elseif ($missingPaths.Count -gt 0) {
+        throw "integration index is missing wave-manifest paths: $(@($missingPaths) -join ', ')"
     }
     $verifiedTree = Invoke-EngineGit $IntegrationWorktree @('write-tree')
     Assert-EngineGitResult $verifiedTree 'Capture verified integration index tree'
