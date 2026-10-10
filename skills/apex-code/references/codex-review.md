@@ -1,7 +1,7 @@
 # Codex independent review recipe (ADR-026)
 
 Loaded on demand when apex-code runs the family-aware cross-model review (apex-code § Post-build). Codex
-(`gpt-5.6-sol`) is the **independent reviewer for Claude-fallback-built code (Sonnet 5)** (ADR-027 —
+(`gpt-6.1-sol`, the wrapper default) is the **independent reviewer for Claude-fallback-built code (Sonnet 5)** (ADR-027 —
 Codex is the default *builder*, so this review path fires only on the Claude fallback — Sonnet 5, per
 A1); it **never edits code**, and its *findings* are advisory — but its **verdict routes**: `BLOCK` →
 exit 67, which is a HARD STOP on the pipeline (do not commit, do not build a dependent spec).
@@ -57,7 +57,7 @@ The wrapper supplies the rest of what this recipe used to spell out by hand:
 - `--output-schema <file>` → forces the final message into the findings schema. **Strict mode: every
   property must be in `required`; keep `line`/`criterion` nullable** (omitting them → HTTP 400). `-o <file>`
   writes that final message (cleaner than parsing `--json` JSONL).
-- `-m gpt-5.6-sol` → pin the model (Codex churns IDs — re-check after a Codex upgrade).
+- Model: the wrapper default is `gpt-6.1-sol`; an explicit `-Model` may pin another allowed model (Codex churns IDs — re-check after a Codex upgrade).
 - Guard first: if `codex --version` fails, do **not** silently skip — apex-code records the flag
   (apex-code § Post-build).
 

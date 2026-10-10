@@ -677,7 +677,7 @@ exit 0
     Assert-Case -Label 'author-control-nonauthor-72' -Condition ($result.ExitCode -eq 72) `
         -Detail 'the ordinary build retained exit 72'
 
-    # A normal build still defaults to gpt-5.6-sol and gains only the additive ledger keys.
+    # A normal build defaults to gpt-6.1-sol and gains only the additive ledger keys.
     $caseName = 'author-default-model-argv'
     $spec = 'default-model'
     $repo = New-FixtureRepo -Name $caseName
@@ -689,15 +689,15 @@ exit 0
     Assert-Case -Label 'author-default-model-argv' -Condition ($result.ExitCode -eq 0) `
         -Detail ("exit={0}" -f $result.ExitCode)
     Assert-Case -Label 'author-default-model-argv argv' `
-        -Condition (Test-ArgvModel -ArgvPath $result.ArgvPath -ExpectedModel 'gpt-5.6-sol') `
-        -Detail '-m is immediately followed by gpt-5.6-sol'
+        -Condition (Test-ArgvModel -ArgvPath $result.ArgvPath -ExpectedModel 'gpt-6.1-sol') `
+        -Detail '-m is immediately followed by gpt-6.1-sol'
     Assert-Case -Label 'author-default-model-argv ledger' `
         -Condition ($null -ne $row -and
-            [string]$row.model -ceq 'gpt-5.6-sol' -and
+            [string]$row.model -ceq 'gpt-6.1-sol' -and
             [string]$row.dispatch_kind -ceq '' -and
             [string]$row.author_mode -ceq '' -and
             [bool]$row.baseline_skipped) `
-        -Detail 'the ordinary row records the default model and empty author fields'
+        -Detail 'the ordinary row records gpt-6.1-sol and empty author fields'
 
     # ValidateSet rejects models outside the exact supported set before the script body runs.
     $caseName = 'author-model-outside-set'

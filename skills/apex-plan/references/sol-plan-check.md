@@ -2,7 +2,7 @@
 
 Runs after the readiness gate, before an applicable Deep Details spec moves to `docs/changes/`.
 For a gpt-6-sol-authored spec (ADR-048), the Claude `apex-critic` in spec mode is the cross-family
-check; this gpt-5.6-sol cold read is an independent same-family read.
+check; this gpt-6.1-sol cold read (the wrapper default) is an independent same-family read.
 
 ## The cold read (the gate)
 

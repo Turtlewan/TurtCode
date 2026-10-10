@@ -16,7 +16,7 @@ param(
     [ValidateSet('low', 'medium', 'high', 'xhigh', 'max', 'ultra')]
     [string]$Effort = 'medium',
     [ValidateSet('gpt-5.6-sol', 'gpt-6-sol', 'gpt-6.1-sol', 'gpt-6-luna', IgnoreCase = $false)]
-    [string]$Model = 'gpt-5.6-sol',
+    [string]$Model = 'gpt-6.1-sol',
     [ValidateRange(1, 16)]
     [int]$MachineCeiling = 4,
     [ValidateRange(1, 2147483647)]

@@ -74,7 +74,7 @@ function New-EnginePlanSpec {
         [string]$Path,
         [string]$Digest,
         [string]$Risk = 'medium',
-        [string]$CoderModel = 'gpt-5.6-sol',
+        [string]$CoderModel = 'gpt-6.1-sol',
         [string]$CoderEffort = 'medium',
         [object]$MaxParallelCodex = $null,
         [string]$Intent = '',
@@ -592,7 +592,7 @@ function Get-EnginePlan {
         if (@('low', 'medium', 'high') -cnotcontains $risk) { $frontmatterRefusal = 'frontmatter risk must be low, medium or high' }
     }
     else { $emptySpec.risk = $risk }
-    $model = 'gpt-5.6-sol'
+    $model = 'gpt-6.1-sol'
     if ($frontmatter.ContainsKey('coder_model')) {
         $declaredModel = [string]$frontmatter['coder_model']
         if (@('codex', 'gpt-5.6-sol', 'gpt-6-sol', 'gpt-6.1-sol') -cnotcontains $declaredModel) {
@@ -600,7 +600,7 @@ function Get-EnginePlan {
             if ($null -eq $frontmatterRefusal) { $frontmatterRefusal = 'frontmatter coder_model is not an allowed Codex model' }
         }
         elseif ($declaredModel -ceq 'codex') {
-            $model = 'gpt-5.6-sol'
+            $model = 'gpt-6.1-sol'
             $emptySpec.coder_model = $model
         }
         else {

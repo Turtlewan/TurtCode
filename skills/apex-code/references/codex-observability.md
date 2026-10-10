@@ -48,7 +48,7 @@ The Engine's automatic retry ladder stops at `xhigh`. Beyond `xhigh`, **HOST dec
 task effort and start a new Engine run or use the attended HOST manual path; log each escalation.
 Sonnet fallback, including quota-out, requires OWNER approval and is never an automatic Engine model swap.
 
-The old Sol model rung (ADR-032) is **gone**: `gpt-5.6-sol` *is* the coder now (ADR-034), so there is no
+The old Sol model rung (ADR-032) is **gone**: `gpt-6.1-sol` *is* the coder now (ADR-034), so there is no
 higher Codex model to escalate to — the dial is the whole ladder.
 - `--json` → Codex's event stream (reasoning, every shell command it runs, and per-turn `usage` token
   counts) as JSONL to the ledger row's `log_path`. **This is the live feed** — both the user's

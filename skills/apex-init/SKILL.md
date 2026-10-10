@@ -1,7 +1,7 @@
 ---
 skill: apex-init
-version: 1.7.3
-last_updated: 2026-10-05
+version: 1.7.4
+last_updated: 2026-10-10
 sources:
   - APEX Design Specification 2026-05-24
   - GSD (Get Shit Done) — github.com/gsd-build/get-shit-done
@@ -154,7 +154,7 @@ Fill in:
   README.md
   AGENTS.md         ← Codex build instructions (build-a-spec workflow + verify recipe + hard rules)
 
-Running at L2 | Coder: Codex gpt-5.6-sol (Sonnet 5 fallback)
+Running at L2 | Coder: Codex gpt-6.1-sol (Sonnet 5 fallback)
 
 What do you want to build first?"
 

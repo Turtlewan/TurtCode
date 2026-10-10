@@ -156,7 +156,7 @@ prototype the look as a web mockup, lock the brief, then use the target's native
 
 ## Live preview during build
 
-The coder (Codex `gpt-5.6-sol`; Sonnet 5 on fallback) has **native vision and sees the render** — so a
+The coder (Codex `gpt-6.1-sol`; Sonnet 5 on fallback) has **native vision and sees the render** — so a
 visual divergence is fixed in the build like any other task. The live window is the **human's**
 eyes-on loop, not a capability workaround.
 

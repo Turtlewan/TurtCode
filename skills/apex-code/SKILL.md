@@ -1,7 +1,7 @@
 ---
 skill: apex-code
-version: 2.23.0
-last_updated: 2026-10-08
+version: 2.23.1
+last_updated: 2026-10-10
 sources:
   - docs/technical/adr/ADR-027-codex-primary-opus-fallback-deepseek-archived.md
   - docs/technical/adr/ADR-028-parallel-codex-dispatch.md
@@ -18,7 +18,7 @@ sources:
 staleness_threshold: 30d
 description: >
   APEX build workflow — executes docs/changes/ specs: attended Engine builds, HOST
-  manual/AFK dispatch, verify vs AGENTS.md, forks, HOST close-out. Codex `gpt-5.6-sol`
+  manual/AFK dispatch, verify vs AGENTS.md, forks, HOST close-out. Codex `gpt-6.1-sol`
   is the coder; owner-approved Sonnet 5 fallback. Loads when building a spec.
 ---
 
@@ -400,8 +400,8 @@ never changed, only what was inside it, so a `git status` check would have seen 
    Codex review in `references/codex-review.md` and the family gate. If Codex remains unavailable,
    a diff-bound attended human review substitutes under ADR-042; a same-family Claude review is
    advisory only. With the `wrapper-model-luna` prerequisite, the wrapper's `-Model` parameter admits
-   only OpenAI models (`gpt-5.6-sol`, the default, `gpt-6-sol`, and `gpt-6-luna`), so ledger family
-   fields describe what it launched, not a caller's claim.
+   only OpenAI models (`gpt-6.1-sol`, the default; `gpt-5.6-sol` as an explicit pin; `gpt-6-sol`;
+   `gpt-6-luna`), so ledger family fields describe what it launched, not a caller's claim.
 4. **AFK whole-build scope.** The end-of-run Opus Critic pass through the Agent tool with
    `model: opus` over `run_base_sha..HEAD` is round 1 of the whole-build code review
    (`references/afk-endgate.md`); it replaces the normal whole-build dispatch, so do not dispatch a

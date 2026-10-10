@@ -1,7 +1,7 @@
 ---
 skill: apex-skill-author
-version: 2.0.3
-last_updated: 2026-07-29
+version: 2.0.4
+last_updated: 2026-10-10
 sources:
   - docs/technical/adr/ADR-011-instinct-loop-no-engine.md
   - docs/technical/adr/ADR-031-codex-context-propagation.md

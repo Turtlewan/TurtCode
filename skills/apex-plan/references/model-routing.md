@@ -61,7 +61,7 @@ host-direct argument that reduces to "it's smoother" is that bias, and is reject
 
 The Claude fallback (Sonnet 5) is HOST-directed on the attended manual path: a whole-spec `coder_model: sonnet` pin goes there directly; Codex quota-out or unavailability parks for owner decision on Sonnet fallback. Terminal verify failure or Critic reject goes to HOST for manual repair or an amended-spec Engine run. The Engine never swaps models automatically; unattended builds park for HOST/owner disposition (ADR-046 D1).
 
-- **Default: `codex`** for every task — text and image alike (gpt-5.6-sol is sighted, so the old image gate
+- **Default: `codex`** for every task — text and image alike (gpt-6.1-sol is sighted, so the old image gate
   is moot). No cost-tier decision; do not route proactively to the Claude fallback.
 - **Fallback: `sonnet` (Sonnet 5 — A1, session-79b)** — apex-code builds the task inline as a fresh
   `model: sonnet` worker in this session. This is a build-time event, not a planning-time per-task
@@ -72,7 +72,7 @@ The Claude fallback (Sonnet 5) is HOST-directed on the attended manual path: a w
 
 ## Reasoning-effort dial — the one real per-task lever (ADR-030)
 Model choice collapsed, but Codex's **reasoning-effort dial** is a genuine per-spec cost/quality lever on
-the *same* `gpt-5.6-sol`. Set it with spec frontmatter `coder_effort: {low|medium|high|xhigh|max|ultra}`
+the *same* `gpt-6.1-sol`. Set it with spec frontmatter `coder_effort: {low|medium|high|xhigh|max|ultra}`
 (apex-code passes `-c model_reasoning_effort=<v>` to every `codex exec`). Default `medium` — leave it
 absent unless the spec is clearly off-default.
 - `low` — trivial mechanical specs (rename, config, boilerplate, docstrings): cheaper + faster.

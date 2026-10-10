@@ -1,7 +1,7 @@
 ---
 skill: apex-plan
-version: 2.8.0
-last_updated: 2026-10-06
+version: 2.8.1
+last_updated: 2026-10-10
 sources:
   - docs/technical/adr/ADR-010-multi-pass-review.md
   - docs/technical/adr/ADR-011-instinct-loop-no-engine.md
@@ -106,7 +106,7 @@ ask-first aesthetic gate, the cheap-mockup loop, the visual review gate).
 ## Writing the spec
 
 **FIRST, before you dispatch the author (Deep Details, Medium/High only): the pre-draft Sol
-architecture pass** â€” a cold `gpt-5.6-sol` read of the PLAN BRIEF (problem statement, proposed
+architecture pass** â€” a cold `gpt-6.1-sol` read of the PLAN BRIEF (problem statement, proposed
 structure, file map), not of a spec. ADR-032 Â§1b; recipe in `references/sol-plan-check.md` Â§
 Pre-draft architecture pass. Low and doc-only specs skip this pass. It is advisory for Medium; for
 High it is an **approval gate** â€” an unresolved BLOCK means you print the **apex-governance Â§
@@ -374,7 +374,7 @@ As the deterministic backstop to the prose Files-to-Change / Coverage / structur
                     whenever a spec changes layout, conventions, or the verify commands (ADR-031/037).
 ```
 
-**Then the Sol plan-check, for Medium/High only** (ADR-032): a cold `gpt-5.6-sol` read, read-only,
+**Then the Sol plan-check, for Medium/High only** (ADR-032): a cold `gpt-6.1-sol` read, read-only,
 schema'd, effort xhigh â€” `references/sol-plan-check.md`. Low and doc-only specs skip this pass.
 It is advisory for Medium and **blocking for High**: an unresolved High BLOCK still gates
 promotion. Sol never edits the spec. For High work you may *offer* (never auto-run) the â‰¤2-round

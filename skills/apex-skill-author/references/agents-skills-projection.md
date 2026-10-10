@@ -53,7 +53,7 @@ description: <activation trigger — when Codex should pull this card; this stri
 ## The three gates — every card, before it ships
 
 1. **Coder RED baseline (Iron Law, extended).** Run the card's target task with the bare coder
-   (`codex exec -m gpt-5.6-sol`, no card) in a scratch/probe repo. Capture what it gets wrong
+   (`codex exec -m gpt-6.1-sol`, no card) in a scratch/probe repo. Capture what it gets wrong
    verbatim; the card teaches only those gaps. The bare coder already does it → the content does not
    project. **Probe-repo isolation:** the repo must contain no APEX planning docs / ADRs /
    roadmaps (contamination — the baseline-test-isolation rule).

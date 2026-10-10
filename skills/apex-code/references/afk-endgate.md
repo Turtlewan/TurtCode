@@ -4,7 +4,7 @@ Standing, mandatory end-of-run review for every unattended multi-task build. An 
 **WHOLE run diff** independently to find production bugs that green tests, lint, and typecheck structurally
 miss. It is advisory-only: it never edits code or auto-fixes findings.
 
-**Why Opus and not the coder's own family (ADR-034).** `gpt-5.6-sol` is the default coder. An end-gate run on
+**Why Opus and not the coder's own family (ADR-034).** `gpt-6.1-sol` is the default coder. An end-gate run on
 Sol would be Sol reviewing its own run — self-review reliably under-reports the reviewer's own failure modes,
 which is exactly the class of bug an unattended gate exists to catch. The gate is therefore **cross-family**:
 Codex builds, Claude reviews — the same rule the per-task reviewer already follows (ADR-032). Evaluator-
