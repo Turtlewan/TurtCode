@@ -69,15 +69,16 @@ autonomy_level: L2
 Simplicity check: {considered simpler approach? yes/no — if yes, why this version instead}
 
 ## Prerequisites
-<!-- Build-load-bearing for cross-spec parallelism (ADR-029): at a batch "build specs", two specs
-     run concurrently only when BOTH dependency-independent (this list, transitive) AND file-disjoint
-     (their ## Files to Change don't intersect). List every prerequisite spec precisely — a missing
-     edge, or a shared file unlisted here/below (e.g. two specs both editing one types.py or
-     re-exporting into one package __init__.py), costs a needless serialization or a clobbering build.
-     Design FOR this: give each shared file ONE owning spec and list that spec here, rather than
-     co-editing it from two specs. -->
-- Specs that must be complete first (or "none")
-- Environment setup required (or "none")
+<!-- Build-load-bearing for cross-spec parallelism (ADR-029) and the unattended drain (ADR-049): two
+     specs run concurrently only when BOTH dependency-independent (this list, transitive) AND
+     file-disjoint (their ## Files to Change don't intersect). Give each shared file ONE owning spec
+     and list that spec here, rather than co-editing it from two specs.
+     After stripping HTML comments, Prerequisites non-blank lines are absent with no edges when the section is missing; otherwise they are exactly one line of `none`, `(none)`, or `None`, or every line is `- ` plus a backticked spec name matching `^[a-z0-9][a-z0-9-]{0,62}$`, optionally followed by ` - <free text>` or ` — <free text>`.
+     Example list:
+     - `first-spec`
+     - `second-spec` — provides the shared helper
+     Environment setup belongs in ## Assumptions, not here. -->
+none
 
 ## Files to Change
 | File | Operation | Notes |

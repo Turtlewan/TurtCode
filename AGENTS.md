@@ -22,6 +22,7 @@ powershell.exe -NoProfile -File skills/apex-code/scripts/dispatch-author-test.ps
 powershell.exe -NoProfile -File skills/apex-code/scripts/engine-plan-test.ps1
 powershell.exe -NoProfile -File skills/apex-code/scripts/engine-git-test.ps1
 powershell.exe -NoProfile -File skills/apex-code/scripts/engine-dispatch-test.ps1
+powershell.exe -NoProfile -File skills/apex-code/scripts/apex-drain-plan-test.ps1
 powershell.exe -NoProfile -File skills/apex-code/scripts/engine-test.ps1
 ```
 

@@ -1,6 +1,6 @@
 ---
 skill: apex-orchestrate
-version: 2.5.1
+version: 2.6.0
 last_updated: 2026-10-10
 sources:
   - docs/technical/adr/ADR-015-dispatch-return-contract.md
