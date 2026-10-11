@@ -4,6 +4,7 @@ param(
     [string]$Repo,
     [ValidateRange(1, 16)][int]$MaxParallel,
     [ValidateRange(1, 240)][int]$NoOutputTimeoutMin = 30,
+    [ValidateRange(1, 240)][int]$AcceptTimeoutMin = 60,
     [switch]$Attended,
     [string]$CriticalFilesConfirmedNote,
     [string]$WorktreeRoot,
@@ -37,6 +38,7 @@ $script:EngineCodexExecutable = $CodexExecutable
 $script:EngineCodexPrefix = [string[]]@($CodexExecutableArgumentPrefix)
 $script:EngineMaxParallelBound = $PSBoundParameters.ContainsKey('MaxParallel')
 $script:EngineNoOutputTimeoutBound = $PSBoundParameters.ContainsKey('NoOutputTimeoutMin')
+$script:EngineAcceptTimeoutBound = $PSBoundParameters.ContainsKey('AcceptTimeoutMin')
 $script:EngineWorktreeRootBound = $PSBoundParameters.ContainsKey('WorktreeRoot')
 $script:EngineWrapperBound = $PSBoundParameters.ContainsKey('WrapperPath')
 $script:EngineCodexBound = $PSBoundParameters.ContainsKey('CodexExecutable')
@@ -1041,16 +1043,18 @@ exit $LASTEXITCODE
         if ($env:APEX_ENGINE_TEST_MODE -ceq '1' -and $env:APEX_ENGINE_TEST_CRASH_DURING_ACCEPTANCE -ceq $Check.id) {
             throw 'simulated crash during running acceptance check'
         }
-        $timeout = 600000
+        $timeoutProperty = $script:EngineState.PSObject.Properties['accept_timeout_min']
+        $timeoutMinutes = if ($null -ne $timeoutProperty) { [int]$timeoutProperty.Value } else { 60 }
+        $timeout = $timeoutMinutes * 60000
         if ($env:APEX_ENGINE_TEST_MODE -ceq '1' -and $env:APEX_ENGINE_TEST_ACCEPT_TIMEOUT_MS -match '^[1-9][0-9]*$') {
-            $timeout = [Math]::Min(600000, [int]$env:APEX_ENGINE_TEST_ACCEPT_TIMEOUT_MS)
+            $timeout = [Math]::Min($timeout, [double]$env:APEX_ENGINE_TEST_ACCEPT_TIMEOUT_MS)
         }
         if (-not $child.WaitForExit($timeout)) {
             $expired = $true; Stop-RunnerAcceptanceChild $Record
             [void]$child.WaitForExit(5000)
         }
         $lines = @([IO.File]::ReadAllLines($output))
-        if ($expired) { $lines += 'timed out after 10 min' }
+        if ($expired) { $lines += "timed out after $timeoutMinutes min" }
         $Record.output_tail = @($lines | Select-Object -Last 40) -join "`n"
         $Record.status = if (-not $expired -and $child.ExitCode -eq 0) { 'passed' } else { 'failed' }
         Save-RunnerState
@@ -1788,6 +1792,7 @@ function New-RunnerStateObject {
         wrapper_path = $script:EngineWrapper; codex_executable = $(if ($script:EngineCodexExecutable) { $script:EngineCodexExecutable } else { $null })
         codex_executable_argument_prefix = [string[]]@($script:EngineCodexPrefix)
         no_output_timeout_min = $NoOutputTimeoutMin
+        accept_timeout_min = $AcceptTimeoutMin
         spec = [pscustomobject][ordered]@{ name = $Name; original_path = (Get-RunnerPath $SpecPath); original_digest = $Digest; snapshot_path = $Snapshot; snapshot_digest = $Digest }
         repo = $RepoRoot; base_sha = $BaseSha
         integration = [pscustomobject][ordered]@{ worktree = $null; branch = $null; tip = $null }
@@ -1906,6 +1911,10 @@ function Initialize-RunnerResume {
     if (-not $script:EngineCodexPrefixBound) { $script:EngineCodexPrefix = [string[]]@($script:EngineState.codex_executable_argument_prefix) }
     if ($script:EngineNoOutputTimeoutBound) {
         $script:EngineState | Add-Member -NotePropertyName no_output_timeout_min -NotePropertyValue $NoOutputTimeoutMin -Force
+        Save-RunnerState
+    }
+    if ($script:EngineAcceptTimeoutBound) {
+        $script:EngineState | Add-Member -NotePropertyName accept_timeout_min -NotePropertyValue $AcceptTimeoutMin -Force
         Save-RunnerState
     }
     if (-not (Test-RunnerOutsideWorktree $script:EngineWorktreeRoot)) { throw 'Recorded worktree root is inside a Git worktree.' }

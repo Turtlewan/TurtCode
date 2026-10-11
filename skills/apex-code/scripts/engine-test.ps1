@@ -2504,6 +2504,100 @@ exit $code
     }
     if ($AcceptanceOnly) { $gateBaseline = Join-Path $testRoot 'fake-baseline.ps1'; New-TestGateBaseline $gateBaseline }
 
+    # Import-only parameter binding and direct attempts keep acceptance timeout tests independent of
+    # full Engine runs. Reuse the allowed plan from the schema-valid reachability fixture.
+    $acceptTimeoutSchema = Get-Content $schemaPath -Raw | ConvertFrom-Json
+    $acceptTimeoutFixtureRepo = $repo
+    $acceptTimeoutFixtureStateRoot = $stateRoot
+    $acceptTimeoutFixtureWorktreeRoot = $worktreeRoot
+    $env:APEX_ENGINE_TEST_IMPORT_ONLY = '1'
+    foreach ($invalidTimeout in @(0, 241)) {
+        $rejected = $false
+        try { . $engine -AcceptTimeoutMin $invalidTimeout } catch { $rejected = $true }
+        Assert-Test "acceptance timeout CLI rejects $invalidTimeout" $rejected 'ValidateRange accepted an out-of-range acceptance timeout'
+    }
+    $acceptTimeoutStates = @()
+    foreach ($acceptTimeoutCase in @('default', 'explicit')) {
+        $importParameters = @{ SpecPath = $spec }
+        if ($acceptTimeoutCase -ceq 'explicit') { $importParameters.AcceptTimeoutMin = 75 }
+        . $engine @importParameters
+        $repo = $acceptTimeoutFixtureRepo; $stateRoot = $acceptTimeoutFixtureStateRoot; $worktreeRoot = $acceptTimeoutFixtureWorktreeRoot
+        $expectedTimeout = if ($acceptTimeoutCase -ceq 'explicit') { 75 } else { 60 }
+        Assert-Test "$acceptTimeoutCase acceptance timeout binding flag" `
+            ($script:EngineAcceptTimeoutBound -eq ($acceptTimeoutCase -ceq 'explicit')) 'explicit binding flag was incorrect'
+        $runDirectory = Join-Path $testRoot ("acceptTimeout-$acceptTimeoutCase")
+        $script:EngineStatePath = Join-Path $runDirectory 'engine-state.json'
+        $script:EngineWorktreeRoot = $worktreeRoot
+        $script:EngineWrapper = Join-Path $PSScriptRoot 'codex-dispatch.ps1'
+        $newState = New-RunnerStateObject ([Guid]::NewGuid().ToString('N')) $runDirectory `
+            $repo $state.base_sha 2 $state.capacity $state.plan $state.spec.name `
+            $state.spec.original_digest $state.spec.snapshot_path $state.engine_owner
+        Assert-Test "$acceptTimeoutCase new state records acceptance timeout" `
+            ($newState.accept_timeout_min -eq $expectedTimeout) 'new state lost its acceptance timeout'
+        $acceptTimeoutStates += $newState
+    }
+    Remove-Item Env:APEX_ENGINE_TEST_IMPORT_ONLY -ErrorAction SilentlyContinue
+    $legacyTimeoutState = ($acceptTimeoutStates[0] | ConvertTo-Json -Depth 100) | ConvertFrom-Json
+    $legacyTimeoutState.PSObject.Properties.Remove('accept_timeout_min')
+    foreach ($schemaState in @($acceptTimeoutStates[0], $acceptTimeoutStates[1], $legacyTimeoutState)) {
+        $valid = $true; $detail = ''
+        try { Test-Structure $schemaState $acceptTimeoutSchema } catch { $valid = $false; $detail = $_.Exception.Message }
+        Assert-Test 'new/legacy acceptance timeout state passes schema' $valid $detail
+    }
+    foreach ($invalidTimeout in @(241, 0, 'not-an-integer')) {
+        $invalidState = ($acceptTimeoutStates[0] | ConvertTo-Json -Depth 100) | ConvertFrom-Json
+        $invalidState.accept_timeout_min = $invalidTimeout
+        $rejection = ''
+        try { Test-Structure $invalidState $acceptTimeoutSchema } catch { $rejection = $_.Exception.Message }
+        $expectedReason = if ($invalidTimeout -eq 241) { 'above its maximum' }
+            elseif ($invalidTimeout -eq 0) { 'below its minimum' } else { 'wrong JSON type' }
+        Assert-Test "acceptance timeout schema rejects $invalidTimeout" `
+            ($rejection -like "*accept_timeout_min*$expectedReason*") $rejection
+    }
+    try {
+        foreach ($case in @('default', 'explicit', 'legacy', 'resume-bound', 'resume-unbound', 'resume-legacy-bound', 'resume-legacy-unbound')) {
+            $sourceState = if ($case -ceq 'explicit') { $acceptTimeoutStates[1] }
+                elseif ($case -like '*legacy*') { $legacyTimeoutState } else { $acceptTimeoutStates[0] }
+            $script:EngineState = ($sourceState | ConvertTo-Json -Depth 100) | ConvertFrom-Json
+            $expectedTimeout = if ($case -ceq 'explicit') { 75 } else { 60 }
+            $script:EngineStateRoot = Join-Path $testRoot "acceptTimeout-$case-state"
+            $script:EngineStatePath = Join-Path (Join-Path $script:EngineStateRoot $script:EngineState.run_id) 'engine-state.json'
+            if ($case -like 'resume-*') {
+                $script:EngineAcceptTimeoutBound = $case -like '*-bound'
+                $AcceptTimeoutMin = 90
+                if ($case -notlike '*legacy*') { $script:EngineState.accept_timeout_min = 45 }
+                Save-RunnerState
+                $ready = Initialize-RunnerResume $script:EngineState.run_id
+                $expectedTimeout = if ($script:EngineAcceptTimeoutBound) { 90 }
+                    elseif ($case -like '*legacy*') { 60 } else { 45 }
+                $savedResume = Get-Content $script:EngineStatePath -Raw | ConvertFrom-Json
+                $savedProperty = $savedResume.PSObject.Properties['accept_timeout_min']
+                Assert-Test "$case saves acceptance timeout choice" `
+                    ($ready -and (($null -ne $savedProperty -and $savedProperty.Value -eq $expectedTimeout) -or
+                        ($case -ceq 'resume-legacy-unbound' -and $null -eq $savedProperty))) 'resume lost persisted acceptance timeout choice'
+            }
+            $script:EngineState.integration.worktree = $acceptTimeoutFixtureRepo
+            $record = New-RunnerAcceptanceRecord ("accept-timeout-$case")
+            $env:APEX_ENGINE_TEST_ACCEPT_TIMEOUT_MS = '1000'
+            $passed = Invoke-RunnerAcceptanceCheck ([pscustomobject]@{
+                id = "accept-timeout-$case"; body = 'Start-Sleep -Seconds 30'
+            }) $record
+            Assert-Test "$case acceptance uses state timeout or legacy fallback and kills child" `
+                (-not $passed -and $record.status -ceq 'failed' -and
+                    $record.output_tail.EndsWith("timed out after $expectedTimeout min") -and
+                    -not (Test-RunnerPidLive $record.child_pid $record.child_start_time)) $record.output_tail
+            Remove-Item Env:APEX_ENGINE_TEST_ACCEPT_TIMEOUT_MS -ErrorAction SilentlyContinue
+            Close-RunnerRunLock
+        }
+    } finally {
+        Close-RunnerRunLock
+        $env:APEX_ENGINE_TEST_IMPORT_ONLY = '1'
+        . $engine
+        $repo = $acceptTimeoutFixtureRepo; $stateRoot = $acceptTimeoutFixtureStateRoot; $worktreeRoot = $acceptTimeoutFixtureWorktreeRoot
+        Remove-Item Env:APEX_ENGINE_TEST_IMPORT_ONLY -ErrorAction SilentlyContinue
+    }
+
+
     # Real child checks: exits never terminate the Engine, output is bounded, and
     # timeouts kill the launcher and its descendants.
     $env:APEX_ENGINE_TEST_IMPORT_ONLY = '1'; . $engine
@@ -2535,7 +2629,53 @@ exit $code
     [void](Invoke-RunnerAcceptanceCheck ([pscustomobject]@{ id = 'timeout'; body = 'Start-Sleep -Seconds 30' }) $record)
     Remove-Item Env:APEX_ENGINE_TEST_ACCEPT_TIMEOUT_MS -ErrorAction SilentlyContinue
     Assert-Test 'acceptance timeout fails kills process tree and ends with specified tail' ($record.status -ceq 'failed' -and
-        $record.output_tail.EndsWith('timed out after 10 min') -and -not (Test-RunnerPidLive $record.child_pid $record.child_start_time)) $record.output_tail
+        $record.output_tail.EndsWith('timed out after 60 min') -and -not (Test-RunnerPidLive $record.child_pid $record.child_start_time)) $record.output_tail
+
+    # Capture the actual WaitForExit argument without waiting minutes. Real children
+    # above cover expiry and termination for new, resumed, and legacy states.
+    function Start-Process {
+        param($FilePath, $ArgumentList, $WorkingDirectory, $WindowStyle, [switch]$PassThru)
+        $process = [pscustomobject]@{ Id = $PID; StartTime = [DateTime]::Now; ExitCode = 0 }
+        $process | Add-Member -MemberType ScriptMethod -Name WaitForExit -Value {
+            param($Milliseconds)
+            $script:acceptWaitMilliseconds = $Milliseconds
+            return $true
+        }
+        $process | Add-Member -MemberType ScriptMethod -Name Dispose -Value { }
+        return $process
+    }
+    try {
+        foreach ($limitCase in @(
+            @{ name = 'default'; minutes = 60; mode = '1'; override = ''; expected = 3600000 },
+            @{ name = 'configured'; minutes = 75; mode = '1'; override = ''; expected = 4500000 },
+            @{ name = 'legacy'; minutes = $null; mode = '1'; override = ''; expected = 3600000 },
+            @{ name = 'maximum'; minutes = 240; mode = '1'; override = ''; expected = 14400000 },
+            @{ name = 'capped'; minutes = 1; mode = '1'; override = '99999999'; expected = 60000 },
+            @{ name = 'large-override'; minutes = 1; mode = '1'; override = '9999999999'; expected = 60000 },
+            @{ name = 'shortened'; minutes = 75; mode = '1'; override = '1000'; expected = 1000 },
+            @{ name = 'zero-override'; minutes = 1; mode = '1'; override = '0'; expected = 60000 },
+            @{ name = 'invalid-override'; minutes = 1; mode = '1'; override = 'invalid'; expected = 60000 },
+            @{ name = 'outside-test-mode'; minutes = 1; mode = '0'; override = '1000'; expected = 60000 }
+        )) {
+            $script:EngineState.PSObject.Properties.Remove('accept_timeout_min')
+            if ($null -ne $limitCase.minutes) {
+                $script:EngineState | Add-Member -NotePropertyName accept_timeout_min -NotePropertyValue $limitCase.minutes
+            }
+            $env:APEX_ENGINE_TEST_MODE = $limitCase.mode
+            $env:APEX_ENGINE_TEST_ACCEPT_TIMEOUT_MS = $limitCase.override
+            $script:acceptWaitMilliseconds = $null
+            $record = New-RunnerAcceptanceRecord ("effective-limit-$($limitCase.name)")
+            $passed = Invoke-RunnerAcceptanceCheck ([pscustomobject]@{ id = "effective-limit-$($limitCase.name)"; body = 'exit 0' }) $record
+            Assert-Test "acceptance effective limit $($limitCase.name)" `
+                ($passed -and $script:acceptWaitMilliseconds -eq $limitCase.expected) `
+                "wait=$script:acceptWaitMilliseconds; tail=$($record.output_tail)"
+        }
+    } finally {
+        Remove-Item Function:Start-Process
+        $env:APEX_ENGINE_TEST_MODE = '1'
+        Remove-Item Env:APEX_ENGINE_TEST_ACCEPT_TIMEOUT_MS -ErrorAction SilentlyContinue
+        $script:EngineState.PSObject.Properties.Remove('accept_timeout_min')
+    }
 
     # A baseline RED never executes the checks. A per-task file subset cannot run
     # another task's check, including the calls used by Find-RunnerWaveFailure.

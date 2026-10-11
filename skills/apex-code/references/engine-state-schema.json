@@ -56,6 +56,7 @@
       }
     },
     "max_parallel": { "type": "integer", "minimum": 1 },
+    "accept_timeout_min": { "type": "integer", "minimum": 1, "maximum": 240 },
     "no_output_timeout_min": { "type": "integer", "minimum": 1, "maximum": 240 },
     "capacity": {
       "type": "object",
