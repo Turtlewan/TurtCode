@@ -155,12 +155,12 @@ try {
         [pscustomobject]@{ path = 'missing.txt'; op = 'modify' },
         [pscustomobject]@{ path = 'missing-delete.txt'; op = 'delete' }
     )
-    $badCopy = Copy-EngineTaskFiles -IntegrationWorktree $integration.worktree -TaskWorktree $task.worktree -WaveBaseSha $baseSha -Files $badFiles
+    $badCopy = Copy-EngineTaskFiles -TargetWorktree $repo -IntegrationWorktree $integration.worktree -TaskWorktree $task.worktree -WaveBaseSha $baseSha -Files $badFiles
     Assert-True (-not $badCopy.ok) 'operation preconditions reject invalid base presence'
     Assert-Equal 3 $badCopy.failures.Count 'all operation precondition failures returned'
     Write-Output 'ok - modify/delete preconditions'
 
-    $copy = Copy-EngineTaskFiles -IntegrationWorktree $integration.worktree -TaskWorktree $task.worktree -WaveBaseSha $baseSha -Files $files
+    $copy = Copy-EngineTaskFiles -TargetWorktree $repo -IntegrationWorktree $integration.worktree -TaskWorktree $task.worktree -WaveBaseSha $baseSha -Files $files
     Assert-True $copy.ok ($copy.failures | ConvertTo-Json -Compress)
     Assert-Equal 5 $copy.hashes.Count 'hash returned for every copied operation'
     Assert-Equal $null $copy.hashes[2].hash 'delete hash is null'
@@ -172,7 +172,7 @@ try {
     Assert-Equal $copy.hashes[4].hash (Get-EngineRawSha256 (Join-Path $integration.worktree $textCrlfPath)) 'CRLF UTF-8 text bytes exactly copied'
     Write-Output 'ok - raw-byte worktree hashes'
 
-    $restore = Restore-EngineWave -IntegrationWorktree $integration.worktree -WaveBaseSha $baseSha -Files $files
+    $restore = Restore-EngineWave -TargetWorktree $repo -IntegrationWorktree $integration.worktree -WaveBaseSha $baseSha -Files $files
     Assert-True $restore.ok ($restore.failures | ConvertTo-Json -Compress)
     Assert-True (-not (Test-Path -LiteralPath (Join-Path $integration.worktree 'created.txt'))) 'restore removes base-absent create'
     Assert-Equal (Get-EngineBlobHash $integration.worktree $baseSha 'modify.txt') (Get-EngineFilteredWorkingHash $integration.worktree 'modify.txt') 'restore filtered modify identity'
@@ -184,15 +184,15 @@ try {
     $junction = Join-Path $task.worktree 'linked'
     Write-TestBytes (Join-Path $outside 'payload.txt') (Get-Utf8Bytes 'outside')
     [void](New-Item -ItemType Junction -Path $junction -Target $outside)
-    $unsafe = Copy-EngineTaskFiles -IntegrationWorktree $integration.worktree -TaskWorktree $task.worktree -WaveBaseSha $baseSha -Files @([pscustomobject]@{ path = 'linked/payload.txt'; op = 'create' })
+    $unsafe = Copy-EngineTaskFiles -TargetWorktree $repo -IntegrationWorktree $integration.worktree -TaskWorktree $task.worktree -WaveBaseSha $baseSha -Files @([pscustomobject]@{ path = 'linked/payload.txt'; op = 'create' })
     Assert-True (-not $unsafe.ok) 'reparse ancestor is rejected'
     Assert-True ($unsafe.failures[0].reason -match 'reparse') 'reparse refusal is diagnosed'
     [IO.Directory]::Delete($junction)
     Write-Output 'ok - regular/reparse path'
 
-    $copy = Copy-EngineTaskFiles -IntegrationWorktree $integration.worktree -TaskWorktree $task.worktree -WaveBaseSha $baseSha -Files $files
+    $copy = Copy-EngineTaskFiles -TargetWorktree $repo -IntegrationWorktree $integration.worktree -TaskWorktree $task.worktree -WaveBaseSha $baseSha -Files $files
     Assert-True $copy.ok 'second copy succeeds'
-    $stage = Stage-EngineWave -IntegrationWorktree $integration.worktree -Files $files
+    $stage = Stage-EngineWave -TargetWorktree $repo -IntegrationWorktree $integration.worktree -Files $files
     Assert-True $stage.ok ($stage.failures | ConvertTo-Json -Compress)
     $allowedPaths = @($files | ForEach-Object { $_.path })
     Write-TestBytes (Join-Path $integration.worktree 'off-manifest.txt') (Get-Utf8Bytes "not in wave`n")
@@ -431,6 +431,43 @@ git update-ref HEAD "$commit"
     Assert-True $teardownAgain.ok 'teardown is idempotent'
     Assert-Equal 4 $removedAgain.Count 'idempotent callbacks include already absent items'
     Write-Output 'ok - idempotent teardown'
+
+    # Main's ancestor file must not veto a path that is safe in the selected target.
+    Write-TestBytes (Join-Path $repo 'src/settings') (Get-Utf8Bytes "main settings`n")
+    [void](Invoke-TestGit $repo @('add', '-f', '--', 'src/settings'))
+    [void](Invoke-TestGit $repo @('commit', '-m', 'main ancestor fixture'))
+    $target = Join-Path $testRoot 'linked-target'
+    [void](Invoke-TestGit $repo @('worktree', 'add', '-b', 'linked-target', $target))
+    [void](Invoke-TestGit $target @('rm', '--', 'src/settings'))
+    [void](Invoke-TestGit $target @('commit', '-m', 'delete target ancestor'))
+    $targetBase = (Invoke-TestGit $target @('rev-parse', 'HEAD')).text
+    $targetSpec = [pscustomobject]@{ name = 'target-case'; run_id = 'abcdef0123456789abcdef0123456789' }
+    $targetIntegration = New-EngineIntegration -Repo $target -Spec $targetSpec -BaseSha $targetBase -WorktreeRoot $worktreeRoot
+    $targetTask = New-EngineTaskWorktree -Repo $target -Spec $targetSpec -TaskId '1' -Attempt 1 -IntegrationWorktree $targetIntegration.worktree -WorktreeRoot $worktreeRoot
+    $targetFiles = @([pscustomobject]@{ path = 'src/settings/item.py'; op = 'create' })
+    Write-TestBytes (Join-Path $targetTask.worktree 'src/settings/item.py') (Get-Utf8Bytes "created in target`n")
+    $targetCopy = Copy-EngineTaskFiles -TargetWorktree $target -IntegrationWorktree $targetIntegration.worktree -TaskWorktree $targetTask.worktree -WaveBaseSha $targetBase -Files $targetFiles
+    Assert-True $targetCopy.ok ($targetCopy.failures | ConvertTo-Json -Compress)
+    $targetStage = Stage-EngineWave -TargetWorktree $target -IntegrationWorktree $targetIntegration.worktree -Files $targetFiles
+    Assert-True $targetStage.ok ($targetStage.failures | ConvertTo-Json -Compress)
+    Assert-True ([IO.File]::Exists((Join-Path $repo 'src/settings'))) 'main ancestor stays a file'
+    Write-Output 'ok - selected target permits ancestor deleted only in linked branch'
+
+    # Only the target has this obstruction; neither task nor integration may bypass it.
+    Write-TestBytes (Join-Path $target 'target-only') (Get-Utf8Bytes 'obstruction')
+    $blockedFiles = @([pscustomobject]@{ path = 'target-only/item.py'; op = 'create' })
+    Write-TestBytes (Join-Path $targetTask.worktree 'target-only/item.py') (Get-Utf8Bytes 'task payload')
+    Assert-True (-not (Test-Path -LiteralPath (Join-Path $repo 'target-only'))) 'main has no target-only obstruction'
+    $blockedCopy = Copy-EngineTaskFiles -TargetWorktree $target -IntegrationWorktree $targetIntegration.worktree -TaskWorktree $targetTask.worktree -WaveBaseSha $targetBase -Files $blockedFiles
+    Assert-True (-not $blockedCopy.ok) 'copy refuses target-only non-directory ancestor'
+    Assert-True ($blockedCopy.failures[0].reason -match 'non-directory ancestor' -and $blockedCopy.failures[0].reason.StartsWith($target)) 'copy identifies target obstruction'
+    Assert-True (-not (Test-Path -LiteralPath (Join-Path $targetIntegration.worktree 'target-only'))) 'refused copy writes no integration path'
+    Write-TestBytes (Join-Path $targetIntegration.worktree 'target-only/item.py') (Get-Utf8Bytes 'integration payload')
+    $blockedStage = Stage-EngineWave -TargetWorktree $target -IntegrationWorktree $targetIntegration.worktree -Files $blockedFiles
+    Assert-True (-not $blockedStage.ok) 'stage refuses target-only non-directory ancestor'
+    Assert-True ($blockedStage.failures[0].reason -match 'non-directory ancestor' -and $blockedStage.failures[0].reason.StartsWith($target)) 'stage identifies target obstruction'
+    Assert-Equal 0 (Invoke-TestGit $targetIntegration.worktree @('diff', '--cached', '--quiet', '--', 'target-only/item.py') -AllowFailure).code 'refused stage leaves blocked path unstaged'
+    Write-Output 'ok - selected target rejects its own non-directory ancestor'
 
     Write-Output 'engine-git tests passed'
 } finally {

@@ -72,9 +72,9 @@ if ($env:APEX_ENGINE_TEST_MODE -ceq '1') {
     if ($env:APEX_ENGINE_TEST_STAGE_TRACE_PATH) {
         $script:EngineTestStageImplementation = ${function:Stage-EngineWave}
         function Stage-EngineWave {
-            param([string]$IntegrationWorktree, [object[]]$Files)
+            param([string]$TargetWorktree, [string]$IntegrationWorktree, [object[]]$Files)
             [IO.File]::AppendAllText($env:APEX_ENGINE_TEST_STAGE_TRACE_PATH, "stage`n")
-            & $script:EngineTestStageImplementation -IntegrationWorktree $IntegrationWorktree -Files $Files
+            & $script:EngineTestStageImplementation -TargetWorktree $TargetWorktree -IntegrationWorktree $IntegrationWorktree -Files $Files
         }
     }
 }
@@ -1087,7 +1087,7 @@ function Invoke-RunnerTaskAcceptance {
 
 function Invoke-RunnerGate {
     param([object[]]$Files, [int]$WaveNumber)
-    try { $stage = Stage-EngineWave -IntegrationWorktree $script:EngineState.integration.worktree -Files $Files }
+    try { $stage = Stage-EngineWave -TargetWorktree $script:EngineState.repo -IntegrationWorktree $script:EngineState.integration.worktree -Files $Files }
     catch {
         return [pscustomobject]@{ code = 1; diagnosis = "git stage operation failed: $($_.Exception.Message)"; moved = $false; gate = 'verify' }
     }
@@ -1133,7 +1133,7 @@ function Invoke-RunnerGate {
 
 function Restore-RunnerWave {
     param([string]$Base, [object[]]$Files)
-    $restored = Restore-EngineWave -IntegrationWorktree $script:EngineState.integration.worktree -WaveBaseSha $Base -Files $Files
+    $restored = Restore-EngineWave -TargetWorktree $script:EngineState.repo -IntegrationWorktree $script:EngineState.integration.worktree -WaveBaseSha $Base -Files $Files
     return [bool]$restored.ok
 }
 
@@ -1144,7 +1144,7 @@ function Find-RunnerWaveFailure {
     foreach ($taskPlan in @($Wave.tasks)) {
         $taskState = Get-RunnerTaskState $taskPlan.id
         $attempt = @($taskState.attempts)[-1]
-        $copy = Copy-EngineTaskFiles -IntegrationWorktree $script:EngineState.integration.worktree `
+        $copy = Copy-EngineTaskFiles -TargetWorktree $script:EngineState.repo -IntegrationWorktree $script:EngineState.integration.worktree `
             -TaskWorktree $attempt.worktree -WaveBaseSha $WaveBase -Files ([object[]]@($taskPlan.files))
         if (-not $copy.ok) { $failed += $taskPlan.id }
         else {
@@ -1244,7 +1244,7 @@ function Invoke-RunnerWave {
         foreach ($taskPlan in @($Wave.tasks)) {
             $taskState = Get-RunnerTaskState $taskPlan.id
             $attempt = @($taskState.attempts | Where-Object { $_.status -ceq 'succeeded' })[-1]
-            $copied = Copy-EngineTaskFiles -IntegrationWorktree $script:EngineState.integration.worktree `
+            $copied = Copy-EngineTaskFiles -TargetWorktree $script:EngineState.repo -IntegrationWorktree $script:EngineState.integration.worktree `
                 -TaskWorktree $attempt.worktree -WaveBaseSha $waveBase -Files ([object[]]@($taskPlan.files))
             if (-not $copied.ok) { $copyFailures += $taskPlan.id }
         }

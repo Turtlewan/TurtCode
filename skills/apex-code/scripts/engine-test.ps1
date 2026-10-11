@@ -388,6 +388,10 @@ if (-not $task) { exit 1 }
 if ($task -ceq '1') {
     if ($scenario -ceq 'delete') {
         [IO.File]::Delete((Join-Path $repo 'src/a.py')); $changed = @('src/a.py')
+    } elseif ($scenario -ceq 'linked-target') {
+        [void][IO.Directory]::CreateDirectory((Join-Path $repo 'src/settings'))
+        [IO.File]::WriteAllText((Join-Path $repo 'src/settings/item.py'), "linked payload`r`n", [Text.UTF8Encoding]::new($false))
+        $changed = @('src/settings/item.py')
     } elseif ($scenario -ceq 'authorized-ignored') {
         [IO.File]::WriteAllBytes((Join-Path $repo 'src/widget/bin/payload.dat'), [byte[]]@(0,255,13,10,128,65,0))
         [IO.File]::WriteAllBytes((Join-Path $repo 'src/widget/bin/generated.dat'), [byte[]]@(42))
@@ -588,7 +592,7 @@ function New-TestRouteContext {
     $script:EngineStateRoot = $testRoot
     $script:EngineWrapper = Join-Path $PSScriptRoot 'codex-dispatch.ps1'
     $script:EngineState = [pscustomobject][ordered]@{
-        run_id = 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'; status = 'running'; diagnosis = $null
+        run_id = 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'; status = 'running'; diagnosis = $null; repo = $testRoot
         spec = [pscustomobject]@{ name = 'fixture' }; integration = [pscustomobject]@{ worktree = $testRoot }
         counters = [pscustomobject]@{ dispatches = 0; retries = 0; capacity_retries = 0; concerns = 0 }
         concerns = @(); transitions = @(); tasks = @($taskState)
@@ -732,6 +736,58 @@ try {
         ($run.code -eq 0 -and $null -ne $state -and $state.status -ceq 'complete' -and
             (Test-Path (Join-Path $repo 'src\b.py')) -and ([IO.File]::ReadAllText((Join-Path $repo 'src\a.py')) -match 'fake-one')) `
         "exit=$($run.code); output=$($run.output); children=$childDiagnostics"
+    $linkedMain = New-TestRepo 'linked-main'
+    # Expose the declared nested create so the fixture's blanket ignore does not hide its parent.
+    Write-TestText (Join-Path $linkedMain '.gitignore') "*`n!residue-untracked.txt`n!src/`n!src/settings/`n!src/settings/item.py`n"
+    Write-TestText (Join-Path $linkedMain 'src/settings') "main settings`n"
+    [void](Set-TestCommit $linkedMain @('.gitignore', 'src/settings') (Invoke-TestGit $linkedMain @('rev-parse', 'HEAD'))[-1])
+    $linkedRoot = Join-Path $testRoot 'linked-selected'
+    [void](Invoke-TestGit $linkedMain @('worktree', 'add', '-b', 'linked-selected', $linkedRoot))
+    [void](Invoke-TestGit $linkedRoot @('rm', '--', 'src/settings'))
+    [void](Set-TestCommit $linkedRoot @('src/settings') (Invoke-TestGit $linkedRoot @('rev-parse', 'HEAD'))[-1])
+    $linkedBase = (Invoke-TestGit $linkedRoot @('rev-parse', 'HEAD'))[-1]
+    $linkedSpec = Join-Path $testRoot 'linked-fixture.md'
+    New-TestSpec $linkedMain $linkedSpec -Single
+    $linkedText = [IO.File]::ReadAllText($linkedSpec).Replace('src/a.py', 'src/settings/item.py').Replace('| modify |', '| create |').Replace('"op": "modify"', '"op": "create"')
+    Write-TestText $linkedSpec $linkedText
+    $linkedStateRoot = Join-Path $testRoot 'linked-state'
+    # Inspect main status without allowing Git to refresh its index stat cache.
+    $mainStatusBefore = ((Invoke-TestGit $linkedMain @('--no-optional-locks', 'status', '--porcelain=v1', '-uall')) -join "`n")
+    $mainHeadBefore = (Invoke-TestGit $linkedMain @('rev-parse', 'HEAD'))[-1]
+    $mainIndexBefore = [Convert]::ToBase64String([IO.File]::ReadAllBytes((Join-Path $linkedMain '.git/index')))
+    $mainSettingsBefore = [Convert]::ToBase64String([IO.File]::ReadAllBytes((Join-Path $linkedMain 'src/settings')))
+    $savedLinkedScenario = $env:ENGINE_TEST_FAKE_SCENARIO
+    try {
+        $env:ENGINE_TEST_FAKE_SCENARIO = 'linked-target'
+        $linkedRun = Invoke-TestEngineSplat @{
+            SpecPath = $linkedSpec; Repo = $linkedRoot; StateRoot = $linkedStateRoot
+            CodexExecutable = 'powershell.exe'; CodexExecutableArgumentPrefix = $prefix
+        } 'linked-target'
+    } finally { $env:ENGINE_TEST_FAKE_SCENARIO = $savedLinkedScenario }
+    $linkedStateFiles = @(Get-ChildItem -LiteralPath $linkedStateRoot -Filter engine-state.json -Recurse -File)
+    $linkedState = if ($linkedStateFiles.Count -eq 1) { Get-Content $linkedStateFiles[0].FullName -Raw -Encoding UTF8 | ConvertFrom-Json } else { $null }
+    Assert-Test 'linked target complete fake Codex run' `
+        ($linkedRun.code -eq 0 -and $null -ne $linkedState -and $linkedState.status -ceq 'complete') `
+        "exit=$($linkedRun.code); output=$($linkedRun.output)"
+    if ($null -ne $linkedState) {
+        Assert-Test 'linked target state repo and base SHA' `
+            ($linkedState.repo -ceq [IO.Path]::GetFullPath($linkedRoot) -and $linkedState.base_sha -ceq $linkedBase) 'selected root or linked HEAD was lost'
+        $linkedAncestor = Invoke-EngineGit $linkedRoot @('merge-base', '--is-ancestor', $linkedBase, $linkedState.integration.branch)
+        Assert-Test 'linked integration descends from selected HEAD' $linkedAncestor.ok 'integration branch does not descend from linked base'
+        $linkedDefaultRoot = Join-Path (Split-Path -Parent $linkedRoot) ((Split-Path -Leaf $linkedRoot) + '-wt')
+        Assert-Test 'linked default worktree root is selected sibling' `
+            ((Split-Path -Parent $linkedState.integration.worktree) -ceq $linkedDefaultRoot -and (Test-Path -LiteralPath $linkedDefaultRoot)) 'default worktree root did not follow selected target'
+    }
+    Assert-Test 'linked hand-off creates declared file' `
+        ((Test-Path -LiteralPath (Join-Path $linkedRoot 'src/settings/item.py')) -and [IO.File]::ReadAllText((Join-Path $linkedRoot 'src/settings/item.py')) -match 'linked payload') 'hand-off file missing from selected target'
+    $mainIndexAfter = [Convert]::ToBase64String([IO.File]::ReadAllBytes((Join-Path $linkedMain '.git/index')))
+    $mainSettingsAfter = [Convert]::ToBase64String([IO.File]::ReadAllBytes((Join-Path $linkedMain 'src/settings')))
+    $mainHeadAfter = (Invoke-TestGit $linkedMain @('rev-parse', 'HEAD'))[-1]
+    $mainStatusAfter = ((Invoke-TestGit $linkedMain @('--no-optional-locks', 'status', '--porcelain=v1', '-uall')) -join "`n")
+    Assert-Test 'linked run preserves main HEAD index bytes tracked bytes and status' `
+        ($mainHeadBefore -ceq $mainHeadAfter -and $mainIndexBefore -ceq $mainIndexAfter -and
+            $mainSettingsBefore -ceq $mainSettingsAfter -and $mainStatusBefore -ceq $mainStatusAfter) 'main worktree changed during linked run'
+
     # The default verify recipe runs every case; this optional switch focuses development checks.
     if (-not $AcceptanceOnly) {
     $printedEvents = 0
@@ -1697,10 +1753,11 @@ if ($Verify) {
 Write-Host "$kind ok"; exit 0
 '@
     New-TestGateBaseline $gateBaseline
-    function Stage-EngineWave { param($IntegrationWorktree, $Files) [pscustomobject]@{ ok = $script:TestStageOk; failures = @() } }
+    function Stage-EngineWave { param($TargetWorktree, $IntegrationWorktree, $Files) [pscustomobject]@{ ok = $script:TestStageOk; failures = @() } }
     $script:EngineTreePinScript = $gatePin; $script:EngineBaselineScript = $gateBaseline; $script:TestStageOk = $true
     $gateContext = New-TestRouteContext
     $gateRepo = New-TestRepo 'gate-unit-repo'
+    $script:EngineState.repo = $gateRepo
     $script:EngineState.integration = [pscustomobject]@{ worktree = $gateRepo }
     $script:EngineState.run_id = '33333333333333333333333333333333'
     $script:EngineStatePath = Join-Path $testRoot 'gate-state\engine-state.json'
@@ -1965,6 +2022,7 @@ exit 0
         "working=$($mutationCases['working'].state.diagnosis); index=$($mutationCases['index'].state.diagnosis)"
     $headGateRepo = New-TestRepo 'head-gate-unit-repo'
     $headGateTip = (Invoke-TestGit $headGateRepo @('rev-parse', 'HEAD'))[-1]
+    $script:EngineState.repo = $headGateRepo
     $script:EngineState.integration = [pscustomobject]@{ worktree = $headGateRepo; tip = $headGateTip }
     $script:EngineState.run_id = '44444444444444444444444444444444'
     $script:EngineState | Add-Member -MemberType NoteProperty -Name wave_runtime `
@@ -2501,7 +2559,7 @@ exit $code
         $twoGate.code -eq 1 -and $twoGate.failing_task_id -ceq '2' -and $twoGate.output_tail -match 'task two failure') ($twoGate | ConvertTo-Json -Compress)
     $savedRestore = ${function:Restore-RunnerWave}; $savedCopy = ${function:Copy-EngineTaskFiles}
     function Restore-RunnerWave { param($Base, $Files) return $true }
-    function Copy-EngineTaskFiles { param($IntegrationWorktree, $TaskWorktree, $WaveBaseSha, $Files) [pscustomobject]@{ ok = $true } }
+    function Copy-EngineTaskFiles { param($TargetWorktree, $IntegrationWorktree, $TaskWorktree, $WaveBaseSha, $Files) [pscustomobject]@{ ok = $true } }
     $isolatedFailureGates = @{}
     try { $isolatedChecks = @(Find-RunnerWaveFailure $script:EngineState.plan.waves[0] $script:EngineState.base_sha @($script:EngineState.plan.waves[0].tasks | ForEach-Object { $_.files }) $isolatedFailureGates) }
     finally { Set-Item Function:Restore-RunnerWave $savedRestore; Set-Item Function:Copy-EngineTaskFiles $savedCopy }
@@ -2511,7 +2569,7 @@ exit $code
     $script:EngineState.status = 'running'; $script:IsolationRestores = 0
     $script:EngineState.plan.waves[0].tasks[1].acceptance_checks[0].body = "[IO.File]::AppendAllText('AGENTS.md', 'check movement'); exit 0"
     function Restore-RunnerWave { param($Base, $Files) $script:IsolationRestores++; return $true }
-    function Copy-EngineTaskFiles { param($IntegrationWorktree, $TaskWorktree, $WaveBaseSha, $Files) [pscustomobject]@{ ok = $true } }
+    function Copy-EngineTaskFiles { param($TargetWorktree, $IntegrationWorktree, $TaskWorktree, $WaveBaseSha, $Files) [pscustomobject]@{ ok = $true } }
     try { [void](Find-RunnerWaveFailure $script:EngineState.plan.waves[0] $script:EngineState.base_sha @($script:EngineState.plan.waves[0].tasks | ForEach-Object { $_.files })) }
     finally { Set-Item Function:Restore-RunnerWave $savedRestore; Set-Item Function:Copy-EngineTaskFiles $savedCopy }
     Assert-Test 'per-task isolation integrity failure parks without restoring mutation' ($script:EngineState.status -ceq 'parked' -and

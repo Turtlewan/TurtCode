@@ -675,7 +675,28 @@ function Get-EnginePlan {
     try { $manifestRepo = ConvertTo-EngineCanonicalRoot -Path $manifestRepoText }
     catch { return New-EngineRefusal -Reason 'execution manifest repo root is invalid' -Spec $planSpec }
     if (-not [string]::Equals($manifestRepo, $repoRoot, [System.StringComparison]::OrdinalIgnoreCase)) {
-        return New-EngineRefusal -Reason 'execution manifest repo does not match -Repo' -Spec $planSpec
+        if (-not (Test-Path -LiteralPath $manifestRepo -PathType Container)) {
+            return New-EngineRefusal -Reason 'execution manifest repo does not match -Repo' -Spec $planSpec
+        }
+        $manifestRootResult = Invoke-EnginePlanNative -FilePath 'git' -ArgumentList @('-c', 'core.excludesFile=/dev/null', '-C', $manifestRepo, 'rev-parse', '--show-toplevel')
+        if ($manifestRootResult.exit_code -ne 0) { return New-EngineRefusal -Reason 'execution manifest repo does not match -Repo' -Spec $planSpec }
+        try { $manifestRoot = ConvertTo-EngineCanonicalRoot -Path $manifestRootResult.output[$manifestRootResult.output.Count - 1] }
+        catch { return New-EngineRefusal -Reason 'execution manifest repo does not match -Repo' -Spec $planSpec }
+        if (-not [string]::Equals($manifestRoot, $manifestRepo, [System.StringComparison]::OrdinalIgnoreCase)) {
+            return New-EngineRefusal -Reason 'execution manifest repo does not match -Repo' -Spec $planSpec
+        }
+        $commonRoots = @()
+        foreach ($root in @($manifestRepo, $repoRoot)) {
+            $commonResult = Invoke-EnginePlanNative -FilePath 'git' -ArgumentList @('-c', 'core.excludesFile=/dev/null', '-C', $root, 'rev-parse', '--path-format=absolute', '--git-common-dir')
+            if ($commonResult.exit_code -ne 0 -or $commonResult.output.Count -eq 0 -or [string]::IsNullOrWhiteSpace($commonResult.output[$commonResult.output.Count - 1])) {
+                return New-EngineRefusal -Reason 'git common directory could not be resolved' -Spec $planSpec
+            }
+            try { $commonRoots += ConvertTo-EngineCanonicalRoot -Path $commonResult.output[$commonResult.output.Count - 1] }
+            catch { return New-EngineRefusal -Reason 'execution manifest repo does not match -Repo' -Spec $planSpec }
+        }
+        if (-not [string]::Equals($commonRoots[0], $commonRoots[1], [System.StringComparison]::OrdinalIgnoreCase)) {
+            return New-EngineRefusal -Reason 'execution manifest repo does not match -Repo' -Spec $planSpec
+        }
     }
     $gitRootResult = Invoke-EnginePlanNative -FilePath 'git' -ArgumentList @('-c', 'core.excludesFile=/dev/null', '-C', $repoRoot, 'rev-parse', '--show-toplevel')
     if ($gitRootResult.exit_code -ne 0) { return New-EngineRefusal -Reason 'repo is not a Git worktree' -Spec $planSpec }

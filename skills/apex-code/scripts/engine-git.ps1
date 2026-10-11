@@ -76,18 +76,6 @@ function ConvertTo-EngineRelativePath {
     $relative
 }
 
-function Get-EngineMainWorktree {
-    param([Parameter(Mandatory = $true)][string]$Worktree)
-    $result = Invoke-EngineGit $Worktree @('worktree', 'list', '--porcelain')
-    Assert-EngineGitResult $result 'List worktrees'
-    foreach ($line in $result.output) {
-        if ($line.StartsWith('worktree ')) {
-            return (Get-EngineCanonicalRoot $line.Substring(9))
-        }
-    }
-    throw 'Git did not report a main worktree.'
-}
-
 function Test-EngineReparseAttribute {
     param([Parameter(Mandatory = $true)][string]$Path)
     $item = Get-Item -LiteralPath $Path -Force -ErrorAction Stop
@@ -287,6 +275,7 @@ function New-EngineTaskWorktree {
 function Copy-EngineTaskFiles {
     [CmdletBinding()]
     param(
+        [Parameter(Mandatory = $true)][string]$TargetWorktree,
         [Parameter(Mandatory = $true)][string]$IntegrationWorktree,
         [Parameter(Mandatory = $true)][string]$TaskWorktree,
         [Parameter(Mandatory = $true)][string]$WaveBaseSha,
@@ -294,13 +283,12 @@ function Copy-EngineTaskFiles {
     )
     $failures = New-Object System.Collections.ArrayList
     $hashes = New-Object System.Collections.ArrayList
-    $main = Get-EngineMainWorktree $IntegrationWorktree
     foreach ($file in $Files) {
         $pathForFailure = [string](Get-EngineGitProperty $file 'path')
         try {
             $record = Get-EngineFileRecord $file $IntegrationWorktree
             $path = $record.path
-            $reason = Get-EnginePathSafetyFailure @($main, $IntegrationWorktree, $TaskWorktree) $IntegrationWorktree @($WaveBaseSha) $path
+            $reason = Get-EnginePathSafetyFailure @($TargetWorktree, $IntegrationWorktree, $TaskWorktree) $IntegrationWorktree @($WaveBaseSha) $path
             if ($null -ne $reason) { throw $reason }
             $baseHash = Get-EngineBlobHash $IntegrationWorktree $WaveBaseSha $path
             $taskPath = Join-Path (Get-EngineCanonicalRoot $TaskWorktree) ($path.Replace('/', '\'))
@@ -332,18 +320,18 @@ function Copy-EngineTaskFiles {
 function Restore-EngineWave {
     [CmdletBinding()]
     param(
+        [Parameter(Mandatory = $true)][string]$TargetWorktree,
         [Parameter(Mandatory = $true)][string]$IntegrationWorktree,
         [Parameter(Mandatory = $true)][string]$WaveBaseSha,
         [Parameter(Mandatory = $true)][object[]]$Files
     )
     $failures = New-Object System.Collections.ArrayList
-    $main = Get-EngineMainWorktree $IntegrationWorktree
     foreach ($file in $Files) {
         $rawPath = [string](Get-EngineGitProperty $file 'path')
         try {
             $record = Get-EngineFileRecord $file $IntegrationWorktree
             $path = $record.path
-            $reason = Get-EnginePathSafetyFailure @($main, $IntegrationWorktree) $IntegrationWorktree @($WaveBaseSha) $path
+            $reason = Get-EnginePathSafetyFailure @($TargetWorktree, $IntegrationWorktree) $IntegrationWorktree @($WaveBaseSha) $path
             if ($null -ne $reason) { throw $reason }
             $baseHash = Get-EngineBlobHash $IntegrationWorktree $WaveBaseSha $path
             $full = Join-Path (Get-EngineCanonicalRoot $IntegrationWorktree) ($path.Replace('/', '\'))
@@ -374,18 +362,18 @@ function Restore-EngineWave {
 function Stage-EngineWave {
     [CmdletBinding()]
     param(
+        [Parameter(Mandatory = $true)][string]$TargetWorktree,
         [Parameter(Mandatory = $true)][string]$IntegrationWorktree,
         [Parameter(Mandatory = $true)][object[]]$Files
     )
     $failures = New-Object System.Collections.ArrayList
-    $main = Get-EngineMainWorktree $IntegrationWorktree
     $head = (Invoke-EngineGit $IntegrationWorktree @('rev-parse', 'HEAD'))
     Assert-EngineGitResult $head 'Read integration HEAD'
     foreach ($file in $Files) {
         $rawPath = [string](Get-EngineGitProperty $file 'path')
         try {
             $record = Get-EngineFileRecord $file $IntegrationWorktree
-            $reason = Get-EnginePathSafetyFailure @($main, $IntegrationWorktree) $IntegrationWorktree @($head.text) $record.path
+            $reason = Get-EnginePathSafetyFailure @($TargetWorktree, $IntegrationWorktree) $IntegrationWorktree @($head.text) $record.path
             if ($null -ne $reason) { throw $reason }
             if ($record.op -eq 'delete') {
                 $result = Invoke-EngineGit $IntegrationWorktree @('rm', '-f', '--', $record.path)

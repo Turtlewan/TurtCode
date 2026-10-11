@@ -87,7 +87,16 @@ function Invoke-GitQuiet {
 }
 
 function New-TestRepo {
+    param([string]$LinkedFrom, [string]$CloneFrom)
     $path = Join-Path $testRoot ('repo-' + [guid]::NewGuid().ToString('N'))
+    if (-not [string]::IsNullOrEmpty($LinkedFrom)) {
+        [void](Invoke-GitQuiet -Repo $LinkedFrom -Arguments @('worktree', 'add', '-q', '-b', ('linked-' + [guid]::NewGuid().ToString('N')), $path))
+        return $path
+    }
+    if (-not [string]::IsNullOrEmpty($CloneFrom)) {
+        [void](Invoke-GitQuiet -Repo $CloneFrom -Arguments @('clone', '-q', '--no-local', $CloneFrom, $path))
+        return $path
+    }
     [void](New-Item -ItemType Directory -Path $path -Force)
     [void](Invoke-GitQuiet -Repo $path -Arguments @('init', '-q'))
     Write-Utf8 -Path (Join-Path $path 'AGENTS.md') -Text (@(
@@ -276,18 +285,25 @@ function New-Fixture {
         [object[]]$Tasks,
         [hashtable]$SpecOptions = @{},
         [switch]$TwoRepos,
-        [string]$RepoOverride
+        [string]$RepoOverride,
+        [switch]$LinkedWorktree
     )
     $repo = New-TestRepo
+    $manifestRepo = $repo
+    if ($LinkedWorktree) {
+        Write-Utf8 -Path (Join-Path $repo 'src/existing.txt') -Text 'base'
+        Set-TestCommit -Repo $repo -Paths @('AGENTS.md', 'src/existing.txt')
+        $repo = New-TestRepo -LinkedFrom $manifestRepo
+    }
     if ($null -eq $Tasks) { $Tasks = @(New-Task -Id '1' -Files @(New-File -Path 'src/new.txt')) }
-    $manifest = New-ManifestJson -Repo $repo -Tasks $Tasks -TwoRepos:$TwoRepos -RepoOverride $RepoOverride
+    $manifest = New-ManifestJson -Repo $manifestRepo -Tasks $Tasks -TwoRepos:$TwoRepos -RepoOverride $RepoOverride
     $textArgs = @{ Name = $Name; Manifest = $manifest; Tasks = $Tasks }
     foreach ($key in $SpecOptions.Keys) { $textArgs[$key] = $SpecOptions[$key] }
     $specDir = Join-Path $testRoot ('spec-' + [guid]::NewGuid().ToString('N'))
     [void](New-Item -ItemType Directory -Path $specDir -Force)
     $spec = Join-Path $specDir ($Name + '.md')
     Write-Utf8 -Path $spec -Text (New-SpecText @textArgs)
-    return [pscustomobject]@{ Repo = $repo; Spec = $spec; Tasks = $Tasks; Manifest = $manifest }
+    return [pscustomobject]@{ Repo = $repo; ManifestRepo = $manifestRepo; Spec = $spec; Tasks = $Tasks; Manifest = $manifest }
 }
 
 function Invoke-Plan {
@@ -544,6 +560,84 @@ try {
         $multi = New-Fixture -TwoRepos
         $mismatch = New-Fixture -RepoOverride 'C:/definitely/not/the/test/repo'
         return -not (Invoke-Plan $multi).allowed -and -not (Invoke-Plan $mismatch).allowed
+    }
+    Assert-Case 'linked branch worktree accepts with executable waves and target prompt' {
+        $fixture = New-Fixture -LinkedWorktree
+        $plan = Invoke-Plan $fixture
+        return $plan.allowed -and @($plan.waves).Count -gt 0 -and
+            @($plan.waves[0].tasks).Count -gt 0 -and $plan.waves[0].tasks[0].prompt.Contains((ConvertTo-ForwardPath $fixture.Repo))
+    }
+    Assert-Case 'linked create decision ignores a path existing only in the main tree' {
+        $fixture = New-Fixture -LinkedWorktree
+        Write-Utf8 -Path (Join-Path $fixture.ManifestRepo 'src/new.txt') -Text 'main only'
+        $plan = Invoke-Plan $fixture
+        return $plan.allowed -and @($plan.waves).Count -gt 0 -and
+            -not (Test-Path -LiteralPath (Join-Path $fixture.Repo 'src/new.txt')) -and
+            [IO.File]::ReadAllText((Join-Path $fixture.ManifestRepo 'src/new.txt')) -ceq 'main only'
+    }
+    Assert-Case 'linked create path existing only in the linked tree refuses' {
+        $fixture = New-Fixture -LinkedWorktree
+        Write-Utf8 -Path (Join-Path $fixture.Repo 'src/new.txt') -Text 'linked only'
+        $plan = Invoke-Plan $fixture
+        return -not $plan.allowed -and $plan.refusal -match 'create path already exists' -and
+            -not (Test-Path -LiteralPath (Join-Path $fixture.ManifestRepo 'src/new.txt'))
+    }
+    Assert-Case 'linked create path tracked only on the linked branch refuses even when deleted' {
+        $fixture = New-Fixture -LinkedWorktree
+        $path = Join-Path $fixture.Repo 'src/new.txt'
+        Write-Utf8 -Path $path -Text 'linked HEAD only'
+        Set-TestCommit -Repo $fixture.Repo -Paths @('src/new.txt')
+        Remove-Item -LiteralPath $path -Force
+        $plan = Invoke-Plan $fixture
+        return -not $plan.allowed -and $plan.refusal -match 'create path already exists' -and
+            -not (Test-Path -LiteralPath (Join-Path $fixture.ManifestRepo 'src/new.txt'))
+    }
+    Assert-Case 'linked modify and delete decisions use linked dirtiness and ignore main dirtiness' {
+        foreach ($op in @('modify', 'delete')) {
+            $tasks = @(New-Task -Id '1' -Files @(New-File -Path 'src/existing.txt' -Op $op))
+            $fixture = New-Fixture -LinkedWorktree -Tasks $tasks
+            $mainPath = Join-Path $fixture.ManifestRepo 'src/existing.txt'
+            Write-Utf8 -Path $mainPath -Text 'main dirty'
+            $cleanPlan = Invoke-Plan $fixture
+            Write-Utf8 -Path (Join-Path $fixture.Repo 'src/existing.txt') -Text 'linked dirty'
+            $dirtyPlan = Invoke-Plan $fixture
+            if (-not $cleanPlan.allowed -or @($cleanPlan.waves).Count -eq 0 -or $dirtyPlan.allowed -or
+                $dirtyPlan.refusal -cne 'modify/delete path is dirty: src/existing.txt' -or
+                [IO.File]::ReadAllText($mainPath) -cne 'main dirty') { return $false }
+        }
+        return $true
+    }
+    Assert-Case 'separate clone of manifest repository refuses with identity reason' {
+        $fixture = New-Fixture -LinkedWorktree
+        $clone = New-TestRepo -CloneFrom $fixture.ManifestRepo
+        $plan = Get-EnginePlan -SpecPath $fixture.Spec -Repo $clone -MaxParallel 2 -ValidatorPath $successValidator
+        return -not $plan.allowed -and $plan.refusal -ceq 'execution manifest repo does not match -Repo' -and @($plan.waves).Count -eq 0
+    }
+    Assert-Case 'manifest subdirectory refuses with identity reason' {
+        $fixture = New-Fixture -LinkedWorktree
+        $manifest = New-ManifestJson -Repo (Join-Path $fixture.ManifestRepo 'src') -Tasks $fixture.Tasks
+        Write-Utf8 -Path $fixture.Spec -Text (New-SpecText -Name 'fixture-plan' -Manifest $manifest -Tasks $fixture.Tasks)
+        $plan = Invoke-Plan $fixture
+        return -not $plan.allowed -and $plan.refusal -ceq 'execution manifest repo does not match -Repo'
+    }
+    Assert-Case 'missing manifest directory refuses with identity reason' {
+        $fixture = New-Fixture -LinkedWorktree
+        $manifest = New-ManifestJson -Repo (Join-Path $fixture.ManifestRepo 'missing') -Tasks $fixture.Tasks
+        Write-Utf8 -Path $fixture.Spec -Text (New-SpecText -Name 'fixture-plan' -Manifest $manifest -Tasks $fixture.Tasks)
+        $plan = Invoke-Plan $fixture
+        return -not $plan.allowed -and $plan.refusal -ceq 'execution manifest repo does not match -Repo'
+    }
+    Assert-Case 'Repo subdirectory of linked tree refuses with worktree-root reason' {
+        $fixture = New-Fixture -LinkedWorktree
+        $plan = Get-EnginePlan -SpecPath $fixture.Spec -Repo (Join-Path $fixture.Repo 'src') -MaxParallel 2 -ValidatorPath $successValidator
+        return -not $plan.allowed -and $plan.refusal -ceq '-Repo must be the Git worktree root'
+    }
+    Assert-Case 'canonical string-equal root retains case-insensitive and trailing-separator acceptance' {
+        $fixture = New-Fixture
+        $manifest = New-ManifestJson -Repo $fixture.Repo -RepoOverride ((ConvertTo-ForwardPath $fixture.Repo).ToUpperInvariant() + '/') -Tasks $fixture.Tasks
+        Write-Utf8 -Path $fixture.Spec -Text (New-SpecText -Name 'fixture-plan' -Manifest $manifest -Tasks $fixture.Tasks)
+        $plan = Invoke-Plan $fixture
+        return $plan.allowed -and @($plan.waves).Count -gt 0
     }
     Assert-Case 'non-Git repo returns refusal without throwing' {
         $nonGit = Join-Path $testRoot ('not-git-' + [guid]::NewGuid().ToString('N'))
