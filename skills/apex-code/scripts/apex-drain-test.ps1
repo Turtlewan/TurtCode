@@ -332,7 +332,7 @@ try {
                 Assert-DrainTest (Test-DrainBlobIdentity $r.state.repos[0] $e -Head) 'production UTF-8 HEAD blobs equal integration for every journal path'
                 return
             }
-            Assert-DrainTest ($r.state.will_build[0].state -eq 'parked' -and $r.state.will_build[0].rejection_reason -eq 'verify-identity-mismatch' -and $r.state.will_build[0].fence_d1 -eq $r.state.will_build[0].fence_d2 -and -not $r.state.will_build[0].commit_sha) 'equal-digest Unicode mutation caught by binding blob check'
+            Assert-DrainTest ($r.state.will_build[0].state -eq 'parked' -and $r.state.will_build[0].rejection_reason -eq 'fence-mutated-tree' -and $r.state.will_build[0].fence_d1 -cne $r.state.will_build[0].fence_d2 -and -not $r.state.will_build[0].commit_sha) 'Unicode mutation changes the fence digest and parks without a commit'
             Assert-DrainTest ($r.state.status -eq 'complete' -and $r.state.will_build[0].fence_d1) 'full fence ran and recovery completed'
             foreach ($path in @('src/a.py',$global:ApexDrainTest_unicodePath)) {
                 Assert-DrainTest (([IO.File]::ReadAllText((Join-Path $r.state.repos[0].worktree $path))).Replace("`r`n","`n") -ceq "base-a`n") "manifest restored: $path"

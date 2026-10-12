@@ -94,6 +94,20 @@ param(
 
 $ErrorActionPreference = 'Stop'
 
+# Escape Git paths for display; filesystem paths retain their backslash separators.
+function ConvertTo-DisplayPath([string]$Path, [switch]$FileSystem) {
+    $display = New-Object System.Text.StringBuilder
+    foreach ($character in $Path.ToCharArray()) {
+        $code = [int]$character
+        if ($code -lt 0x20 -or $code -gt 0x7e -or ($code -eq 0x5c -and -not $FileSystem)) {
+            [void]$display.Append(('\u{0:x4}' -f $code))
+        } else {
+            [void]$display.Append($character)
+        }
+    }
+    return $display.ToString()
+}
+
 # Multiple modes used to run the first matching branch, so -Snapshot -Check overwrote the evidence
 # and exited clean without checking it. Refuse ambiguous mode requests before touching state.
 $selectedModes = @()
@@ -107,128 +121,170 @@ if ($WrittenPathsFile -and -not $Check) {
     throw "-WrittenPathsFile is valid only with -Check."
 }
 
-if (-not (Test-Path $Worktree)) { throw "Worktree not found: $Worktree" }
+if (-not (Test-Path $Worktree)) { throw "Worktree not found: $(ConvertTo-DisplayPath $Worktree -FileSystem)" }
 $repo = (Resolve-Path $Worktree).Path
 if ($WrittenPathsFile) {
     $writtenPathsFull = [System.IO.Path]::GetFullPath($WrittenPathsFile)
     $repoPrefix = $repo.TrimEnd([char]92, [char]47) + [System.IO.Path]::DirectorySeparatorChar
     if ([string]::Equals($writtenPathsFull, $repo, [System.StringComparison]::OrdinalIgnoreCase) -or
             $writtenPathsFull.StartsWith($repoPrefix, [System.StringComparison]::OrdinalIgnoreCase)) {
-        throw "-WrittenPathsFile must resolve outside the worktree: $WrittenPathsFile"
+        throw "-WrittenPathsFile must resolve outside the worktree: $(ConvertTo-DisplayPath $WrittenPathsFile -FileSystem)"
     }
 }
 
-# A git WARNING must never kill a dispatch. `& git ... 2>$null` under $ErrorActionPreference='Stop'
-# wraps native stderr in a TERMINATING NativeCommandError in Windows PowerShell 5.1 -- so the
-# redirect written to silence a warning is what makes it fatal. It killed an 11-minute Codex run
-# over a message about an unreadable temp directory. git's EXIT CODE is the verdict, not its stderr.
+# Quote one argument using the Windows CommandLineToArgvW backslash/quote rules.
+function ConvertTo-GitArgument([string]$Value, [switch]$AlwaysQuote) {
+    if (-not $AlwaysQuote -and $Value.Length -gt 0 -and $Value -notmatch '[ \t"]') { return $Value }
+    $quoted = New-Object System.Text.StringBuilder
+    [void]$quoted.Append('"')
+    $slashes = 0
+    foreach ($character in $Value.ToCharArray()) {
+        if ($character -eq [char]92) { $slashes++; continue }
+        if ($character -eq [char]34) {
+            [void]$quoted.Append([char]92, (2 * $slashes + 1))
+        } else {
+            [void]$quoted.Append([char]92, $slashes)
+        }
+        [void]$quoted.Append($character)
+        $slashes = 0
+    }
+    [void]$quoted.Append([char]92, (2 * $slashes))
+    [void]$quoted.Append('"')
+    return $quoted.ToString()
+}
+
+# Read bytes rather than PowerShell's native text pipe; Git paths are strict UTF-8.
+# stderr is drained concurrently but never changes the verdict: the exit code does.
 function Invoke-Git {
-    param([Parameter(ValueFromRemainingArguments = $true)][string[]]$GitArgs)
-    $previous = $ErrorActionPreference
-    $ErrorActionPreference = 'Continue'
+    param(
+        [switch]$NulRecords,
+        [Parameter(ValueFromRemainingArguments = $true)][string[]]$GitArgs
+    )
     $exitCodeSentinel = -987654
+    $global:LASTEXITCODE = $exitCodeSentinel
+    $exitCode = $exitCodeSentinel
     $launchException = $null
     $output = @()
+    $process = $null
+    $stdout = New-Object System.IO.MemoryStream
     try {
-        # A launch failure in Windows PowerShell 5.1 can leave a stale prior zero in LASTEXITCODE.
-        # Reset it and catch terminating launch errors so an unavailable git can never read as clean.
-        $global:LASTEXITCODE = $exitCodeSentinel
-        try {
-            $output = @(& git -C $repo @GitArgs 2>$null)
+        $gitCommand = Get-Command git -CommandType Application -ErrorAction Stop | Select-Object -First 1
+        $extension = [System.IO.Path]::GetExtension($gitCommand.Source)
+        $shim = [string]::Equals($extension, '.cmd', [StringComparison]::OrdinalIgnoreCase) -or
+            [string]::Equals($extension, '.bat', [StringComparison]::OrdinalIgnoreCase)
+        $arguments = @('-C', $repo) + $GitArgs
+        $quotedArgs = @($arguments | ForEach-Object { ConvertTo-GitArgument $_ -AlwaysQuote:$shim })
+        $info = New-Object System.Diagnostics.ProcessStartInfo
+        if ($shim) {
+            $commandLine = (ConvertTo-GitArgument $gitCommand.Source -AlwaysQuote) + ' ' + ($quotedArgs -join ' ')
+            if ([regex]::Matches($commandLine, '%').Count -ge 2) {
+                throw 'cmd.exe shim command contains two or more percent (%) characters; percent expansion cannot be transported reliably.'
+            }
+            $info.FileName = $env:ComSpec
+            $info.Arguments = '/d /v:off /s /c "' + $commandLine + '"'
+        } else {
+            $info.FileName = $gitCommand.Source
+            $info.Arguments = $quotedArgs -join ' '
         }
+        $info.UseShellExecute = $false
+        $info.RedirectStandardInput = $true
+        $info.RedirectStandardOutput = $true
+        $info.RedirectStandardError = $true
+        # Some launchers supply both Path and PATH. Framework's lazy environment
+        # copy throws on that duplicate after initializing its dictionary; rebuild
+        # the child copy with case-insensitive assignment without touching the parent.
+        try { $childEnvironment = $info.get_EnvironmentVariables() }
         catch {
-            $launchException = $_.Exception
+            if ($_.Exception.InnerException -isnot [ArgumentException]) { throw }
+            $childEnvironment = $info.get_EnvironmentVariables()
         }
-        $exitCode = $global:LASTEXITCODE
-    }
-    finally {
-        $ErrorActionPreference = $previous
+        $childEnvironment.Clear()
+        foreach ($entry in [Environment]::GetEnvironmentVariables().GetEnumerator()) {
+            $childEnvironment[$entry.Key] = $entry.Value
+        }
+        $childEnvironment['GIT_LITERAL_PATHSPECS'] = '1'
+        $process = New-Object System.Diagnostics.Process
+        $process.StartInfo = $info
+        if (-not $process.Start()) { throw 'Process.Start returned false.' }
+        $process.StandardInput.Close()
+        $stderrDrain = $process.StandardError.BaseStream.CopyToAsync([System.IO.Stream]::Null)
+        $process.StandardOutput.BaseStream.CopyTo($stdout)
+        [void]$stderrDrain.GetAwaiter().GetResult()
+        $process.WaitForExit()
+        $exitCode = $process.ExitCode
+        $global:LASTEXITCODE = $exitCode
+        $bytes = $stdout.ToArray()
+        $offset = 0
+        if (-not $NulRecords -and $bytes.Length -ge 3 -and
+                $bytes[0] -eq 0xEF -and $bytes[1] -eq 0xBB -and $bytes[2] -eq 0xBF) { $offset = 3 }
+        $decoded = [Text.UTF8Encoding]::new($false, $true).GetString($bytes, $offset, $bytes.Length - $offset)
+        if ($decoded.Length -gt 0) {
+            $separator = if ($NulRecords) { '\x00' } else { '\r\n|\r|\n' }
+            $output = @([regex]::Split($decoded, $separator))
+            if ($output[-1].Length -eq 0) { $output = @($output | Select-Object -SkipLast 1) }
+        }
+    } catch {
+        $launchException = $_.Exception
+    } finally {
+        $stdout.Dispose()
+        if ($process) { $process.Dispose() }
     }
 
     $command = "git $($GitArgs -join ' ')"
     if ($launchException) {
-        throw "$command failed to launch in '$repo'. Refusing to report clean: $($launchException.Message)"
+        throw "$(ConvertTo-DisplayPath $command) failed to launch in '$(ConvertTo-DisplayPath $repo -FileSystem)'. Refusing to report clean: $($launchException.Message)"
     }
     if ($exitCode -eq $exitCodeSentinel) {
-        throw "$command failed to launch in '$repo' and did not set an exit code. Refusing to report clean."
+        throw "$(ConvertTo-DisplayPath $command) failed to launch in '$(ConvertTo-DisplayPath $repo -FileSystem)' and did not set an exit code. Refusing to report clean."
     }
     if ($exitCode -ne 0) {
-        throw "$command failed in '$repo' (exit $exitCode). Refusing to report clean."
+        throw "$(ConvertTo-DisplayPath $command) failed in '$(ConvertTo-DisplayPath $repo -FileSystem)' (exit $exitCode). Refusing to report clean."
     }
     return $output
 }
 
-# Strip a leading "./" -- and ONLY that. `.TrimStart('./')` strips every leading '.' and '/'
-# CHARACTER, so `.env` normalized to `env`: authorize `env` and the coder could write `.env` and be
-# waved through. TrimStart takes a character SET, not a prefix.
+# Authorized/spec input retains its legacy whitespace trimming.
 function Normalize([string]$p) {
     if ([string]::IsNullOrWhiteSpace($p)) { return '' }
     $n = ($p -replace '\\', '/').Trim()
-    while ($n.StartsWith('./')) { $n = $n.Substring(2) }
+    while ($n.StartsWith('./', [StringComparison]::OrdinalIgnoreCase)) { $n = $n.Substring(2) }
+    return $n.TrimEnd('/')
+}
+
+# Git records are already decoded paths; whitespace and U+FEFF are filename characters.
+function Normalize-GitPath([string]$p) {
+    if ([string]::IsNullOrEmpty($p)) { return '' }
+    $n = $p -replace '\\', '/'
+    while ($n.StartsWith('./', [StringComparison]::OrdinalIgnoreCase)) { $n = $n.Substring(2) }
     return $n.TrimEnd('/')
 }
 
 function Get-DirtySet {
-    # porcelain v1: XY<space>path  (untracked = '??'). Rename lines are 'R  old -> new'.
-    #
-    # --ignored=traditional ALSO lists ignored paths (collapsed to the directory where possible).
-    # Without it, `git status` is blind to anything .gitignore matches -- so a coder authorized for
-    # one file could create an ignored one (a hook, a script, a config) and the check would exit 0
-    # having seen nothing. Ignored entries appear in BOTH the snapshot and the check, so a
-    # pre-existing node_modules/ is byte-identical and ignored as host state; only a NEW or CHANGED
-    # ignored path shows up as a violation.
-    # Enumerate tracked paths and ?? leaves separately from collapsed !! directories. Combining
-    # --ignored=traditional with -uall would expand every ignored build/cache file too.
-    $out = @(Invoke-Git status --porcelain --untracked-files=all)
-    $out += @(Invoke-Git status --porcelain --ignored=traditional | Where-Object { $_.StartsWith('!! ') })
-
-    $set = @{}
-    foreach ($line in $out) {
-        if (-not $line) { continue }
-        $status = $line.Substring(0, 2)
-        $path = $line.Substring(3).Trim()
-
-        # BOTH SIDES of a rename matter. Keeping only the destination meant
-        # `git mv secret.txt allowed.txt` was judged solely on `allowed.txt` -- which is authorized --
-        # so deleting the unauthorized source passed the check.
-        if ($path -match '\s->\s') {
-            $parts = $path -split '\s->\s'
-            $set[(Unquote-GitPath $parts[0])] = 'R-'   # the source: it was REMOVED
-            $set[(Unquote-GitPath $parts[-1])] = $status
-            continue
+    # Pair porcelain v1 -z rename/copy destinations with origins before filtering !!.
+    # Keep raw keys, including the trailing slash of collapsed ignored directories.
+    $set = New-Object 'System.Collections.Hashtable' ([StringComparer]::OrdinalIgnoreCase)
+    foreach ($ignoredOnly in @($false, $true)) {
+        $argsForStatus = @('status', '--porcelain=v1', '-z')
+        if ($ignoredOnly) { $argsForStatus += '--ignored=traditional' }
+        else { $argsForStatus += '--untracked-files=all' }
+        $records = @(Invoke-Git -NulRecords @argsForStatus)
+        for ($i = 0; $i -lt $records.Count; $i++) {
+            $record = $records[$i]
+            if ($record.Length -lt 4 -or $record[2] -ne [char]32) { throw 'Invalid git status record. Refusing to report clean.' }
+            $status = $record.Substring(0, 2)
+            $path = $record.Substring(3)
+            $origin = $null
+            if ($status[0] -cin @('R', 'C') -or $status[1] -cin @('R', 'C')) {
+                $i++
+                if ($i -ge $records.Count) { throw 'Missing git rename/copy origin. Refusing to report clean.' }
+                $origin = $records[$i]
+            }
+            if ($ignoredOnly -and $status -cne '!!') { continue }
+            if ($null -ne $origin) { $set[$origin] = 'R-' }
+            $set[$path] = $status
         }
-        $set[(Unquote-GitPath $path)] = $status
     }
     return $set
-}
-
-# git C-quotes any path with unusual bytes (default core.quotePath=true): "src/\303\251.txt".
-# Trimming the quote characters alone leaves the backslash escapes, so the path never resolves to a
-# real file and hashes as "missing" -- identical before and after, which reads as "untouched".
-function Unquote-GitPath([string]$p) {
-    $p = $p.Trim()
-    if (-not ($p.StartsWith('"') -and $p.EndsWith('"'))) { return $p }
-    $inner = $p.Substring(1, $p.Length - 2)
-    $bytes = New-Object System.Collections.Generic.List[byte]
-    for ($i = 0; $i -lt $inner.Length; $i++) {
-        if ($inner[$i] -ne '\') { $bytes.Add([byte][char]$inner[$i]); continue }
-        $i++
-        if ($i -ge $inner.Length) { break }
-        switch ($inner[$i]) {
-            'n' { $bytes.Add(10) }
-            't' { $bytes.Add(9) }
-            'r' { $bytes.Add(13) }
-            '"' { $bytes.Add(34) }
-            '\' { $bytes.Add(92) }
-            default {
-                if ($inner[$i] -match '[0-7]' -and $i + 2 -lt $inner.Length) {
-                    $bytes.Add([Convert]::ToByte($inner.Substring($i, 3), 8))
-                    $i += 2
-                } else { $bytes.Add([byte][char]$inner[$i]) }
-            }
-        }
-    }
-    return [System.Text.Encoding]::UTF8.GetString($bytes.ToArray())
 }
 
 # Hash CONTENT, not just the path.
@@ -242,7 +298,7 @@ function Unquote-GitPath([string]$p) {
 # porcelain entry (`?? scratch/`); treating that as unhashable meant a coder could write ANY file
 # under an untracked directory and be ignored entirely.
 function Get-ContentHash([string]$relPath) {
-    $full = Join-Path $repo $relPath
+    $full = [System.IO.Path]::Combine($repo, $relPath)
 
     if (Test-Path -LiteralPath $full -PathType Container) {
         # Fingerprint from each file's relative PATH + length + mtime, hashed IN-PROCESS. NEVER a git
@@ -283,8 +339,8 @@ function Get-ContentHash([string]$relPath) {
     if (-not (Test-Path -LiteralPath $full -PathType Leaf)) { return '-' }
     # A present file is not the legitimate absent-file '-' sentinel. Invoke-Git fails closed on
     # launch/exit errors, and an empty successful hash is still ambiguous, so refuse it too.
-    $h = Invoke-Git hash-object -- $relPath
-    if (-not $h) { throw "git hash-object returned no hash for present file '$relPath'. Refusing to report it absent." }
+    $h = Invoke-Git hash-object '--' $relPath
+    if (-not $h) { throw "git hash-object returned no hash for present file '$(ConvertTo-DisplayPath $relPath)'. Refusing to report it absent." }
     return ([string]$h).Trim()
 }
 
@@ -294,7 +350,7 @@ function Get-ContentHash([string]$relPath) {
 function Get-IndexHash([string]$relPath) {
     # Empty output with a successful ls-files call legitimately means the path is not in the index;
     # Invoke-Git now throws on launch/exit failure instead of collapsing either error to this '-'.
-    $entry = Invoke-Git ls-files -s -- $relPath
+    $entry = Invoke-Git ls-files -s '--' $relPath
     if (-not $entry) { return '-' }
     $fields = ([string]$entry).Split(@(' ', "`t"), [System.StringSplitOptions]::RemoveEmptyEntries)
     if ($fields.Count -ge 2) { return "$($fields[0]):$($fields[1])" }   # mode:sha -- a chmod is a change too
@@ -303,10 +359,10 @@ function Get-IndexHash([string]$relPath) {
 
 function Get-PathState([string]$relPath, [string]$Status) {
     if ($Status -ceq '??') {
-        $full = Join-Path $repo $relPath
+        $full = [System.IO.Path]::Combine($repo, $relPath)
         # Nested repositories can remain ?? containers even with -uall. Keep their recursive
         # metadata digest; neither a container nor an untracked leaf has an index entry.
-        if ($relPath.EndsWith('/') -or (Test-Path -LiteralPath $full -PathType Container)) {
+        if ($relPath.EndsWith('/', [StringComparison]::OrdinalIgnoreCase) -or (Test-Path -LiteralPath $full -PathType Container)) {
             return "work:$(Get-ContentHash $relPath) index:-"
         }
         if (-not (Test-Path -LiteralPath $full -PathType Leaf)) { return 'work:- index:-' }
@@ -487,7 +543,7 @@ $snapPath = Join-Path $StateDirectory "scope-$Task.snapshot.json"
 if ($WrittenPathsFile -and
         [string]::Equals([System.IO.Path]::GetFullPath($WrittenPathsFile),
             [System.IO.Path]::GetFullPath($snapPath), [System.StringComparison]::OrdinalIgnoreCase)) {
-    throw "-WrittenPathsFile must not resolve to the snapshot path: $WrittenPathsFile"
+    throw "-WrittenPathsFile must not resolve to the snapshot path: $(ConvertTo-DisplayPath $WrittenPathsFile -FileSystem)"
 }
 
 # --------------------------------------------------------------------------- ENCODING SCAN
@@ -674,7 +730,7 @@ if ($EncodingScan) {
     if ($cannotVerify.Count -gt 0) {
         Write-Host ""
         Write-Host "[encoding] CANNOT VERIFY $($cannotVerify.Count) path(s):" -ForegroundColor Red
-        foreach ($u in $cannotVerify) { Write-Host "      $u" -ForegroundColor Red }
+        foreach ($u in $cannotVerify) { Write-Host "      $(ConvertTo-DisplayPath $u)" -ForegroundColor Red }
         Write-Host "[encoding] A gate that cannot read a path must not report it clean." -ForegroundColor Red
         exit 73
     }
@@ -687,7 +743,7 @@ if ($EncodingScan) {
     Write-Host ""
     Write-Host "[encoding] MOJIBAKE - $($hits.Count) line(s) carry double-encoded text:" -ForegroundColor Red
     foreach ($h in ($hits | Select-Object -First 40)) {
-        Write-Host ("      {0}:{1}  {2}" -f $h.Path, $h.Line, $h.Text) -ForegroundColor Red
+        Write-Host ("      {0}:{1}  {2}" -f (ConvertTo-DisplayPath $h.Path), $h.Line, $h.Text) -ForegroundColor Red
     }
     if ($hits.Count -gt 40) { Write-Host "      ... and $($hits.Count - 40) more" -ForegroundColor Red }
     Write-Host ""
@@ -702,28 +758,28 @@ if (Test-Path -LiteralPath $RuntimeExclusionRoot -PathType Container) {
     $resolvedRuntimeExclusionRoot = (Resolve-Path -LiteralPath $RuntimeExclusionRoot).Path.TrimEnd('\', '/')
 }
 $applyRuntimeExclusions = ($null -ne $resolvedRuntimeExclusionRoot -and
-    $repo.TrimEnd('\', '/').Equals($resolvedRuntimeExclusionRoot, [System.StringComparison]::OrdinalIgnoreCase))
+    [string]::Equals($repo.TrimEnd('\', '/'), $resolvedRuntimeExclusionRoot, [System.StringComparison]::OrdinalIgnoreCase))
 
 # Lockstep: identical in tree-pin.ps1 and codex-scope-check.ps1.
-$runtimeMarkerPatterns = @(
-    '^skills/synced/\.bucket-[^/]+$',
-    '^skills/synced/[^/]+/\.last-complete-round$',
-    '^skills/synced/[^/]+/manifest\.json$'
-)
 function Test-IsRuntimeMarker([string]$NormalizedPath) {
-    foreach ($pattern in $runtimeMarkerPatterns) {
-        if ([regex]::IsMatch($NormalizedPath, $pattern, [System.Text.RegularExpressions.RegexOptions]::IgnoreCase)) {
-            return $true
-        }
+    $prefix = 'skills/synced/'
+    if (-not $NormalizedPath.StartsWith($prefix, [StringComparison]::OrdinalIgnoreCase)) { return $false }
+    $suffix = $NormalizedPath.Substring($prefix.Length)
+    $separator = $suffix.IndexOf('/', [StringComparison]::OrdinalIgnoreCase)
+    if ($separator -lt 0) {
+        return $suffix.StartsWith('.bucket-', [StringComparison]::OrdinalIgnoreCase) -and $suffix.Length -gt 8
     }
-    return $false
+    if ($separator -eq 0) { return $false }
+    $marker = $suffix.Substring($separator + 1)
+    return [string]::Equals($marker, '.last-complete-round', [StringComparison]::OrdinalIgnoreCase) -or
+        [string]::Equals($marker, 'manifest.json', [StringComparison]::OrdinalIgnoreCase)
 }
 
 # ---------------------------------------------------------------------------------- SNAPSHOT
 if ($Snapshot) {
     $dirty = Get-DirtySet
-    $states = [ordered]@{}
-    $statuses = [ordered]@{}
+    $states = New-Object 'System.Collections.Hashtable' ([StringComparer]::OrdinalIgnoreCase)
+    $statuses = New-Object 'System.Collections.Hashtable' ([StringComparer]::OrdinalIgnoreCase)
     foreach ($p in $dirty.Keys) {
         $states[$p] = Get-PathState $p ([string]$dirty[$p])
         $statuses[$p] = [string]$dirty[$p]
@@ -757,13 +813,13 @@ if ($Snapshot) {
             foreach ($piece in ($a -split ',')) {
                 $p = Normalize ($piece.Trim().Trim("'").Trim('"'))
                 if (-not $p) { continue }
-                foreach ($k in $dirty.Keys) { if ((Normalize $k) -eq $p) { $preAuth += $p } }
+                foreach ($k in $dirty.Keys) { if ([string]::Equals((Normalize-GitPath $k), $p, [StringComparison]::OrdinalIgnoreCase)) { $preAuth += $p } }
             }
         }
         if ($preAuth.Count -gt 0) {
             Write-Host ""
             Write-Host "[scope] RE-DISPATCH HAZARD - $($preAuth.Count) file(s) this task may write are ALREADY dirty:" -ForegroundColor Yellow
-            foreach ($p in ($preAuth | Select-Object -Unique)) { Write-Host "      $p" }
+            foreach ($p in ($preAuth | Select-Object -Unique)) { Write-Host "      $(ConvertTo-DisplayPath $p)" }
             Write-Host "[scope] The task's work may already be in the tree from an earlier dispatch that only LOOKED" -ForegroundColor Yellow
             Write-Host "[scope] like it failed. The coder cannot run its test RED against a tree that already contains" -ForegroundColor Yellow
             Write-Host "[scope] the fix - it can only verify what it finds. Reset these paths to the base SHA before" -ForegroundColor Yellow
@@ -786,21 +842,21 @@ if (-not ($snap.PSObject.Properties.Name -ccontains 'format') -or
     throw "snapshot for '$Task' predates scope snapshot format 2 (leaf enumeration); re-run -Snapshot"
 }
 
-$preState = @{}
+$preState = New-Object 'System.Collections.Hashtable' ([StringComparer]::OrdinalIgnoreCase)
 if ($snap.PSObject.Properties.Name -contains 'states' -and $snap.states) {
-    foreach ($prop in $snap.states.PSObject.Properties) { $preState[(Normalize $prop.Name)] = [string]$prop.Value }
+    foreach ($prop in $snap.states.PSObject.Properties) { $preState[(Normalize-GitPath $prop.Name)] = [string]$prop.Value }
 }
-$preDirty = @{}
-foreach ($p in @($snap.dirty)) { $preDirty[(Normalize $p)] = $true }
-$preStatus = @{}
+$preDirty = New-Object 'System.Collections.Hashtable' ([StringComparer]::OrdinalIgnoreCase)
+foreach ($p in @($snap.dirty)) { $preDirty[(Normalize-GitPath $p)] = $true }
+$preStatus = New-Object 'System.Collections.Hashtable' ([StringComparer]::OrdinalIgnoreCase)
 if ($snap.PSObject.Properties.Name -contains 'statuses' -and $snap.statuses) {
-    foreach ($prop in $snap.statuses.PSObject.Properties) { $preStatus[(Normalize $prop.Name)] = [string]$prop.Value }
+    foreach ($prop in $snap.statuses.PSObject.Properties) { $preStatus[(Normalize-GitPath $prop.Name)] = [string]$prop.Value }
 }
 
 # Split on commas as well as array elements: a caller invoking this from bash passes
 # -Authorized 'a.py','b.py' as ONE string "a.py,b.py", which then matches nothing -- and every
 # authorized file reads as a violation.
-$allowed = @{}
+$allowed = New-Object 'System.Collections.Hashtable' ([StringComparer]::OrdinalIgnoreCase)
 foreach ($a in $Authorized) {
     foreach ($piece in ($a -split ',')) {
         $p = Normalize ($piece.Trim().Trim("'").Trim('"'))
@@ -809,9 +865,9 @@ foreach ($a in $Authorized) {
 }
 
 $nowDirty = Get-DirtySet
-$nowByNorm = @{}
+$nowByNorm = New-Object 'System.Collections.Hashtable' ([StringComparer]::OrdinalIgnoreCase)
 foreach ($p in $nowDirty.Keys) {
-    $nowByNorm[(Normalize $p)] = [pscustomobject]@{ Path = [string]$p; Status = [string]$nowDirty[$p] }
+    $nowByNorm[(Normalize-GitPath $p)] = [pscustomobject]@{ Path = [string]$p; Status = [string]$nowDirty[$p] }
 }
 $violations = @()   # the coder wrote these, and they are not authorized
 $untouched = @()    # dirty before the dispatch AND byte-identical since: not the coder's
@@ -821,7 +877,7 @@ $untouched = @()    # dirty before the dispatch AND byte-identical since: not th
 # "docs/progress-evil.md", which is a hole a coder could drive an unauthorized file through.
 $stateRel = ''
 $stateFull = (Resolve-Path $StateDirectory).Path
-if ($stateFull.StartsWith($repo)) {
+if ($stateFull.StartsWith($repo, [StringComparison]::OrdinalIgnoreCase)) {
     # Trim the leading separator EXPLICITLY. Slicing the repo prefix off leaves "\docs\progress",
     # and the old Normalize happened to strip that leading slash only because `TrimStart('./')`
     # strips every leading '.' and '/' CHARACTER -- the same sloppiness that made `.env` normalize
@@ -845,7 +901,7 @@ function Test-IsStatePath([string]$n) { return $false }
 # out of scope -- the guard failing the build for doing exactly what it was told to do.
 function Test-IsAuthorized([string]$n) {
     foreach ($a in $allowed.Keys) {
-        if ($n -ieq $a) { return $true }
+        if ([string]::Equals($n, $a, [StringComparison]::OrdinalIgnoreCase)) { return $true }
         if ($n.StartsWith($a + '/', [System.StringComparison]::OrdinalIgnoreCase)) { return $true }
     }
     return $false
@@ -855,7 +911,7 @@ function Test-IsAuthorized([string]$n) {
 # now-only scan: the coder deleting a host's untracked draft, or restoring a host-modified file back
 # to HEAD, removes it from `git status` entirely -- so the old loop saw nothing and exited 0 while
 # host work was destroyed. Absence is a change too.
-$allPaths = New-Object System.Collections.Generic.HashSet[string]
+$allPaths = [System.Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
 foreach ($p in $nowByNorm.Keys) { [void]$allPaths.Add($p) }
 foreach ($p in $preDirty.Keys) { [void]$allPaths.Add($p) }
 
@@ -876,7 +932,7 @@ $runtimeExclusions = @(
 )
 function Test-IsRuntimePath([string]$NormalizedPath) {
     foreach ($prefix in $runtimeExclusions) {
-        if ($NormalizedPath.Equals($prefix, [System.StringComparison]::OrdinalIgnoreCase) -or
+        if ([string]::Equals($NormalizedPath, $prefix, [System.StringComparison]::OrdinalIgnoreCase) -or
                 $NormalizedPath.StartsWith($prefix + '/', [System.StringComparison]::OrdinalIgnoreCase)) {
             return $true
         }
@@ -887,11 +943,11 @@ function Test-IsRuntimePath([string]$NormalizedPath) {
 function Test-IsRuntimeMarkerFile([string]$n) {
     if (-not (Test-IsRuntimeMarker $n)) { return $false }
 
-    $full = Join-Path $repo $n
+    $full = [System.IO.Path]::Combine($repo, $n)
     if (Test-Path -LiteralPath $full -PathType Leaf) {
         if ($nowByNorm.ContainsKey($n)) {
             $rawNowPath = ([string]$nowByNorm[$n].Path) -replace '\\', '/'
-            if ($rawNowPath.EndsWith('/')) { return $false }
+            if ($rawNowPath.EndsWith('/', [StringComparison]::OrdinalIgnoreCase)) { return $false }
         }
         return $true
     }
@@ -899,7 +955,7 @@ function Test-IsRuntimeMarkerFile([string]$n) {
     if (Test-Path -LiteralPath $full) { return $false }
     foreach ($d in @($snap.dirty)) {
         $rawSnapshotPath = ([string]$d) -replace '\\', '/'
-        if ((Normalize $d) -eq $n -and -not $rawSnapshotPath.EndsWith('/') -and
+        if ([string]::Equals((Normalize-GitPath $d), $n, [StringComparison]::OrdinalIgnoreCase) -and -not $rawSnapshotPath.EndsWith('/', [StringComparison]::OrdinalIgnoreCase) -and
                 $preState.ContainsKey($n) -and ([string]$preState[$n]) -match '^work:(?:raw:)?[0-9a-f]+ index:') {
             return $true
         }
@@ -908,8 +964,8 @@ function Test-IsRuntimeMarkerFile([string]$n) {
 }
 
 function Test-IsMarkerOnlyTransition([string]$n) {
-    if (-not ($n.Equals('skills', [System.StringComparison]::OrdinalIgnoreCase) -or
-            $n.Equals('skills/synced', [System.StringComparison]::OrdinalIgnoreCase) -or
+    if (-not ([string]::Equals($n, 'skills', [System.StringComparison]::OrdinalIgnoreCase) -or
+            [string]::Equals($n, 'skills/synced', [System.StringComparison]::OrdinalIgnoreCase) -or
             $n.StartsWith('skills/synced/', [System.StringComparison]::OrdinalIgnoreCase))) {
         return $false
     }
@@ -942,7 +998,7 @@ $derivedCacheExclusions = @(
 $derivedCacheDivergence = @('.venv', 'node_modules/.cache', '__pycache__', '.coverage')
 function Test-IsDerivedCachePath([string]$NormalizedPath) {
     foreach ($prefix in $derivedCacheExclusions) {
-        if ($NormalizedPath.Equals($prefix, [System.StringComparison]::OrdinalIgnoreCase) -or
+        if ([string]::Equals($NormalizedPath, $prefix, [System.StringComparison]::OrdinalIgnoreCase) -or
                 $NormalizedPath.StartsWith($prefix + '/', [System.StringComparison]::OrdinalIgnoreCase)) {
             return $true
         }
@@ -969,12 +1025,12 @@ function Test-IsHostCurated([string]$n) {
 }
 
 try {
-    $indexInventory = [string]::Join('', [string[]]@(Invoke-Git ls-files -z))
-    $headInventory = [string]::Join('', [string[]]@(Invoke-Git ls-tree -r --name-only -z HEAD))
+    $indexInventory = [string]::Join("`0", [string[]]@(Invoke-Git -NulRecords ls-files -z))
+    $headInventory = [string]::Join("`0", [string[]]@(Invoke-Git -NulRecords ls-tree -r --name-only -z HEAD))
     foreach ($inventory in @($indexInventory, $headInventory)) {
         foreach ($entry in ($inventory -split "`0")) {
             if ($entry.Length -eq 0) { continue }
-            $curatedPath = Normalize $entry
+            $curatedPath = Normalize-GitPath $entry
             if (-not $curatedPath) { continue }
             [void]$curatedFiles.Add($curatedPath)
 
@@ -994,8 +1050,8 @@ try {
 # failed lookup is not an absent file; disable only this class and keep all other checks running.
 $declaredBuildOutputs = @()
 try {
-    $agentsAtHead = @(Invoke-Git ls-tree --full-tree --name-only $snap.head '--' AGENTS.md)
-    if ($agentsAtHead -ccontains 'AGENTS.md') {
+    $agentsAtHead = @(Invoke-Git -NulRecords ls-tree --full-tree --name-only -z $snap.head '--' AGENTS.md)
+    if (@($agentsAtHead | Where-Object { [string]::Equals($_, 'AGENTS.md', [StringComparison]::OrdinalIgnoreCase) }).Count -gt 0) {
         $agentsText = [string]::Join("`n", [string[]]@(Invoke-Git show "$($snap.head):AGENTS.md"))
         $declaration = ConvertFrom-BuildOutputsSection -Text $agentsText
         $declaredBuildOutputs = @($declaration.Entries)
@@ -1138,7 +1194,7 @@ if ($declaredBuildOutputExcludedCount -gt 0) {
 if ($WrittenPathsFile) {
     $expandedWritten = New-Object System.Collections.Generic.List[string]
     foreach ($entry in $writtenSet) {
-        $full = Join-Path $repo $entry
+        $full = [System.IO.Path]::Combine($repo, $entry)
         if (Test-Path -LiteralPath $full -PathType Container) {
             [void]$expandedWritten.Add($entry)
             foreach ($file in (Get-ChildItem -LiteralPath $full -Recurse -File -Force -ErrorAction SilentlyContinue -ErrorVariable enumErr)) {
@@ -1149,11 +1205,13 @@ if ($WrittenPathsFile) {
             [void]$expandedWritten.Add($entry)
         }
     }
-    $sorted = @($expandedWritten | Sort-Object -Unique)
+    # Keep the existing sort order, but deduplicate path identities ordinally.
+    $writtenUnique = [System.Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
+    $sorted = @($expandedWritten | Sort-Object | Where-Object { $writtenUnique.Add($_) })
     try {
         [System.IO.File]::WriteAllLines($WrittenPathsFile, [string[]]$sorted, [System.Text.UTF8Encoding]::new($false))
     } catch {
-        throw "Failed to write -WrittenPathsFile '$WrittenPathsFile': $($_.Exception.Message)"
+        throw "Failed to write -WrittenPathsFile '$(ConvertTo-DisplayPath $WrittenPathsFile -FileSystem)': $($_.Exception.Message)"
     }
 }
 
@@ -1195,7 +1253,7 @@ if ($violations.Count -eq 0 -and -not $headMoved) {
 # and told the caller to fix a list that was perfectly valid. Two rules for one question, and they
 # disagreed.
 $authorizedHits = 0
-foreach ($path in $nowDirty.Keys) { if (Test-IsAuthorized (Normalize $path)) { $authorizedHits++ } }
+foreach ($path in $nowDirty.Keys) { if (Test-IsAuthorized (Normalize-GitPath $path)) { $authorizedHits++ } }
 if ($violations.Count -gt 1 -and $authorizedHits -eq 0 -and $allowed.Count -gt 0 -and -not $headMoved) {
     Write-Host ""
     Write-Host "[scope] THE AUTHORIZED LIST LOOKS WRONG, not the coder." -ForegroundColor Red
@@ -1204,16 +1262,16 @@ if ($violations.Count -gt 1 -and $authorizedHits -eq 0 -and $allowed.Count -gt 0
     Write-Host "[scope] certainly a malformed -Authorized (e.g. an array passed as one comma-joined string)." -ForegroundColor Red
     Write-Host ""
     Write-Host "[scope] Authorized ($($allowed.Count)):" -ForegroundColor Yellow
-    foreach ($a in $allowed.Keys) { Write-Host "      $a" }
+    foreach ($a in $allowed.Keys) { Write-Host "      $(ConvertTo-DisplayPath $a)" }
     Write-Host "[scope] Written ($($violations.Count)):" -ForegroundColor Yellow
-    foreach ($v in $violations) { Write-Host ("      {0}  {1}" -f $v.Status, $v.Path) }
+    foreach ($v in $violations) { Write-Host ("      {0}  {1}" -f $v.Status, (ConvertTo-DisplayPath $v.Path)) }
     Show-Untouched
     exit 66
 }
 
 Write-Host ""
 Write-Host "[scope] OUT OF SCOPE - '$Task' wrote $($violations.Count) path(s) outside its authorized set:" -ForegroundColor Red
-foreach ($v in $violations) { Write-Host ("    {0}  {1}" -f $v.Status, $v.Path) -ForegroundColor Red }
+foreach ($v in $violations) { Write-Host ("    {0}  {1}" -f $v.Status, (ConvertTo-DisplayPath $v.Path)) -ForegroundColor Red }
 Write-Host ""
 Write-Host "[scope] NOTHING WAS TOUCHED. These changes are still in the tree, exactly as the coder left them." -ForegroundColor Yellow
 Write-Host "[scope] This script does not revert: it inferred authorship from timing, and timing lies whenever" -ForegroundColor Yellow

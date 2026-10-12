@@ -2,6 +2,12 @@
 
 $ErrorActionPreference = 'Stop'
 
+# Mirror apex-drain-test.ps1: .NET cannot build a child environment with Path/PATH duplicates.
+$treePinTestPath = $env:Path
+[Environment]::SetEnvironmentVariable('PATH', $null, 'Process')
+[Environment]::SetEnvironmentVariable('Path', $null, 'Process')
+[Environment]::SetEnvironmentVariable('Path', $treePinTestPath, 'Process')
+
 $scriptPath = Join-Path $PSScriptRoot 'tree-pin.ps1'
 $testRoot = Join-Path ([System.IO.Path]::GetTempPath()) ("apex-tree-pin-test-$PID-" + [guid]::NewGuid().ToString('N'))
 $failures = New-Object System.Collections.Generic.List[string]
@@ -98,6 +104,35 @@ function Get-FixtureArgs($Fixture, [string]$RuntimeRoot) {
     )
 }
 
+function Invoke-DuplicatePathChild([string]$Command) {
+    # Replace only the child's raw environment block; StringDictionary cannot hold both keys.
+    $childScript = @'
+$ErrorActionPreference = 'Stop'
+Add-Type -TypeDefinition 'using System.Runtime.InteropServices; public static class DuplicatePathEnvironment { [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)] public static extern bool SetEnvironmentStringsW(string block); }'
+$entries = @([Environment]::GetEnvironmentVariables().GetEnumerator() | Where-Object {
+    -not [string]::Equals($_.Key, 'Path', [StringComparison]::OrdinalIgnoreCase)
+} | ForEach-Object { $_.Key + '=' + $_.Value })
+$entries += @("Path=$env:Path", "PATH=$env:Path")
+$block = [string]::Join([string][char]0, [string[]]$entries) + [char]0 + [char]0
+if (-not [DuplicatePathEnvironment]::SetEnvironmentStringsW($block)) { throw 'Could not set duplicate Path/PATH environment.' }
+$pathKeys = @([Environment]::GetEnvironmentVariables().Keys | Where-Object {
+    [string]::Equals($_, 'Path', [StringComparison]::OrdinalIgnoreCase)
+})
+if ($pathKeys.Count -ne 2) { throw 'Child environment must contain both Path and PATH.' }
+'@ + "`n" + $Command
+    $encoded = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($childScript))
+    $previous = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
+    try {
+        $output = @(& powershell.exe -NoProfile -ExecutionPolicy Bypass -EncodedCommand $encoded 2>&1)
+        $exitCode = $LASTEXITCODE
+    } finally { $ErrorActionPreference = $previous }
+    return [pscustomobject]@{
+        ExitCode = $exitCode
+        Output = [string]::Join("`n", ($output | ForEach-Object { [string]$_ }))
+    }
+}
+
 function Invoke-TreePin([string[]]$Arguments) {
     # Expected fail-closed cases write a terminating error to stderr; collect that diagnostic
     # without letting the harness's Stop preference abort before it can assert the non-zero exit.
@@ -146,7 +181,7 @@ function New-AgentsFetchFailureShim([string]$Name, [string]$FailCommand) {
     New-Item -ItemType Directory -Path $shimRoot | Out-Null
     $gitPath = (Get-Command git.exe -ErrorAction Stop).Source
     $failLine = if ($FailCommand -ceq 'ls-tree') {
-        'if "%~3"=="ls-tree" if "%~4"=="--full-tree" if "%~5"=="--name-only" if "%~8"=="AGENTS.md" exit /b 42'
+        'if "%~3"=="ls-tree" if "%~4"=="--full-tree" if "%~5"=="--name-only" if "%~6"=="-z" if "%~9"=="AGENTS.md" exit /b 42'
     } else {
         'if "%~3"=="show" if "%~4"=="HEAD:AGENTS.md" exit /b 42'
     }
@@ -167,6 +202,28 @@ function Get-PinPath([string]$Root, [string]$Label, [string]$PinDirectory) {
     return Join-Path $PinDirectory "apex-treepin-$safeLabel-$tag.txt"
 }
 
+function Assert-PathMovement($Fixture, [string]$Path) {
+    $caseArgs = Get-FixtureArgs $Fixture $Fixture.Root
+    $original = [IO.File]::ReadAllText((Join-Path $Fixture.Root $Path))
+    $before = Invoke-TreePin @('-Digest', '-Worktree', $Fixture.Root)
+    Assert-Equal "$($Fixture.Name) $Path baseline Digest exits 0" 0 $before.ExitCode
+    $result = Invoke-TreePin (@('-Pin') + $caseArgs)
+    Assert-Equal "$($Fixture.Name) $Path Pin exits 0" 0 $result.ExitCode
+    $result = Invoke-TreePin (@('-Verify') + $caseArgs)
+    Assert-Equal "$($Fixture.Name) $Path unchanged Verify exits 0" 0 $result.ExitCode
+    $unchanged = Invoke-TreePin @('-Digest', '-Worktree', $Fixture.Root)
+    Assert-Equal "$($Fixture.Name) $Path unchanged digest" $before.Output $unchanged.Output
+    Write-Utf8File (Join-Path $Fixture.Root $Path) ($original + 'moved')
+    $result = Invoke-TreePin (@('-Verify') + $caseArgs)
+    Assert-Equal "$($Fixture.Name) $Path content movement verifies 69" 69 $result.ExitCode
+    $displayPath = ConvertTo-DetailPath $Path
+    Assert-True "$($Fixture.Name) $displayPath change detail preserves the exact escaped path" ($result.Output.Contains("CHANGED: $displayPath`n") -or $result.Output.Contains("NEW:     $displayPath`n"))
+    $after = Invoke-TreePin @('-Digest', '-Worktree', $Fixture.Root)
+    Assert-Equal "$($Fixture.Name) $Path changed Digest exits 0" 0 $after.ExitCode
+    Assert-True "$($Fixture.Name) $Path content movement changes digest" ($before.Output -cne $after.Output)
+    Write-Utf8File (Join-Path $Fixture.Root $Path) $original
+}
+
 try {
     New-Item -ItemType Directory -Path $testRoot | Out-Null
 
@@ -179,6 +236,276 @@ try {
     Write-Utf8File $isolatedGlobalConfig "[core]`n    excludesFile = $isolatedGlobalIgnoreForConfig`n"
     $env:GIT_CONFIG_GLOBAL = $isolatedGlobalConfig
     $env:APEX_STATE_DIR = Join-Path $testRoot 'state'
+
+    # Git must not inherit the job host's remoting pipe as stdin.
+    $jobFixture = New-TestFixture 'job-stdin' 'tracked.txt' "tracked`n"
+    Write-Utf8File (Join-Path $jobFixture.Root 'untracked.txt') "untracked`n"
+    $job = Start-Job -ScriptBlock {
+        param($Script, $Repo)
+        $ErrorActionPreference = 'Stop'
+        & $Script -Digest -Worktree $Repo
+    } -ArgumentList $scriptPath, $jobFixture.Root
+    try {
+        $finished = Wait-Job -Job $job -Timeout 60
+        if ($null -eq $finished) { Stop-Job -Job $job }
+        $completed = $null -ne $finished -and $job.State -eq 'Completed'
+        Assert-True 'Digest job completes within 60 seconds' $completed
+        if ($null -ne $finished) {
+            $jobErrors = @()
+            $jobOutput = @(Receive-Job -Job $job -ErrorAction SilentlyContinue -ErrorVariable jobErrors)
+            Assert-True 'Digest job succeeds and returns one SHA-256 digest' ($completed -and $jobErrors.Count -eq 0 -and $jobOutput.Count -eq 1 -and $jobOutput[0] -cmatch '\A[0-9a-f]{64}\z')
+        }
+    } finally {
+        Remove-Job -Job $job -Force
+    }
+
+    # Golden digests captured with the pre-change Git adapter, before editing tree-pin.ps1.
+    $golden = New-TestFixture 'ascii-golden' 'a.txt' "alpha`n"
+    Write-Utf8File (Join-Path $golden.Root 'b.txt') "beta`n"
+    $savedAuthor = $env:GIT_AUTHOR_DATE
+    $savedCommitter = $env:GIT_COMMITTER_DATE
+    try {
+        $env:GIT_AUTHOR_DATE = '2000-01-01T00:00:00Z'
+        $env:GIT_COMMITTER_DATE = '2000-01-01T00:00:00Z'
+        Add-FixtureCommit $golden @('b.txt') 'Track second ASCII file'
+    } finally {
+        $env:GIT_AUTHOR_DATE = $savedAuthor
+        $env:GIT_COMMITTER_DATE = $savedCommitter
+    }
+    $cleanGolden = Invoke-TreePin @('-Digest', '-Worktree', $golden.Root)
+    Assert-Equal 'clean ASCII golden exits 0' 0 $cleanGolden.ExitCode
+    Assert-Equal 'clean ASCII pre-change golden digest' 'bedaba1181c422e91f37f1d3a4d24ec9495af35604cd43a2c5086b11096fb5f8' $cleanGolden.Output
+    $duplicatePath = Invoke-DuplicatePathChild ("& '{0}' -Digest -Worktree '{1}'" -f $scriptPath.Replace("'", "''"), $golden.Root.Replace("'", "''"))
+    Assert-Equal 'Digest succeeds with duplicate Path/PATH environment' 0 $duplicatePath.ExitCode
+    Assert-Equal 'duplicate Path/PATH preserves the clean digest' $cleanGolden.Output $duplicatePath.Output
+    & git -C $golden.Root mv -- a.txt z.txt
+    if ($LASTEXITCODE -ne 0) { throw 'first golden rename failed' }
+    & git -C $golden.Root mv -- b.txt c.txt
+    if ($LASTEXITCODE -ne 0) { throw 'second golden rename failed' }
+    $dirtyGolden = Invoke-TreePin @('-Digest', '-Worktree', $golden.Root)
+    Assert-Equal 'dirty multi-rename ASCII golden exits 0' 0 $dirtyGolden.ExitCode
+    Assert-Equal 'dirty multi-rename ASCII pre-change golden digest' '891873d159ed906f766b80e84ced6d27c3cf2941f288791af91d382faf731dcc' $dirtyGolden.Output
+
+    # Import only the production adapter/index helper for direct argument round-trip assertions.
+    $tokens = $null
+    $parseErrors = $null
+    $ast = [Management.Automation.Language.Parser]::ParseFile($scriptPath, [ref]$tokens, [ref]$parseErrors)
+    foreach ($name in @('Invoke-Git', 'Get-IndexDigest', 'Test-IsRuntimeMarker', 'ConvertTo-DetailPath')) {
+        $function = $ast.Find({ param($node) $node -is [Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -ceq $name }, $true)
+        . ([scriptblock]::Create($function.Extent.Text))
+    }
+    $displayFixture = 'C:\Users\' + [char]0x00e9 + "`t"
+    Assert-Equal 'filesystem display preserves separators and escapes Unicode/control characters' 'C:\Users\\u00e9\u0009' (ConvertTo-DetailPath $displayFixture -FileSystem)
+    Assert-Equal 'Git display still escapes backslash characters' 'C:\u005cUsers\u005c\u00e9\u0009' (ConvertTo-DetailPath $displayFixture)
+    $gitError = ''
+    try { $null = Invoke-Git $golden.Root invalid-command-for-display-test }
+    catch { $gitError = $_.Exception.Message }
+    Assert-True 'Git failure displays filesystem separators literally' ($gitError.Contains($golden.Root) -and -not $gitError.Contains('\u005c'))
+    $savedCulture = [Threading.Thread]::CurrentThread.CurrentCulture
+    try {
+        [Threading.Thread]::CurrentThread.CurrentCulture = [Globalization.CultureInfo]::GetCultureInfo('tr-TR')
+        Assert-True 'runtime marker membership uses ordinal case folding under Turkish culture' (Test-IsRuntimeMarker 'SKILLS/SYNCED/u1/MANIFEST.JSON')
+        Assert-True 'bucket marker membership uses ordinal case folding under Turkish culture' (Test-IsRuntimeMarker 'SKILLS/SYNCED/.BUCKET-u1')
+        Assert-True 'runtime marker suffix keeps distinct Unicode names distinct' (-not (Test-IsRuntimeMarker ('skills/synced/u1/man' + [char]0xFEFF + 'ifest.json')))
+        Assert-True 'runtime marker prefix rejects a Kelvin-sign look-alike' (-not (Test-IsRuntimeMarker ('s' + [char]0x212A + 'ills/synced/u1/manifest.json')))
+    } finally { [Threading.Thread]::CurrentThread.CurrentCulture = $savedCulture }
+    foreach ($quotePath in @('true', 'false')) {
+        $fixture = New-TestFixture ('unicode-' + $quotePath) 'seed.txt' "seed`n"
+        & git -C $fixture.Root config core.quotepath $quotePath
+        if ($LASTEXITCODE -ne 0) { throw 'core.quotepath configuration failed' }
+        $unicodePath = 'src/' + [char]0x00e9 + '.py'
+        $renamedPath = 'src/renamed ' + [char]0x00e9 + ' [id].py'
+        $paths = @($unicodePath, 'src/internal space.py', 'src/[id].py', 'src/i.py', 'src/origin.py')
+        foreach ($path in $paths) { Write-Utf8File (Join-Path $fixture.Root $path) "original $path`n" }
+        Add-FixtureCommit $fixture @('.') 'Track Unicode and quoted paths'
+        & git -C $fixture.Root mv -- src/origin.py $renamedPath
+        if ($LASTEXITCODE -ne 0) { throw 'Unicode fixture git mv failed' }
+        $paths = @($unicodePath, 'src/internal space.py', 'src/[id].py', $renamedPath)
+        foreach ($path in @($unicodePath, 'src/internal space.py', 'src/[id].py')) {
+            Write-Utf8File (Join-Path $fixture.Root $path) "indexed $path`n"
+        }
+        & git -C $fixture.Root add -- .
+        if ($LASTEXITCODE -ne 0) { throw 'Unicode fixture staging failed' }
+        foreach ($path in $paths) { Write-Utf8File (Join-Path $fixture.Root $path) "working $path`n" }
+        $renameRecords = @(Invoke-Git $fixture.Root -NulRecords status --porcelain=v1 -z)
+        Assert-True "$quotePath staged git mv retains a rename status" ($renameRecords -ccontains ('RM ' + $renamedPath))
+        foreach ($path in @($unicodePath, 'src/[id].py')) {
+            $expectedIndex = [string](& git -C $fixture.Root rev-parse (':' + $path))
+            if ($LASTEXITCODE -ne 0) { throw 'expected index blob lookup failed' }
+            $expectedWork = [string](& git -C $fixture.Root hash-object -- $path)
+            if ($LASTEXITCODE -ne 0) { throw 'expected work blob lookup failed' }
+            $indexRows = @(Invoke-Git $fixture.Root ls-files -s -- $path)
+            $ownWork = [string](Invoke-Git $fixture.Root hash-object -- $path)
+            $ownIndex = Get-IndexDigest $fixture.Root $path
+            # A failed non-ASCII round-trip is a blocker, never a request for a fallback.
+            if ($path -ceq $unicodePath -and ($indexRows.Count -ne 1 -or $ownIndex -cne "100644:${expectedIndex}:0")) {
+                throw 'BLOCKED: ls-files -s -- src/U+00E9.py non-ASCII argument round-trip failed'
+            }
+            if ($path -ceq $unicodePath -and $ownWork -cne $expectedWork) {
+                throw 'BLOCKED: hash-object -- src/U+00E9.py non-ASCII argument round-trip failed'
+            }
+            Assert-Equal "$quotePath $path ls-files selects exactly one row" 1 $indexRows.Count
+            Assert-Equal "$quotePath $path indexed blob is its own" "100644:${expectedIndex}:0" $ownIndex
+            Assert-Equal "$quotePath $path hash-object selects its own blob" $expectedWork $ownWork
+        }
+        foreach ($path in $paths) { Assert-PathMovement $fixture $path }
+    }
+
+    foreach ($prefixCase in @(
+            [pscustomobject]@{ Name = 'leading-space'; Path = ' keep.txt' },
+            [pscustomobject]@{ Name = 'leading-bom'; Path = ([string][char]0xFEFF) + 'keep.txt' })) {
+        $fixture = New-TestFixture $prefixCase.Name 'keep.txt' "ordinary keep`n"
+        Write-Utf8File (Join-Path $fixture.Root $prefixCase.Path) "prefixed keep`n"
+        Add-FixtureCommit $fixture @('.') 'Track distinct prefixed file'
+        Write-Utf8File (Join-Path $fixture.Root $prefixCase.Path) "dirty prefixed keep`n"
+        $inventory = @(Invoke-Git $fixture.Root -NulRecords ls-files -z -- $prefixCase.Path)
+        Assert-Equal "$($prefixCase.Name) NUL inventory preserves first path" $prefixCase.Path $inventory[0]
+        Assert-PathMovement $fixture $prefixCase.Path
+        Assert-Equal "$($prefixCase.Name) ordinary keep.txt remains unchanged" "ordinary keep`n" ([IO.File]::ReadAllText((Join-Path $fixture.Root 'keep.txt')))
+        $pinText = [IO.File]::ReadAllText((Get-PinPath $fixture.Root $fixture.Name $fixture.Pins))
+        Assert-True "$($prefixCase.Name) detail names prefixed file rather than keep.txt" ($pinText.Contains(" M $($prefixCase.Path) work:") -and -not $pinText.Contains(" M keep.txt work:"))
+    }
+
+    $fixture = New-TestFixture 'nbsp-only' 'seed.txt' 'seed'
+    $nbspPath = [string][char]0x00A0
+    $accepted = $true
+    try { [IO.File]::WriteAllText([IO.Path]::Combine($fixture.Root, $nbspPath), 'nonbreaking space', [Text.UTF8Encoding]::new($false)) }
+    catch {
+        $accepted = $false
+        Write-Host "SKIP: NBSP-only file rejected by filesystem: $($_.Exception.Message)"
+    }
+    if ($accepted) {
+        Add-FixtureCommit $fixture @('.') 'Track whitespace-only file'
+        $inventory = @(Invoke-Git $fixture.Root -NulRecords ls-files -z -- $nbspPath)
+        Assert-True 'decoded whitespace-only path remains nonempty' ($inventory.Count -eq 1 -and -not [string]::IsNullOrEmpty($inventory[0]))
+        Assert-Equal 'decoded whitespace-only path is exact' $nbspPath $inventory[0]
+        Assert-PathMovement $fixture $nbspPath
+    }
+
+    $fixture = New-TestFixture 'glob-collision' '0.txt' 'zero blob'
+    Write-Utf8File (Join-Path $fixture.Root '[0a].txt') 'bracket blob'
+    Add-FixtureCommit $fixture @('.') 'Track glob collision'
+    $expected = [string](& git -C $fixture.Root rev-parse ':[0a].txt')
+    if ($LASTEXITCODE -ne 0) { throw 'bracket blob lookup failed' }
+    Assert-Equal 'bracket index lookup selects one row' 1 @(Invoke-Git $fixture.Root ls-files -s -- '[0a].txt').Count
+    Assert-Equal 'bracket index lookup selects only its own blob' "100644:${expected}:0" (Get-IndexDigest $fixture.Root '[0a].txt')
+    Assert-PathMovement $fixture '[0a].txt'
+
+    $fixture = New-TestFixture 'cr-only-agents' '.gitignore' "/output/`n"
+    $crFence = '```'
+    Write-Utf8File (Join-Path $fixture.Root 'AGENTS.md') "# Fixture`r## Build outputs`r$crFence`routput`r$crFence`r"
+    Add-FixtureCommit $fixture @('AGENTS.md') 'Track CR-only declaration'
+    Write-Utf8File (Join-Path $fixture.Root 'output/result.txt') 'before'
+    $before = Invoke-TreePin @('-Digest', '-Worktree', $fixture.Root)
+    $result = Invoke-TreePin (@('-Pin') + (Get-FixtureArgs $fixture $fixture.Root))
+    Assert-Equal 'CR-only AGENTS pin exits 0' 0 $result.ExitCode
+    Write-Utf8File (Join-Path $fixture.Root 'output/result.txt') 'changed ignored output'
+    $after = Invoke-TreePin @('-Digest', '-Worktree', $fixture.Root)
+    Assert-Equal 'CR-only AGENTS declaration survives line-mode show' $before.Output $after.Output
+    $result = Invoke-TreePin (@('-Verify') + (Get-FixtureArgs $fixture $fixture.Root))
+    Assert-Equal 'CR-only AGENTS ignored output verifies unchanged' 0 $result.ExitCode
+
+    $realGit = (Get-Command git.exe -CommandType Application -ErrorAction Stop | Select-Object -First 1).Source
+    $shimRoot = Join-Path $testRoot 'pass through shim'
+    New-Item -ItemType Directory -Path $shimRoot | Out-Null
+    [IO.File]::WriteAllLines((Join-Path $shimRoot 'git.cmd'), [string[]]@(
+        '@echo off', 'echo harmless git warning 1>&2', ('"{0}" %*' -f $realGit), 'exit /b %ERRORLEVEL%'
+    ), [Text.Encoding]::ASCII)
+    $fixture = New-TestFixture 'ampersand-shim' 'a&b.txt' 'ampersand original'
+    Write-Utf8File (Join-Path $fixture.Root 'a&b.txt') 'ampersand dirty'
+    $savedPath = $env:PATH
+    try {
+        $env:PATH = $shimRoot + [IO.Path]::PathSeparator + $savedPath
+        Assert-PathMovement $fixture 'a&b.txt'
+        $expected = [string](Invoke-Git $fixture.Root hash-object -- 'a&b.txt')
+        $pinText = [IO.File]::ReadAllText((Get-PinPath $fixture.Root $fixture.Name $fixture.Pins))
+        Assert-True 'pass-through shim fingerprints ampersand file own blob' ($pinText.Contains(" M a&b.txt work:$expected index:"))
+        Assert-Equal 'shim permits one percent argument' 1 @(Invoke-Git $fixture.Root log -1 '--format=%cI').Count
+    } finally { $env:PATH = $savedPath }
+
+    # Culture-equivalent names are separate Windows files and separate detail-map keys.
+    $fixture = New-TestFixture 'distinct-unicode-details' 'seed.txt' 'seed'
+    $composed = 'caf' + [char]0x00e9 + '.txt'
+    $decomposed = 'cafe' + [char]0x0301 + '.txt'
+    foreach ($path in @($composed, $decomposed)) { Write-Utf8File (Join-Path $fixture.Root $path) ("base $path") }
+    Add-FixtureCommit $fixture @('.') 'Track distinct Unicode names'
+    foreach ($path in @($composed, $decomposed)) { Write-Utf8File (Join-Path $fixture.Root $path) ("dirty $path") }
+    $caseArgs = Get-FixtureArgs $fixture $fixture.Root
+    $result = Invoke-TreePin (@('-Pin') + $caseArgs)
+    Assert-Equal 'distinct Unicode detail keys pin exits 0' 0 $result.ExitCode
+    foreach ($path in @($composed, $decomposed)) { Write-Utf8File (Join-Path $fixture.Root $path) ("changed $path") }
+    $result = Invoke-TreePin (@('-Verify') + $caseArgs)
+    Assert-Equal 'distinct Unicode detail keys verify 69' 69 $result.ExitCode
+    foreach ($path in @($composed, $decomposed)) {
+        $displayPath = ConvertTo-DetailPath $path
+        Assert-True "distinct Unicode detail names $displayPath" ($result.Output.Contains("CHANGED: $displayPath`n"))
+    }
+
+    # Byte fixtures exercise output shape, exact BOM removal, and concurrent stderr drainage.
+    $recordShim = Join-Path $testRoot 'record-shim'
+    New-Item -ItemType Directory -Path $recordShim | Out-Null
+    [IO.File]::WriteAllBytes((Join-Path $recordShim 'warning.bin'), [Text.Encoding]::ASCII.GetBytes(('warning' * 20000)))
+    [IO.File]::WriteAllLines((Join-Path $recordShim 'git.cmd'), [string[]]@(
+        '@echo off', 'type "%~dp0warning.bin" 1>&2', 'type "%~4"', 'exit /b 0'
+    ), [Text.Encoding]::ASCII)
+    try {
+        $env:PATH = $recordShim + [IO.Path]::PathSeparator + $savedPath
+        $byteFixture = Join-Path $recordShim 'records.bin'
+        [IO.File]::WriteAllBytes($byteFixture, [byte[]]@())
+        Assert-Equal 'empty line output returns no records' 0 @(Invoke-Git $fixture.Root fixture-output $byteFixture).Count
+        Assert-Equal 'empty NUL output returns no records' 0 @(Invoke-Git $fixture.Root -NulRecords fixture-output $byteFixture).Count
+        [IO.File]::WriteAllBytes($byteFixture, [Text.Encoding]::UTF8.GetBytes("one`r`ntwo`rthree`nfour`n`n"))
+        $rows = @(Invoke-Git $fixture.Root fixture-output $byteFixture)
+        Assert-Equal 'line mode recognizes CRLF CR and LF and drops only final empty record' 5 $rows.Count
+        Assert-Equal 'line mode keeps the preceding empty record' 'one|two|three|four|' ([string]::Join('|', $rows))
+        [IO.File]::WriteAllBytes($byteFixture, [byte[]]@(0xEF,0xBB,0xBF,0xEF,0xBB,0xBF,0x78,0x0A))
+        $rows = @(Invoke-Git $fixture.Root fixture-output $byteFixture)
+        Assert-Equal 'line mode removes exactly one BOM' (([string][char]0xFEFF) + 'x') $rows[0]
+        [IO.File]::WriteAllBytes($byteFixture, [byte[]]@(0xEF,0xBB,0xBF,0x78,0x00))
+        $rows = @(Invoke-Git $fixture.Root -NulRecords fixture-output $byteFixture)
+        Assert-Equal 'NUL mode retains the initial BOM as path content' (([string][char]0xFEFF) + 'x') $rows[0]
+        Assert-Equal 'NUL mode drops final empty record' 1 $rows.Count
+        # Avoid FF FE: cmd.exe TYPE treats that sequence as a UTF-16 BOM.
+        [IO.File]::WriteAllBytes($byteFixture, [byte[]]@(0xFF,0x80))
+        $decodeFailed = $false
+        try { $null = Invoke-Git $fixture.Root fixture-output $byteFixture }
+        catch { $decodeFailed = $_.Exception.Message.Contains('UTF-8 decoding failed') }
+        Assert-True 'line mode invalid UTF-8 fails closed' $decodeFailed
+    } finally { $env:PATH = $savedPath }
+
+    $fixture = New-TestFixture 'percent-path' '%OS%.txt' 'percent original'
+    Write-Utf8File (Join-Path $fixture.Root '%OS%.txt') 'percent dirty'
+    # No PATH shim: git.exe receives percent characters directly.
+    Assert-True 'percent real-git fixture resolves git.exe' ([IO.Path]::GetExtension((Get-Command git -CommandType Application | Select-Object -First 1).Source) -ceq '.exe')
+    Assert-PathMovement $fixture '%OS%.txt'
+    try {
+        $env:PATH = $shimRoot + [IO.Path]::PathSeparator + $savedPath
+        foreach ($mode in @('-Pin', '-Verify')) {
+            $result = Invoke-TreePin (@($mode) + (Get-FixtureArgs $fixture $fixture.Root))
+            Assert-True "percent shim $mode refuses launch" ($result.ExitCode -ne 0 -and $result.ExitCode -ne 69)
+            Assert-True "percent shim $mode names percent launch-failure reason" ($result.Output -match 'git failed or could not launch' -and $result.Output -match 'percent expansion is unsafe')
+        }
+    } finally { $env:PATH = $savedPath }
+
+    $fixture = New-TestFixture 'invalid-utf8' 'tracked.txt' 'tracked'
+    $caseArgs = Get-FixtureArgs $fixture $fixture.Root
+    $result = Invoke-TreePin (@('-Pin') + $caseArgs)
+    Assert-Equal 'UTF-8 failure fixture has a valid baseline pin' 0 $result.ExitCode
+    $invalidRoot = Join-Path $testRoot 'invalid-utf8-shim'
+    New-Item -ItemType Directory -Path $invalidRoot | Out-Null
+    [IO.File]::WriteAllBytes((Join-Path $invalidRoot 'invalid.bin'), [byte[]]@(0xFF, 0x80))
+    [IO.File]::WriteAllLines((Join-Path $invalidRoot 'git.cmd'), [string[]]@(
+        '@echo off', 'if "%~3"=="ls-tree" (', 'type "%~dp0invalid.bin"', 'exit /b 0', ')',
+        ('"{0}" %*' -f $realGit), 'exit /b %ERRORLEVEL%'
+    ), [Text.Encoding]::ASCII)
+    try {
+        $env:PATH = $invalidRoot + [IO.Path]::PathSeparator + $savedPath
+        foreach ($mode in @('-Pin', '-Verify')) {
+            $result = Invoke-TreePin (@($mode) + $caseArgs)
+            Assert-True "invalid UTF-8 path inventory $mode fails closed" ($result.ExitCode -ne 0 -and $result.ExitCode -ne 69)
+            Assert-True "invalid UTF-8 path inventory $mode names decoding failure" ($result.Output -match 'UTF-8 decoding failed')
+        }
+    } finally { $env:PATH = $savedPath }
 
     $rootOne = Join-Path $testRoot 'root-one'
     $rootTwo = Join-Path $testRoot 'root-two'

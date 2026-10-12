@@ -109,6 +109,35 @@ function New-TestRepo {
     return $repoPath
 }
 
+function Invoke-DuplicatePathChild([string]$Command) {
+    # Replace only the child's raw environment block; StringDictionary cannot hold both keys.
+    $childScript = @'
+$ErrorActionPreference = 'Stop'
+Add-Type -TypeDefinition 'using System.Runtime.InteropServices; public static class DuplicatePathEnvironment { [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)] public static extern bool SetEnvironmentStringsW(string block); }'
+$entries = @([Environment]::GetEnvironmentVariables().GetEnumerator() | Where-Object {
+    -not [string]::Equals($_.Key, 'Path', [StringComparison]::OrdinalIgnoreCase)
+} | ForEach-Object { $_.Key + '=' + $_.Value })
+$entries += @("Path=$env:Path", "PATH=$env:Path")
+$block = [string]::Join([string][char]0, [string[]]$entries) + [char]0 + [char]0
+if (-not [DuplicatePathEnvironment]::SetEnvironmentStringsW($block)) { throw 'Could not set duplicate Path/PATH environment.' }
+$pathKeys = @([Environment]::GetEnvironmentVariables().Keys | Where-Object {
+    [string]::Equals($_, 'Path', [StringComparison]::OrdinalIgnoreCase)
+})
+if ($pathKeys.Count -ne 2) { throw 'Child environment must contain both Path and PATH.' }
+'@ + "`n" + $Command
+    $encoded = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($childScript))
+    $previous = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
+    try {
+        $output = @(& powershell.exe -NoProfile -ExecutionPolicy Bypass -EncodedCommand $encoded 2>&1)
+        $exitCode = $LASTEXITCODE
+    } finally { $ErrorActionPreference = $previous }
+    return [pscustomobject]@{
+        ExitCode = $exitCode
+        Output = [string]::Join("`n", ($output | ForEach-Object { [string]$_ }))
+    }
+}
+
 function Invoke-ScopeCheck {
     param(
         [Parameter(Mandatory = $true)][string[]]$CheckerArguments,
@@ -157,7 +186,7 @@ function New-FailingGitShim {
 
 function Write-FixtureFile {
     param([string]$RepoPath, [string]$Path, [string]$Content = "generated`r`n")
-    $fullPath = Join-Path $RepoPath $Path
+    $fullPath = [System.IO.Path]::Combine($RepoPath, $Path)
     New-Item -ItemType Directory -Force -Path (Split-Path -Parent $fullPath) | Out-Null
     [System.IO.File]::WriteAllText($fullPath, $Content, [System.Text.UTF8Encoding]::new($false))
 }
@@ -183,7 +212,7 @@ function New-AgentsFetchFailureShim {
     New-Item -ItemType Directory -Force -Path $shimPath | Out-Null
     # Match only the committed-AGENTS fetch, leaving the separate HEAD inventory operational.
     $failLine = if ($FailCommand -ceq 'ls-tree') {
-        'if "%~3"=="ls-tree" if "%~4"=="--full-tree" if "%~5"=="--name-only" if "%~8"=="AGENTS.md" exit /b 42'
+        'if "%~3"=="ls-tree" if "%~4"=="--full-tree" if "%~5"=="--name-only" if "%~9"=="AGENTS.md" exit /b 42'
     } else {
         ('if "%~3"=="show" if "%~4"=="{0}:AGENTS.md" exit /b 42' -f $Head)
     }
@@ -327,6 +356,254 @@ try {
         ("[core]`n    excludesFile = {0}`n" -f ($fixtureGitIgnore -replace '\\', '/')),
         [System.Text.UTF8Encoding]::new($false))
     $env:GIT_CONFIG_GLOBAL = $fixtureGitConfig
+
+    # Git must not inherit the job host's remoting pipe as stdin.
+    $jobRepo = New-TestRepo -Name 'job-stdin'
+    Write-FixtureFile -RepoPath $jobRepo -Path 'untracked.txt'
+    $jobState = Join-Path $testRoot 'state-job-stdin'
+    $job = Start-Job -ScriptBlock {
+        param($Checker, $Repo, $State)
+        $ErrorActionPreference = 'Stop'
+        & $Checker -Snapshot -Worktree $Repo -Task 'job-stdin' -StateDirectory $State
+    } -ArgumentList $checkerPath, $jobRepo, $jobState
+    try {
+        $finished = Wait-Job -Job $job -Timeout 60
+        if ($null -eq $finished) { Stop-Job -Job $job }
+        $completed = $null -ne $finished -and $job.State -eq 'Completed'
+        Assert-True -Name 'Snapshot job completes within 60 seconds' -Condition $completed -Detail ("job state: {0}" -f $job.State)
+        if ($null -ne $finished) {
+            $jobErrors = @()
+            $jobOutput = @(Receive-Job -Job $job -ErrorAction SilentlyContinue -ErrorVariable jobErrors)
+            Assert-True -Name 'Snapshot job succeeds and writes its snapshot' -Condition ($completed -and $jobErrors.Count -eq 0 -and (Test-Path -LiteralPath (Join-Path $jobState 'scope-job-stdin.snapshot.json'))) -Detail ("job errors: {0}; {1}" -f $jobErrors.Count, (($jobOutput + $jobErrors) -join [Environment]::NewLine))
+        }
+    } finally {
+        Remove-Job -Job $job -Force
+    }
+
+    # Test the same adapter used by the CLI; stop immediately on argument failure.
+    $scopeSource = [IO.File]::ReadAllText($checkerPath)
+    $displayStart = $scopeSource.IndexOf('function ConvertTo-DisplayPath')
+    $displayEnd = $scopeSource.IndexOf('# Multiple modes')
+    Invoke-Expression $scopeSource.Substring($displayStart, $displayEnd - $displayStart)
+    $displayFixture = 'C:\Users\' + [char]0x00e9 + "`t"
+    Assert-True -Name 'filesystem display preserves separators and escapes Unicode/control characters' -Condition ((ConvertTo-DisplayPath $displayFixture -FileSystem) -ceq 'C:\Users\\u00e9\u0009') -Detail 'filesystem backslashes remain literal'
+    Assert-True -Name 'Git display still escapes backslash characters' -Condition ((ConvertTo-DisplayPath $displayFixture) -ceq 'C:\u005cUsers\u005c\u00e9\u0009') -Detail 'Git backslashes remain escaped'
+    $tokens = $null
+    $parseErrors = $null
+    $ast = [Management.Automation.Language.Parser]::ParseFile($checkerPath, [ref]$tokens, [ref]$parseErrors)
+    $markerFunction = $ast.Find({ param($node) $node -is [Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -ceq 'Test-IsRuntimeMarker' }, $true)
+    . ([scriptblock]::Create($markerFunction.Extent.Text))
+    $savedCulture = [Threading.Thread]::CurrentThread.CurrentCulture
+    try {
+        [Threading.Thread]::CurrentThread.CurrentCulture = [Globalization.CultureInfo]::GetCultureInfo('tr-TR')
+        Assert-True -Name 'runtime marker membership uses ordinal case folding under Turkish culture' -Condition (Test-IsRuntimeMarker 'SKILLS/SYNCED/u1/MANIFEST.JSON') -Detail 'uppercase manifest is a marker'
+        Assert-True -Name 'bucket marker membership uses ordinal case folding under Turkish culture' -Condition (Test-IsRuntimeMarker 'SKILLS/SYNCED/.BUCKET-u1') -Detail 'uppercase bucket is a marker'
+        Assert-True -Name 'runtime marker suffix keeps distinct Unicode names distinct' -Condition (-not (Test-IsRuntimeMarker ('skills/synced/u1/man' + [char]0xFEFF + 'ifest.json'))) -Detail 'embedded U+FEFF is filename content'
+        Assert-True -Name 'runtime marker prefix rejects a Kelvin-sign look-alike' -Condition (-not (Test-IsRuntimeMarker ('s' + [char]0x212A + 'ills/synced/u1/manifest.json'))) -Detail 'U+212A does not match ASCII k'
+    } finally { [Threading.Thread]::CurrentThread.CurrentCulture = $savedCulture }
+    $helperStart = $scopeSource.IndexOf('function ConvertTo-GitArgument')
+    $helperEnd = $scopeSource.IndexOf('# Authorized/spec')
+    Invoke-Expression $scopeSource.Substring($helperStart, $helperEnd - $helperStart)
+    function Start-PathSnapshot([string]$Fixture, [string]$Name, [string]$ShimPath = '') {
+        $stateDir = Join-Path $testRoot ('state-path-' + $Name)
+        $result = Invoke-ScopeCheck -CheckerArguments @('-Snapshot', '-Worktree', $Fixture, '-Task', $Name, '-StateDirectory', $stateDir) -PathOverride $ShimPath
+        Assert-True -Name "$Name snapshot" -Condition ($result.ExitCode -eq 0) -Detail $result.Output | Out-Host
+        return $stateDir
+    }
+    function Check-PathFixture([string]$Fixture, [string]$Name, [string]$State, [string]$Allow = '', [string]$ShimPath = '') {
+        $arguments = @('-Check', '-Worktree', $Fixture, '-Task', $Name, '-StateDirectory', $State)
+        if ($Allow) { $arguments += @('-Authorized', $Allow) }
+        return Invoke-ScopeCheck -CheckerArguments $arguments -PathOverride $ShimPath
+    }
+    function Test-ExactViolation([string]$Output, [string]$Path) {
+        $displayPath = [regex]::Replace($Path, '[^\x20-\x7e]|\\', {
+            param($match)
+            '\u{0:x4}' -f [int][char]$match.Value
+        })
+        return @($Output -split '\r\n|\r|\n' | Where-Object {
+            $_.Length -ge 8 -and $_.StartsWith('    ') -and
+            [string]::Equals($_.Substring(8), $displayPath, [StringComparison]::Ordinal)
+        }).Count -gt 0
+    }
+
+    # Log every positional argument; the shim forwards the original %* unchanged.
+    $transportDir = Join-Path $testRoot 'transport shim'
+    New-Item -ItemType Directory -Path $transportDir | Out-Null
+    $transportLog = Join-Path $testRoot 'transport-args.txt'
+    $transportRecorder = Join-Path $transportDir 'record.ps1'
+    $recorderText = 'param([string]$Log, [Parameter(ValueFromRemainingArguments=$true)][string[]]$Received); [IO.File]::AppendAllText($Log, (ConvertTo-Json -Compress -InputObject @($Received)) + "`n", [Text.UTF8Encoding]::new($false))'
+    [IO.File]::WriteAllText($transportRecorder, $recorderText, [Text.Encoding]::ASCII)
+    [IO.File]::WriteAllLines((Join-Path $transportDir 'git.cmd'), [string[]]@(
+        '@echo off',
+        ('"{0}" -NoProfile -File "{1}" "{2}" %*' -f $powerShellPath, $transportRecorder, $transportLog),
+        ('"{0}" %*' -f $gitPath), 'exit /b %ERRORLEVEL%'
+    ), [Text.Encoding]::ASCII)
+    $transportPath = $transportDir + [IO.Path]::PathSeparator + $env:PATH
+    $transportRepo = New-TestRepo -Name 'transport' -Files @('a&b.txt')
+    $duplicateState = Join-Path $testRoot 'state-duplicate-path'
+    $duplicatePath = Invoke-DuplicatePathChild ("& '{0}' -Snapshot -Worktree '{1}' -Task duplicate-path -StateDirectory '{2}'" -f $checkerPath.Replace("'", "''"), $transportRepo.Replace("'", "''"), $duplicateState.Replace("'", "''"))
+    Assert-True -Name 'Snapshot succeeds with duplicate Path/PATH environment' -Condition ($duplicatePath.ExitCode -eq 0 -and (Test-Path -LiteralPath (Join-Path $duplicateState 'scope-duplicate-path.snapshot.json'))) -Detail $duplicatePath.Output
+    $repo = $transportRepo
+    $gitError = ''
+    try { $null = Invoke-Git invalid-command-for-display-test }
+    catch { $gitError = $_.Exception.Message }
+    Assert-True -Name 'Git failure displays filesystem separators literally' -Condition ($gitError.Contains($repo) -and -not $gitError.Contains('\u005c')) -Detail $gitError
+    $transportState = Start-PathSnapshot $transportRepo 'transport' $transportPath
+    $recordedCalls = @([IO.File]::ReadAllLines($transportLog) | ForEach-Object { ,(ConvertFrom-Json $_) })
+    $logCalls = @($recordedCalls | Where-Object { $_[2] -ceq 'log' })
+    $transportSnap = Get-Content -LiteralPath (Join-Path $transportState 'scope-transport.snapshot.json') -Raw -Encoding UTF8 | ConvertFrom-Json
+    $expectedTime = @(& $gitPath -C $transportRepo log -1 '--format=%cI')[0]
+    Assert-True -Name 'shim format percent and argument positions' -Condition ($logCalls.Count -eq 1 -and $logCalls[0][4] -ceq '--format=%cI' -and $transportSnap.takenUtc -ceq $expectedTime) -Detail 'log format is exactly --format=%cI and takenUtc equals real git'
+    Write-FixtureFile $transportRepo 'a&b.txt' 'changed ampersand'
+    $result = Check-PathFixture $transportRepo 'transport' $transportState 'a&b.txt' $transportPath
+    Assert-True -Name 'shim literal ampersand authorized' -Condition ($result.ExitCode -eq 0) -Detail $result.Output
+    $transportState = Start-PathSnapshot $transportRepo 'transport-deny' $transportPath
+    Write-FixtureFile $transportRepo 'a&b.txt' 'changed again'
+    $result = Check-PathFixture $transportRepo 'transport-deny' $transportState '' $transportPath
+    Assert-True -Name 'shim literal ampersand checked' -Condition ($result.ExitCode -eq 1 -and (Test-ExactViolation $result.Output 'a&b.txt')) -Detail $result.Output
+
+    foreach ($quoteSetting in @('true', 'false')) {
+        $unicodePath = 'src/' + [char]0x00e9 + '.py'
+        $spacePath = 'src/internal space.py'
+        $bracketPath = 'src/[id].py'
+        $oldPath = 'src/' + [char]0x00e9 + ' old [id].py'
+        $newPath = 'src/' + [char]0x00e9 + ' new [id].py'
+        $repo = New-TestRepo -Name "decoded-$quoteSetting" -Files @($unicodePath, $spacePath, $bracketPath, $oldPath, 'untouched.txt')
+        Invoke-TestGit $repo @('config', 'core.quotepath', $quoteSetting)
+        Write-FixtureFile $repo $unicodePath 'unique unicode blob'
+        Invoke-TestGit $repo @('add', '--', $unicodePath)
+        Invoke-TestGit $repo @('commit', '-q', '-m', 'distinct unicode blob')
+        $ownBlob = @(& $gitPath -C $repo rev-parse "HEAD:$unicodePath")[0]
+        $indexed = @(Invoke-Git ls-files -s '--' $unicodePath)
+        if ($indexed.Count -ne 1 -or ($indexed[0] -split '\s+')[1] -cne $ownBlob) {
+            throw "BLOCKED: ls-files -s -- src/U+00E9.py Unicode argument round-trip failed ($quoteSetting)."
+        }
+        $hashed = @(Invoke-Git hash-object '--' $unicodePath)
+        if ($hashed.Count -ne 1 -or $hashed[0] -cne $ownBlob) {
+            throw "BLOCKED: hash-object -- src/U+00E9.py Unicode argument round-trip failed ($quoteSetting)."
+        }
+        Assert-True -Name "Unicode argument round-trips $quoteSetting" -Condition $true -Detail 'ls-files -s and hash-object select their own distinct blob'
+        $name = "decoded-allow-$quoteSetting"
+        $stateDir = Start-PathSnapshot $repo $name
+        foreach ($path in @($unicodePath, $spacePath, $bracketPath)) { Write-FixtureFile $repo $path "changed $path" }
+        $result = Check-PathFixture $repo $name $stateDir 'src'
+        Assert-True -Name "$name authorized" -Condition ($result.ExitCode -eq 0 -and -not (Test-ExactViolation $result.Output 'untouched.txt')) -Detail $result.Output
+        $name = "decoded-deny-$quoteSetting"
+        $stateDir = Start-PathSnapshot $repo $name
+        foreach ($path in @($unicodePath, $spacePath, $bracketPath)) { Write-FixtureFile $repo $path "changed again $path" }
+        Invoke-TestGit $repo @('mv', '--', $oldPath, $newPath)
+        $renameSnapPath = Join-Path $stateDir ("scope-$name.snapshot.json")
+        $renameSnapBytes = [IO.File]::ReadAllBytes($renameSnapPath)
+        $unicodeSnap = Get-Content -LiteralPath $renameSnapPath -Raw -Encoding UTF8 | ConvertFrom-Json
+        Assert-True -Name "Unicode snapshot own indexed blob $quoteSetting" -Condition ($unicodeSnap.states.PSObject.Properties[$unicodePath].Value.EndsWith("index:100644:$ownBlob", [StringComparison]::Ordinal)) -Detail "snapshot uses the own indexed Unicode blob"
+        $result = Check-PathFixture $repo $name $stateDir
+        $accurate = $result.ExitCode -eq 1
+        foreach ($path in @($unicodePath, $spacePath, $bracketPath, $oldPath, $newPath)) { $accurate = $accurate -and (Test-ExactViolation $result.Output $path) }
+        Assert-True -Name "$name real paths and both rename sides" -Condition ($accurate -and -not (Test-ExactViolation $result.Output 'untouched.txt')) -Detail $result.Output
+        foreach ($allowedSide in @($oldPath, $newPath)) {
+            [IO.File]::WriteAllBytes($renameSnapPath, $renameSnapBytes)
+            $result = Check-PathFixture $repo $name $stateDir $allowedSide
+            $deniedSide = if ($allowedSide -ceq $oldPath) { $newPath } else { $oldPath }
+            Assert-True -Name "$name rename authorization $allowedSide" -Condition ($result.ExitCode -eq 1 -and (Test-ExactViolation $result.Output $deniedSide) -and -not (Test-ExactViolation $result.Output $allowedSide)) -Detail $result.Output
+        }
+    }
+
+    foreach ($prefix in @(' ', ([string][char]0xFEFF))) {
+        $label = if ($prefix -ceq ' ') { 'leading-space' } else { 'leading-feff' }
+        $variant = $prefix + 'keep.txt'
+        $repo = New-TestRepo -Name $label -Files @('keep.txt', $variant)
+        Write-FixtureFile $repo $variant 'distinct variant content'
+        Invoke-TestGit $repo @('add', '-A')
+        Invoke-TestGit $repo @('commit', '-q', '-m', 'distinct variant')
+        $firstRecords = @(Invoke-Git -NulRecords ls-files -z '--' $variant)
+        Assert-True -Name "$label first NUL record preserves prefix" -Condition ($firstRecords.Count -eq 1 -and [string]::Equals($firstRecords[0], $variant, [StringComparison]::Ordinal)) -Detail 'the first filename retains its whitespace or U+FEFF prefix'
+        $stateDir = Start-PathSnapshot $repo "$label-only"
+        Write-FixtureFile $repo 'keep.txt' 'only keep edited'
+        $result = Check-PathFixture $repo "$label-only" $stateDir 'keep.txt'
+        Assert-True -Name "$label keep only" -Condition ($result.ExitCode -eq 0 -and -not (Test-ExactViolation $result.Output $variant)) -Detail $result.Output
+        $stateDir = Start-PathSnapshot $repo "$label-both"
+        Write-FixtureFile $repo 'keep.txt' 'keep edited again'
+        Write-FixtureFile $repo $variant 'variant edited'
+        $dirtyState = Start-PathSnapshot $repo "$label-records"
+        $dirtySnap = Get-Content -LiteralPath (Join-Path $dirtyState "scope-$label-records.snapshot.json") -Raw -Encoding UTF8 | ConvertFrom-Json
+        Assert-True -Name "$label distinct dirty records" -Condition ($dirtySnap.dirty.Count -eq 2 -and @($dirtySnap.dirty | Where-Object { [string]::Equals($_, $variant, [StringComparison]::Ordinal) }).Count -eq 1) -Detail 'both exact paths survive snapshot serialization'
+        $bothSnapshotPath = Join-Path $stateDir "scope-$label-both.snapshot.json"
+        $bothSnapshotBytes = [IO.File]::ReadAllBytes($bothSnapshotPath)
+        $result = Check-PathFixture $repo "$label-both" $stateDir 'keep.txt'
+        Assert-True -Name "$label exact unauthorized path" -Condition ($result.ExitCode -eq 1 -and (Test-ExactViolation $result.Output $variant) -and -not (Test-ExactViolation $result.Output 'keep.txt')) -Detail $result.Output
+        [IO.File]::WriteAllBytes($bothSnapshotPath, $bothSnapshotBytes)
+        $writtenPath = Join-Path $testRoot "$label-written.txt"
+        $result = Invoke-ScopeCheck -CheckerArguments @('-Check', '-Worktree', $repo, '-Task', "$label-both", '-StateDirectory', $stateDir, '-Authorized', 'keep.txt', '-WrittenPathsFile', $writtenPath)
+        # Decode raw bytes so a first U+FEFF filename is not consumed as a BOM.
+        $writtenText = [Text.UTF8Encoding]::new($false, $true).GetString([IO.File]::ReadAllBytes($writtenPath))
+        $writtenRecords = @([regex]::Split($writtenText, '\r\n|\r|\n'))
+        if ($writtenRecords[-1].Length -eq 0) { $writtenRecords = @($writtenRecords | Select-Object -SkipLast 1) }
+        Assert-True -Name "$label written paths remain distinct" -Condition ($result.ExitCode -eq 1 -and $writtenRecords.Count -eq 2 -and @($writtenRecords | Where-Object { [string]::Equals($_, 'keep.txt', [StringComparison]::Ordinal) }).Count -eq 1 -and @($writtenRecords | Where-Object { [string]::Equals($_, $variant, [StringComparison]::Ordinal) }).Count -eq 1) -Detail 'WrittenPathsFile contains both exact filenames'
+    }
+
+    $nbsp = [string][char]0x00A0
+    $repo = New-TestRepo -Name 'whitespace-only' -Files @('keep.txt')
+    $nbspAccepted = $true
+    try { Write-FixtureFile $repo $nbsp 'whitespace filename' }
+    catch { $nbspAccepted = $false; Write-Output "SKIP whitespace-only filesystem rejection: $($_.Exception.Message)" }
+    if ($nbspAccepted) {
+        Invoke-TestGit $repo @('add', '-A')
+        Invoke-TestGit $repo @('commit', '-q', '-m', 'whitespace path')
+        Write-FixtureFile $repo $nbsp 'host edit'
+        $stateDir = Start-PathSnapshot $repo 'nbsp'
+        $nbspSnap = Get-Content -LiteralPath (Join-Path $stateDir 'scope-nbsp.snapshot.json') -Raw -Encoding UTF8 | ConvertFrom-Json
+        Write-FixtureFile $repo $nbsp 'dispatch edit'
+        $result = Check-PathFixture $repo 'nbsp' $stateDir
+        Assert-True -Name 'whitespace-only path survives snapshot and check' -Condition ($nbspSnap.dirty.Count -eq 1 -and [string]::Equals($nbspSnap.dirty[0], $nbsp, [StringComparison]::Ordinal) -and $result.ExitCode -eq 1 -and (Test-ExactViolation $result.Output $nbsp)) -Detail $result.Output
+    }
+
+    $repo = New-TestRepo -Name 'glob-collision' -Files @('0.txt', '[0a].txt')
+    Write-FixtureFile $repo '[0a].txt' 'unique bracket blob'
+    Invoke-TestGit $repo @('add', '-A')
+    Invoke-TestGit $repo @('commit', '-q', '-m', 'distinct glob collision')
+    $bracketBlob = @(& $gitPath -C $repo rev-parse 'HEAD:[0a].txt')[0]
+    $indexed = @(Invoke-Git ls-files -s '--' '[0a].txt')
+    Assert-True -Name 'glob collision own indexed blob' -Condition ($indexed.Count -eq 1 -and ($indexed[0] -split '\s+')[1] -ceq $bracketBlob) -Detail ($indexed -join ', ')
+    Write-FixtureFile $repo '[0a].txt' 'host bracket edit'
+    $stateDir = Start-PathSnapshot $repo 'glob'
+    $globSnap = Get-Content -LiteralPath (Join-Path $stateDir 'scope-glob.snapshot.json') -Raw -Encoding UTF8 | ConvertFrom-Json
+    Assert-True -Name 'glob collision snapshot indexed blob' -Condition ($globSnap.states.'[0a].txt'.EndsWith("index:100644:$bracketBlob", [StringComparison]::Ordinal)) -Detail $globSnap.states.'[0a].txt'
+    Write-FixtureFile $repo '[0a].txt' 'dispatch bracket edit'
+    $result = Check-PathFixture $repo 'glob' $stateDir
+    Assert-True -Name 'glob collision attribution' -Condition ($result.ExitCode -eq 1 -and (Test-ExactViolation $result.Output '[0a].txt') -and -not (Test-ExactViolation $result.Output '0.txt')) -Detail $result.Output
+
+    $crDeclaration = '## Build outputs' + "`r" + '```text' + "`r" + 'generated' + "`r" + '```' + "`r"
+    $repo = New-BuildOutputRepo -Name 'cr-only-agents' -AgentsText $crDeclaration -IgnoreText "generated/`n"
+    $stateDir = Start-PathSnapshot $repo 'cr-only'
+    Write-FixtureFile $repo 'generated/output.txt' 'ignored declared output'
+    $result = Check-PathFixture $repo 'cr-only' $stateDir
+    Assert-True -Name 'CR-only show preserves build declaration' -Condition ($result.ExitCode -eq 0 -and $result.Output -match '1 declared build-output path') -Detail $result.Output
+
+    $repo = New-TestRepo -Name 'percent-path' -Files @('%OS%.txt')
+    $stateDir = Start-PathSnapshot $repo 'percent-real'
+    Write-FixtureFile $repo '%OS%.txt' 'percent edit'
+    $result = Check-PathFixture $repo 'percent-real' $stateDir '%OS%.txt'
+    Assert-True -Name 'real exe percent path' -Condition ($result.ExitCode -eq 0) -Detail $result.Output
+    $stateDir = Start-PathSnapshot $repo 'percent-shim-check'
+    Write-FixtureFile $repo '%OS%.txt' 'percent edited again'
+    $result = Check-PathFixture $repo 'percent-shim-check' $stateDir '' $transportPath
+    Assert-True -Name 'shim percent check fails closed' -Condition ($result.ExitCode -ne 0 -and $result.Output -match 'failed to launch' -and $result.Output -match 'percent') -Detail $result.Output
+    $result = Invoke-ScopeCheck -CheckerArguments @('-Snapshot', '-Worktree', $repo, '-Task', 'percent-shim-snapshot', '-StateDirectory', $stateDir) -PathOverride $transportPath
+    Assert-True -Name 'shim percent snapshot fails closed' -Condition ($result.ExitCode -ne 0 -and $result.Output -match 'failed to launch' -and $result.Output -match 'percent') -Detail $result.Output
+
+    $invalidDir = Join-Path $testRoot 'invalid-utf8-shim'
+    New-Item -ItemType Directory -Path $invalidDir | Out-Null
+    $invalidBytes = Join-Path $invalidDir 'invalid.bin'
+    [IO.File]::WriteAllBytes($invalidBytes, [byte[]]@(0xFF, 0x41))
+    [IO.File]::WriteAllLines((Join-Path $invalidDir 'git.cmd'), [string[]]@(
+        '@echo off', ('if "%~3"=="status" (type "{0}" & exit /b 0)' -f $invalidBytes),
+        ('"{0}" %*' -f $gitPath), 'exit /b %ERRORLEVEL%'
+    ), [Text.Encoding]::ASCII)
+    $invalidPath = $invalidDir + [IO.Path]::PathSeparator + $env:PATH
+    $result = Invoke-ScopeCheck -CheckerArguments @('-Snapshot', '-Worktree', $repo, '-Task', 'invalid-utf8', '-StateDirectory', $stateDir) -PathOverride $invalidPath
+    Assert-True -Name 'invalid UTF-8 status refuses verdict' -Condition ($result.ExitCode -ne 0 -and $result.Output -match 'failed to launch' -and $result.Output -match 'Refusing to report clean') -Detail $result.Output
+    $result = Check-PathFixture $repo 'percent-shim-check' $stateDir '' $invalidPath
+    Assert-True -Name 'invalid UTF-8 direct check refuses verdict' -Condition ($result.ExitCode -ne 0 -and $result.Output -match 'failed to launch' -and $result.Output -match 'Refusing to report clean') -Detail $result.Output
 
     # Exercise the shared pure functions without invoking the checker or adding a dot-sourced
     # module. End-to-end fixtures below separately prove committed provenance and status gating.
@@ -1016,9 +1293,9 @@ Generated output directories only.
     $runtimeMarkerNoWritten = Invoke-ScopeCheck -CheckerArguments @('-Check', '-Worktree', $runtimeMarkerNoWrittenRepo, '-Task', 'runtime-marker-no-written', '-StateDirectory', $runtimeMarkerNoWrittenState, '-RuntimeExclusionRoot', $runtimeMarkerNoWrittenRepo)
     Assert-True -Name 'runtime marker 12 non-collecting branch exits clean' -Condition ($runtimeMarkerNoWritten.ExitCode -eq 0 -and $runtimeMarkerNoWritten.Output -match '(?m)^\[scope\].* clean -') -Detail ("exit {0}: {1}" -f $runtimeMarkerNoWritten.ExitCode, $runtimeMarkerNoWritten.Output)
 
-    # Runtime marker (13): scope-check and tree-pin exclusion lists stay in exact lockstep.
+    # Runtime marker (13): scope-check and tree-pin exclusions and marker helpers stay in lockstep.
     $runtimeMarkerTreePinPath = Join-Path $PSScriptRoot 'tree-pin.ps1'
-    foreach ($runtimeMarkerListName in @('runtimeExclusions', 'runtimeMarkerPatterns')) {
+    foreach ($runtimeMarkerListName in @('runtimeExclusions')) {
         [string[]]$runtimeMarkerCheckerList = @(Get-PsArrayLiteral -Path $checkerPath -Name $runtimeMarkerListName)
         [string[]]$runtimeMarkerTreePinList = @(Get-PsArrayLiteral -Path $runtimeMarkerTreePinPath -Name $runtimeMarkerListName)
         Assert-True -Name ("runtime marker 13 checker {0} parses non-empty" -f $runtimeMarkerListName) -Condition ($runtimeMarkerCheckerList.Count -gt 0) -Detail ("entries [{0}]" -f ($runtimeMarkerCheckerList -join ', '))
@@ -1034,10 +1311,14 @@ Generated output directories only.
             }
         }
         Assert-True -Name ("runtime marker 13 {0} order matches" -f $runtimeMarkerListName) -Condition $runtimeMarkerListsEqual -Detail ("checker [{0}], tree-pin [{1}]" -f ($runtimeMarkerCheckerList -join ', '), ($runtimeMarkerTreePinList -join ', '))
-        if ($runtimeMarkerListName -ceq 'runtimeMarkerPatterns') {
-            Assert-True -Name 'runtime marker 13 pattern count is exactly three' -Condition ($runtimeMarkerCheckerList.Count -eq 3) -Detail ("expected 3, got {0}" -f $runtimeMarkerCheckerList.Count)
-        }
     }
+
+    $markerDefinitions = @(foreach ($markerScript in @($checkerPath, $runtimeMarkerTreePinPath)) {
+        $markerAst = [Management.Automation.Language.Parser]::ParseFile($markerScript, [ref]$tokens, [ref]$parseErrors)
+        $definition = $markerAst.Find({ param($node) $node -is [Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -ceq 'Test-IsRuntimeMarker' }, $true)
+        $definition.Extent.Text -replace '\r\n', "`n"
+    })
+    Assert-True -Name 'runtime marker 13 ordinal helper definitions match' -Condition ($markerDefinitions[0] -ceq $markerDefinitions[1]) -Detail 'both scripts use the same ordinal marker membership logic'
 
     # Runtime marker (14): a directory named like a bucket marker is never leaf-excluded.
     $runtimeMarkerBucketDirectoryRepo = New-RuntimeMarkerRepo -Name 'runtime-marker-bucket-directory' -Files @('src/a.py', 'skills/apex/SKILL.md', 'skills/synced/u1/docs/SKILL.md')

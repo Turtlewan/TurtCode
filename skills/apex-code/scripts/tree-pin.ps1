@@ -34,6 +34,20 @@ param(
 
 $ErrorActionPreference = 'Stop'
 
+function ConvertTo-DetailPath([string]$Path, [switch]$FileSystem) {
+    $escaped = New-Object System.Text.StringBuilder
+    # Iterate UTF-16 code units so surrogate pairs are rendered as two escapes.
+    foreach ($character in $Path.ToCharArray()) {
+        $code = [int]$character
+        if ($code -lt 0x20 -or $code -gt 0x7E -or ($code -eq 0x5C -and -not $FileSystem)) {
+            [void]$escaped.Append(('\u{0:x4}' -f $code))
+        } else {
+            [void]$escaped.Append($character)
+        }
+    }
+    return $escaped.ToString()
+}
+
 $modeCount = 0
 foreach ($mode in @($Pin, $Verify, $Digest)) {
     if ($mode) { $modeCount++ }
@@ -49,7 +63,7 @@ if ($Digest -and @($PinAlso).Count -gt 0) {
 }
 foreach ($root in (@($Worktree) + $PinAlso)) {
     if (-not (Test-Path -LiteralPath $root -PathType Container)) {
-        throw "Worktree does not exist: $root"
+        throw "Worktree does not exist: $(ConvertTo-DetailPath $root -FileSystem)"
     }
 }
 
@@ -66,33 +80,107 @@ $safeLabel = ($Label -replace '[<>:"/\\|?*]', '_')
 function Invoke-Git {
     param(
         [string]$Root,
+        [switch]$NulRecords,
         [Parameter(ValueFromRemainingArguments = $true)][string[]]$GitArgs
     )
-    # Fail closed if git cannot launch or reports an error. Checking $LASTEXITCODE without first
-    # resetting it leaves a stale 0 in Windows PowerShell 5.1 after a launch failure, which made an
-    # empty fingerprint look valid and allowed Verify to pass without inspecting a repository.
+    # Fail closed without relying on a stale native $LASTEXITCODE after a launch failure.
     $exitCodeSentinel = [int]::MinValue
-    $previous = $ErrorActionPreference
-    # Keep native stderr non-terminating so an exit-0 warning is not mistaken for a git failure;
-    # the sentinel catches non-terminating launch failures and the catch handles terminating ones.
-    $ErrorActionPreference = 'Continue'
-    # Native processes update the global automatic variable in Windows PowerShell 5.1; assigning
-    # an unqualified name here would create a function-local value that stays at the sentinel.
-    $global:LASTEXITCODE = $exitCodeSentinel
+    $exitCode = $exitCodeSentinel
+    # .NET Framework has no ArgumentList. Encode arguments using CommandLineToArgvW's rule.
+    function ConvertTo-GitArgument([AllowEmptyString()][string]$Argument, [bool]$AlwaysQuote = $false) {
+        if (-not $AlwaysQuote -and $Argument.Length -gt 0 -and $Argument -notmatch '[ "\t]') {
+            return $Argument
+        }
+        $encoded = New-Object System.Text.StringBuilder
+        [void]$encoded.Append('"')
+        $slashes = 0
+        foreach ($character in $Argument.ToCharArray()) {
+            if ($character -eq [char]92) { $slashes++; continue }
+            if ($character -eq [char]34) {
+                [void]$encoded.Append([char]92, (2 * $slashes + 1))
+            } else {
+                [void]$encoded.Append([char]92, $slashes)
+            }
+            [void]$encoded.Append($character)
+            $slashes = 0
+        }
+        [void]$encoded.Append([char]92, (2 * $slashes))
+        [void]$encoded.Append('"')
+        return $encoded.ToString()
+    }
+    $process = New-Object System.Diagnostics.Process
+    $stdout = New-Object System.IO.MemoryStream
     try {
-        $output = @(& git -C $Root @GitArgs 2>$null)
-        $exitCode = $global:LASTEXITCODE
+        $gitCommand = Get-Command git -CommandType Application -ErrorAction Stop | Select-Object -First 1
+        $arguments = @('-C', $Root) + $GitArgs
+        $extension = [System.IO.Path]::GetExtension($gitCommand.Source)
+        $isShim = [string]::Equals($extension, '.cmd', [StringComparison]::OrdinalIgnoreCase) -or
+            [string]::Equals($extension, '.bat', [StringComparison]::OrdinalIgnoreCase)
+        $startInfo = New-Object System.Diagnostics.ProcessStartInfo
+        if ($isShim) {
+            # Quote every token to protect cmd metacharacters, then enclose the whole /s command.
+            $commandLine = (ConvertTo-GitArgument $gitCommand.Source $true) + ' ' +
+                [string]::Join(' ', [string[]]@($arguments | ForEach-Object { ConvertTo-GitArgument $_ $true }))
+            if ([regex]::Matches($commandLine, '%').Count -ge 2) {
+                throw 'percent expansion is unsafe for a cmd.exe shim command line containing two or more percent characters'
+            }
+            $startInfo.FileName = $env:ComSpec
+            $startInfo.Arguments = '/d /v:off /s /c "' + $commandLine + '"'
+        } else {
+            $startInfo.FileName = $gitCommand.Source
+            $startInfo.Arguments = [string]::Join(' ', [string[]]@($arguments | ForEach-Object { ConvertTo-GitArgument $_ }))
+        }
+        $startInfo.UseShellExecute = $false
+        $startInfo.RedirectStandardInput = $true
+        $startInfo.RedirectStandardOutput = $true
+        $startInfo.RedirectStandardError = $true
+        # Some launchers supply both Path and PATH. Framework's lazy environment
+        # copy throws on that duplicate after initializing its dictionary; rebuild
+        # the child copy with case-insensitive assignment without touching the parent.
+        try { $childEnvironment = $startInfo.get_EnvironmentVariables() }
+        catch {
+            if ($_.Exception.InnerException -isnot [ArgumentException]) { throw }
+            $childEnvironment = $startInfo.get_EnvironmentVariables()
+        }
+        $childEnvironment.Clear()
+        foreach ($entry in [Environment]::GetEnvironmentVariables().GetEnumerator()) {
+            $childEnvironment[$entry.Key] = $entry.Value
+        }
+        $childEnvironment['GIT_LITERAL_PATHSPECS'] = '1'
+        $process.StartInfo = $startInfo
+        if (-not $process.Start()) { throw 'process did not start' }
+        $process.StandardInput.Close()
+        # Drain stderr concurrently; exit-0 warnings remain harmless and discarded.
+        $stderrDrain = $process.StandardError.BaseStream.CopyToAsync([System.IO.Stream]::Null)
+        $process.StandardOutput.BaseStream.CopyTo($stdout)
+        [void]$stderrDrain.GetAwaiter().GetResult()
+        $process.WaitForExit()
+        $exitCode = $process.ExitCode
+        $bytes = $stdout.ToArray()
     } catch {
-        throw "git failed or could not launch in '$Root' ($([string]::Join(' ', $GitArgs))): $($_.Exception.Message)"
+        throw "git failed or could not launch in '$(ConvertTo-DetailPath $Root -FileSystem)' ($([string]::Join(' ', $GitArgs))): $($_.Exception.Message)"
     } finally {
-        $ErrorActionPreference = $previous
+        $stdout.Dispose()
+        $process.Dispose()
     }
     if ($exitCode -eq $exitCodeSentinel) {
-        throw "git did not report an exit status in '$Root' ($([string]::Join(' ', $GitArgs)))."
+        throw "git did not report an exit status in '$(ConvertTo-DetailPath $Root -FileSystem)' ($([string]::Join(' ', $GitArgs)))."
     }
     if ($exitCode -ne 0) {
-        throw "git exited with status $exitCode in '$Root' ($([string]::Join(' ', $GitArgs)))."
+        throw "git exited with status $exitCode in '$(ConvertTo-DetailPath $Root -FileSystem)' ($([string]::Join(' ', $GitArgs)))."
     }
+    $offset = 0
+    if (-not $NulRecords -and $bytes.Length -ge 3 -and
+            $bytes[0] -eq 0xEF -and $bytes[1] -eq 0xBB -and $bytes[2] -eq 0xBF) { $offset = 3 }
+    try {
+        $text = [Text.UTF8Encoding]::new($false, $true).GetString($bytes, $offset, $bytes.Length - $offset)
+    } catch {
+        throw "git stdout UTF-8 decoding failed in '$(ConvertTo-DetailPath $Root -FileSystem)' ($([string]::Join(' ', $GitArgs))): $($_.Exception.Message)"
+    }
+    if ($text.Length -eq 0) { return @() }
+    $separator = if ($NulRecords) { '\0' } else { '\r\n|\r|\n' }
+    $output = @($text -split $separator)
+    if ($output[-1].Length -eq 0) { $output = @($output | Select-Object -SkipLast 1) }
     return $output
 }
 
@@ -238,8 +326,12 @@ function Test-IsDeclaredBuildOutputPath {
 # Fetch each root through this script's fail-closed adapter; a failed lookup is not an absent file.
 function Get-DeclaredBuildOutputs([string]$Root) {
     $entries = @()
-    $agentsAtHead = @(Invoke-Git $Root ls-tree --full-tree --name-only HEAD '--' AGENTS.md)
-    if ($agentsAtHead -ccontains 'AGENTS.md') {
+    $agentsAtHead = @(Invoke-Git $Root -NulRecords ls-tree --full-tree --name-only -z HEAD '--' AGENTS.md)
+    $hasAgents = $false
+    foreach ($path in $agentsAtHead) {
+        if ([string]::Equals($path, 'AGENTS.md', [StringComparison]::OrdinalIgnoreCase)) { $hasAgents = $true }
+    }
+    if ($hasAgents) {
         $agentsText = [string]::Join("`n", [string[]]@(Invoke-Git $Root show HEAD:AGENTS.md))
         $declaration = ConvertFrom-BuildOutputsSection -Text $agentsText
         $entries = @($declaration.Entries)
@@ -256,19 +348,18 @@ function Get-DeclaredBuildOutputs([string]$Root) {
 # for it means the fingerprint is identical before and after a coder rewrites every file inside it --
 # so Verify returns 0 and the gate blesses content the reviewer never saw. The pin then certifies
 # precisely the blind spot it was built to eliminate.
-# Lockstep: identical in tree-pin.ps1 and codex-scope-check.ps1.
-$runtimeMarkerPatterns = @(
-    '^skills/synced/\.bucket-[^/]+$',
-    '^skills/synced/[^/]+/\.last-complete-round$',
-    '^skills/synced/[^/]+/manifest\.json$'
-)
 function Test-IsRuntimeMarker([string]$NormalizedPath) {
-    foreach ($pattern in $runtimeMarkerPatterns) {
-        if ([regex]::IsMatch($NormalizedPath, $pattern, [System.Text.RegularExpressions.RegexOptions]::IgnoreCase)) {
-            return $true
-        }
+    $prefix = 'skills/synced/'
+    if (-not $NormalizedPath.StartsWith($prefix, [StringComparison]::OrdinalIgnoreCase)) { return $false }
+    $suffix = $NormalizedPath.Substring($prefix.Length)
+    $separator = $suffix.IndexOf('/', [StringComparison]::OrdinalIgnoreCase)
+    if ($separator -lt 0) {
+        return $suffix.StartsWith('.bucket-', [StringComparison]::OrdinalIgnoreCase) -and $suffix.Length -gt 8
     }
-    return $false
+    if ($separator -eq 0) { return $false }
+    $marker = $suffix.Substring($separator + 1)
+    return [string]::Equals($marker, '.last-complete-round', [StringComparison]::OrdinalIgnoreCase) -or
+        [string]::Equals($marker, 'manifest.json', [StringComparison]::OrdinalIgnoreCase)
 }
 
 function Get-PathDigest([string]$Root, [string]$relPath, [bool]$SkipRuntimeMarkers = $false,
@@ -290,7 +381,7 @@ function Get-PathDigest([string]$Root, [string]$relPath, [bool]$SkipRuntimeMarke
             # Only actual declared !! rows can hide files in a collapsed ?? directory.
             $isDeclaredIgnored = $false
             foreach ($ignoredRow in @($DeclaredIgnoredRows)) {
-                if ($rel.Equals($ignoredRow, [System.StringComparison]::OrdinalIgnoreCase) -or
+                if ([string]::Equals($rel, $ignoredRow, [System.StringComparison]::OrdinalIgnoreCase) -or
                         $rel.StartsWith($ignoredRow + '/', [System.StringComparison]::OrdinalIgnoreCase)) {
                     $isDeclaredIgnored = $true
                     break
@@ -322,7 +413,7 @@ function Get-PathDigest([string]$Root, [string]$relPath, [bool]$SkipRuntimeMarke
     # mtime still move if the file's content moves, so Verify keeps its teeth; a file that becomes
     # readable also changes digest FORM, which reads as a moved tree -- the fail-safe direction.
     try {
-        $h = Invoke-Git $Root hash-object -- $relPath
+        $h = Invoke-Git $Root hash-object '--' $relPath
     } catch {
         # Only tolerate genuine unreadability. Any other git failure is still a hard error, or this
         # catch would quietly swallow a broken repository and hand back a valid-looking pin.
@@ -347,7 +438,7 @@ function Get-PathDigest([string]$Root, [string]$relPath, [bool]$SkipRuntimeMarke
 # and porcelain still reads `MM` and the pin still records B -- Verify returns 0 while the commit
 # now contains unreviewed C. So pin what will actually be committed, not just what is on disk.
 function Get-IndexDigest([string]$Root, [string]$relPath) {
-    $entry = Invoke-Git $Root ls-files -s -- $relPath
+    $entry = Invoke-Git $Root ls-files -s '--' $relPath
     if (-not $entry) { return '-' }
     # `<mode> <sha> <stage>\t<path>`. Record the MODE and the STAGE as well as the blob: a
     # `git update-index --chmod=+x` changes what gets committed (a file becomes executable) while
@@ -367,10 +458,27 @@ function Get-TreeFingerprint([string]$Root, [bool]$ApplyRuntimeExclusions) {
     $lines += "HEAD $head"
 
     $declaredBuildOutputs = Get-DeclaredBuildOutputs $Root
-    $status = Invoke-Git $Root status --porcelain --ignored=traditional
+    $records = @(Invoke-Git $Root -NulRecords status --porcelain=v1 -z --ignored=traditional)
+    # Pair rename/copy origins before any filtering. -z puts the destination first.
+    $status = @(for ($i = 0; $i -lt $records.Count; $i++) {
+        $entry = $records[$i]
+        if ([string]::IsNullOrEmpty($entry)) { continue }
+        if ($entry.Length -lt 4 -or $entry[2] -ne [char]32) { throw 'Malformed git status record' }
+        $xy = $entry.Substring(0, 2)
+        $path = $entry.Substring(3)
+        $sortKey = $entry
+        if ($xy -match '[RC]') {
+            $i++
+            if ($i -ge $records.Count -or [string]::IsNullOrEmpty($records[$i])) {
+                throw 'Missing git rename/copy origin record'
+            }
+            $sortKey = "$xy $($records[$i]) -> $path"
+        }
+        [pscustomobject]@{ Entry = $entry; SortKey = $sortKey }
+    })
     $declaredIgnoredRows = @(foreach ($entry in @($status)) {
-        if ($entry.StartsWith('!! ')) {
-            $ignoredPath = ($entry.Substring(3).Trim().Trim('"') -replace '\\', '/').TrimEnd('/')
+        if ($entry.Entry.StartsWith('!! ', [StringComparison]::Ordinal)) {
+            $ignoredPath = ($entry.Entry.Substring(3) -replace '\\', '/').TrimEnd('/')
             if (Test-IsDeclaredBuildOutputPath -Path $ignoredPath -Entries $declaredBuildOutputs) {
                 $ignoredPath
             }
@@ -409,26 +517,23 @@ function Get-TreeFingerprint([string]$Root, [bool]$ApplyRuntimeExclusions) {
         'node_modules/.cache',
         '.venv'
     )
-    foreach ($entry in ($status | Sort-Object)) {
-        if ([string]::IsNullOrWhiteSpace($entry)) { continue }
+    foreach ($row in ($status | Sort-Object SortKey)) {
+        $entry = $row.Entry
+        if ([string]::IsNullOrEmpty($entry)) { continue }
         $xy = $entry.Substring(0,2)
-        # Residual limit: git C-quoted path unescaping (core.quotePath evasion) remains out of scope;
-        # this intentionally preserves the existing trim-only behavior while fixing git failures.
-        $path = $entry.Substring(3).Trim().Trim('"')
-        # Renames read as "old -> new"; the post-rename path is the one on disk.
-        if ($path -match '\s->\s(.+)$') { $path = $Matches[1].Trim().Trim('"') }
+        $path = $entry.Substring(3)
         $normalizedPath = ($path -replace '\\', '/').TrimEnd('/')
         if ($ApplyRuntimeExclusions -and $xy -eq '!!') {
             $excluded = $false
             foreach ($prefix in $runtimeExclusions) {
-                if ($normalizedPath.Equals($prefix, [System.StringComparison]::OrdinalIgnoreCase) -or
+                if ([string]::Equals($normalizedPath, $prefix, [System.StringComparison]::OrdinalIgnoreCase) -or
                         $normalizedPath.StartsWith($prefix + '/', [System.StringComparison]::OrdinalIgnoreCase)) {
                     $excluded = $true
                     break
                 }
             }
             if ($excluded) { continue }
-            if (-not $path.EndsWith('/') -and
+            if (-not $path.EndsWith('/', [StringComparison]::OrdinalIgnoreCase) -and
                     (Test-Path -LiteralPath (Join-Path $Root $path) -PathType Leaf) -and
                     (Test-IsRuntimeMarker $normalizedPath)) {
                 continue
@@ -438,10 +543,10 @@ function Get-TreeFingerprint([string]$Root, [bool]$ApplyRuntimeExclusions) {
         if ($xy -eq '!!') {
             $isToolCache = $false
             foreach ($prefix in $toolCacheExclusions) {
-                if ($normalizedPath.Equals($prefix, [System.StringComparison]::OrdinalIgnoreCase) -or
+                if ([string]::Equals($normalizedPath, $prefix, [System.StringComparison]::OrdinalIgnoreCase) -or
                         $normalizedPath.StartsWith($prefix + '/', [System.StringComparison]::OrdinalIgnoreCase) -or
                         $normalizedPath.EndsWith('/' + $prefix, [System.StringComparison]::OrdinalIgnoreCase) -or
-                        $normalizedPath.Contains('/' + $prefix + '/')) {
+                        $normalizedPath.IndexOf('/' + $prefix + '/', [StringComparison]::OrdinalIgnoreCase) -ge 0) {
                     $isToolCache = $true
                     break
                 }
@@ -486,7 +591,7 @@ $trees = @(foreach ($root in (@($Worktree) + $PinAlso)) {
         Root = $worktreeFull
         PinPath = Join-Path $PinDirectory "apex-treepin-$safeLabel-$worktreeTag.txt"
         Fingerprint = Get-TreeFingerprint $worktreeFull ($null -ne $resolvedRuntimeExclusionRoot -and
-            $worktreeFull.TrimEnd('\', '/').Equals($resolvedRuntimeExclusionRoot, [System.StringComparison]::OrdinalIgnoreCase))
+            [string]::Equals($worktreeFull.TrimEnd('\', '/'), $resolvedRuntimeExclusionRoot, [System.StringComparison]::OrdinalIgnoreCase))
     }
 })
 
@@ -502,7 +607,7 @@ if ($Pin) {
         if ($trees.Count -eq 1) {
             Write-Host "[tree-pin] pinned $($tree.Fingerprint.Digest.Substring(0,12)) for '$Label'" -ForegroundColor DarkGray
         } else {
-            Write-Host "[tree-pin] pinned $($tree.Fingerprint.Digest.Substring(0,12)) for '$Label' in '$($tree.Root)'" -ForegroundColor DarkGray
+            Write-Host "[tree-pin] pinned $($tree.Fingerprint.Digest.Substring(0,12)) for '$Label' in '$(ConvertTo-DetailPath $tree.Root -FileSystem)'" -ForegroundColor DarkGray
         }
     }
     exit 0
@@ -512,9 +617,9 @@ if ($Pin) {
 # prefix must be matched as two arbitrary characters -- not two non-space ones.
 $parseDetail = {
     param([string]$Detail)
-    $map = @{}
+    $map = New-Object 'System.Collections.Hashtable' ([StringComparer]::OrdinalIgnoreCase)
     foreach ($line in $Detail -split "`n") {
-        if ($line -match '^(.{2})\s+(.+?)\s+(work:\S+\s+index:\S+)$') { $map[$Matches[2]] = $Matches[3] }
+        if ($line -match '^(.{2}) (.+) (work:\S+ index:\S+)$') { $map[$Matches[2]] = $Matches[3] }
     }
     return $map
 }
@@ -525,7 +630,7 @@ foreach ($tree in $trees) {
         if ($trees.Count -eq 1) {
             Write-Host "[tree-pin] NO PIN for '$Label'. The gate was opened without pinning the tree, so nothing can vouch for the verdict." -ForegroundColor Red
         } else {
-            Write-Host "[tree-pin] NO PIN for '$Label' in '$($tree.Root)'. The gate was opened without pinning this tree, so nothing can vouch for the verdict." -ForegroundColor Red
+            Write-Host "[tree-pin] NO PIN for '$Label' in '$(ConvertTo-DetailPath $tree.Root -FileSystem)'. The gate was opened without pinning this tree, so nothing can vouch for the verdict." -ForegroundColor Red
         }
         $failed = $true
         continue
@@ -542,7 +647,7 @@ foreach ($tree in $trees) {
         if ($trees.Count -eq 1) {
             Write-Host "[tree-pin] tree unchanged ($($pinnedDigest.Substring(0,12))) -- the verdict is about this tree." -ForegroundColor DarkGray
         } else {
-            Write-Host "[tree-pin] tree unchanged ($($pinnedDigest.Substring(0,12))) in '$($tree.Root)' -- the verdict is about this tree." -ForegroundColor DarkGray
+            Write-Host "[tree-pin] tree unchanged ($($pinnedDigest.Substring(0,12))) in '$(ConvertTo-DetailPath $tree.Root -FileSystem)' -- the verdict is about this tree." -ForegroundColor DarkGray
         }
         continue
     }
@@ -553,11 +658,14 @@ foreach ($tree in $trees) {
 
     Write-Host ''
     Write-Host "[tree-pin] THE TREE MOVED WHILE THE GATE WAS OPEN. The verdict for '$Label' is VOID." -ForegroundColor Red
-    if ($trees.Count -gt 1) { Write-Host "[tree-pin] Root: $($tree.Root)" -ForegroundColor Red }
-    foreach ($path in ($before.Keys + $after.Keys | Sort-Object -Unique)) {
-        if (-not $after.ContainsKey($path)) { Write-Host "[tree-pin]   GONE:    $path" -ForegroundColor Red }
-        elseif (-not $before.ContainsKey($path)) { Write-Host "[tree-pin]   NEW:     $path" -ForegroundColor Red }
-        elseif ($before[$path] -ne $after[$path]) { Write-Host "[tree-pin]   CHANGED: $path" -ForegroundColor Red }
+    if ($trees.Count -gt 1) { Write-Host "[tree-pin] Root: $(ConvertTo-DetailPath $tree.Root -FileSystem)" -ForegroundColor Red }
+    $paths = New-Object 'System.Collections.Generic.HashSet[string]' ([StringComparer]::OrdinalIgnoreCase)
+    foreach ($path in ($before.Keys + $after.Keys)) { [void]$paths.Add($path) }
+    foreach ($path in ($paths | Sort-Object)) {
+        $displayPath = ConvertTo-DetailPath $path
+        if (-not $after.ContainsKey($path)) { Write-Host "[tree-pin]   GONE:    $displayPath" -ForegroundColor Red }
+        elseif (-not $before.ContainsKey($path)) { Write-Host "[tree-pin]   NEW:     $displayPath" -ForegroundColor Red }
+        elseif ($before[$path] -ne $after[$path]) { Write-Host "[tree-pin]   CHANGED: $displayPath" -ForegroundColor Red }
     }
     Write-Host "[tree-pin] Someone or something wrote to the tree after the gate opened -- a live coder, a" -ForegroundColor Red
     Write-Host "[tree-pin] concurrent agent, or a hand-edit. Do NOT act on this verdict. Find the writer," -ForegroundColor Red
