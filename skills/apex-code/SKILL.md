@@ -1,7 +1,7 @@
 ---
 skill: apex-code
-version: 2.23.1
-last_updated: 2026-10-10
+version: 2.24.0
+last_updated: 2026-10-12
 sources:
   - docs/technical/adr/ADR-027-codex-primary-opus-fallback-deepseek-archived.md
   - docs/technical/adr/ADR-028-parallel-codex-dispatch.md
@@ -71,6 +71,9 @@ Use `-MaxParallel 1` for `risk: high`. Read the run's `engine-state.json` **stat
 - **Exit 2:** `awaiting-review`, only for `risk: high` specs. Run Opus Critic for the integrated wave, binding its record to that wave's review tree digest, then invoke `apex-engine.ps1 -Resume <runId> -ReviewVerdict clean|reject -ReviewDigest <64 lowercase hex> -ReviewRecord <existing absolute path outside every Git worktree>`. An `awaiting-review` run resumes only with all three review flags together; bare `-Resume` is refused; the record must be a normalized absolute path to a strict UTF-8 file. Rejection parks; HOST fixes manually or starts an amended-spec run.
 
 An unchanged spec in a parked/paused run resumes with `apex-engine.ps1 -Resume <runId>` (pending review still requires the three review flags). An amended spec starts a **new run**, only after the parked run's partial work is inspected and discarded via `apex-engine.ps1 -Teardown <runId> -Discard` when permitted; never amend a live run's immutable plan. Discard teardown refuses live children and live non-terminal ledger rows; a row whose recorded process is dead is adopted before teardown proceeds. A complete run accepts `-Discard` only with a non-empty `-Reason`, which bypasses the hand-off journal and commit proof; otherwise successful complete teardown requires hand-off and commit proof, without `-Discard`.
+
+## Unattended drain
+On the owner's `!` trigger, `scripts/apex-drain-plan.ps1 -Project <abs>` shows WILL BUILD / NEEDS YOU, then `scripts/apex-drain.ps1 -Project <abs>` builds WILL BUILD serially, without confirmation, on a local `codex/drain-<id>` branch per build repo (never master, never pushed; parks skip dependents; quota waits ≤300 min). Its only output is `<project>/docs/drain/<id>.md`; continue a stopped drain with `apex-drain.ps1 -Resume <id>` (for `stopped-integrity`, inspect first). Close-out stays attended: run the report's HOST checks and § Post-build per committed spec against the drain branch, a whole-queue Opus end-gate, batched commit approval, then fast-forward master locally and tear down the Engine runs (ADR-049).
 
 ## Wave analysis — HOST manual/AFK path
 
@@ -276,7 +279,6 @@ defensively, but pass it properly.
   `uv sync`) *before* dispatch. Never let the subprocess create `node_modules`/`.venv` — the sandbox
   SID owns them and your verify (running as you) then hits a locked tree. Codex's per-task scratch
   dirs (`.scratch-*`) must be gitignored, or the scope check flags them on every run.
-
 
 **Parallel Codex** (2+ independent `▸codex` tasks) → `references/parallel-codex.md`.
 

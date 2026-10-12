@@ -23,6 +23,10 @@ powershell.exe -NoProfile -File skills/apex-code/scripts/engine-plan-test.ps1
 powershell.exe -NoProfile -File skills/apex-code/scripts/engine-git-test.ps1
 powershell.exe -NoProfile -File skills/apex-code/scripts/engine-dispatch-test.ps1
 powershell.exe -NoProfile -File skills/apex-code/scripts/apex-drain-plan-test.ps1
+powershell.exe -NoProfile -File skills/apex-code/scripts/apex-drain-test.ps1 -Case core
+powershell.exe -NoProfile -File skills/apex-code/scripts/apex-drain-test.ps1 -Case recovery
+powershell.exe -NoProfile -File skills/apex-code/scripts/apex-drain-test.ps1 -Case resume
+powershell.exe -NoProfile -File skills/apex-code/scripts/apex-drain-test.ps1 -Case safety
 powershell.exe -NoProfile -File skills/apex-code/scripts/engine-test.ps1
 ```
 
