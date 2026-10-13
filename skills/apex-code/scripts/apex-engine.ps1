@@ -185,12 +185,14 @@ function Invoke-RunnerGitBytes {
     $startInfo.Arguments = $Arguments
     $startInfo.UseShellExecute = $false
     $startInfo.CreateNoWindow = $true
+    $startInfo.RedirectStandardInput = $true
     $startInfo.RedirectStandardOutput = $true
     $startInfo.RedirectStandardError = $true
     $startInfo.StandardErrorEncoding = New-Object Text.UTF8Encoding($false, $true)
     $process = New-Object Diagnostics.Process
     $process.StartInfo = $startInfo
     if (-not $process.Start()) { throw "git $Arguments failed to start" }
+    $process.StandardInput.Close()
     $memory = New-Object IO.MemoryStream
     try {
         $errorTask = $process.StandardError.ReadToEndAsync()

@@ -162,6 +162,40 @@ try {
     Write-TestText $env:GIT_CONFIG_GLOBAL ("[user]`nname = Drain Fixture`nemail = drain@example.invalid`n[safe]`ndirectory = *`n[core]`nautocrlf = false`nexcludesFile = " + $emptyIgnore.Replace('\','/') + "`n")
     $global:ApexDrainTest_fake=Join-Path $testRoot 'fake-codex.ps1';[void](New-TestFakeCodex $global:ApexDrainTest_fake)
     if (-not $Case -or $Case -eq 'core') {
+        $gitJob=$null
+        try {
+            $jobRepo=Join-Path $testRoot 'git-job-repo'
+            [void][IO.Directory]::CreateDirectory($jobRepo)
+            [void](Invoke-TestGit $jobRepo @('init','-q'))
+            Write-TestText (Join-Path $jobRepo 'job-untracked.txt') 'untracked job fixture'
+            $gitJob=Start-Job -ArgumentList $runner,$jobRepo -ScriptBlock {
+                param($Runner,$Repo)
+                $ErrorActionPreference='Stop'
+                $tokens=$null;$errors=$null
+                $ast=[Management.Automation.Language.Parser]::ParseFile($Runner,[ref]$tokens,[ref]$errors)
+                foreach ($name in @('ConvertTo-DrainArgument','Invoke-DrainGit')) {
+                    $definition=$ast.Find({param($node) $node -is [Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq $name},$true)
+                    if (-not $definition) {throw "Drain Git helper missing: $name"}
+                    . ([scriptblock]::Create($definition.Extent.Text))
+                }
+                Invoke-DrainGit $Repo @('status','--porcelain=v1','-z','--untracked-files=all')
+            }
+            $completed=Wait-Job -Job $gitJob -Timeout 60
+            Assert-DrainTest ($null -ne $completed) 'drain Git job timed out after 60 seconds'
+            Assert-DrainTest ($gitJob.State -eq 'Completed') 'drain Git job did not complete successfully'
+            $result=Receive-Job -Job $gitJob -ErrorAction Stop
+            Assert-DrainTest ($result.exit_code -eq 0) 'drain Git job exit code'
+            Assert-DrainTest ($result.raw_output.Contains("?? job-untracked.txt`0")) 'drain Git job returns untracked status record'
+            Write-Host 'PASS drain Git returns untracked status from a bounded job' -ForegroundColor Green
+        } catch {
+            $global:ApexDrainTest_failures++
+            Write-Host "FAIL drain Git job: $($_.Exception.Message) $($_.ScriptStackTrace)" -ForegroundColor Red
+        } finally {
+            if ($gitJob) {
+                if ($gitJob.State -notin @('Completed','Failed','Stopped')) {Stop-Job -Job $gitJob}
+                Remove-Job -Job $gitJob
+            }
+        }
         foreach ($specialPath in @('src/with space.py','app/[id]/page.tsx')) {
             $global:ApexDrainTest_specialPath=$specialPath
             Invoke-DrainCase "literal NUL-separated manifest path $specialPath" {

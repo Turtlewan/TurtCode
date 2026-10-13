@@ -111,11 +111,12 @@ function Invoke-DrainGit([string]$Repo, [string[]]$Arguments, [switch]$AllowFail
     $info=[Diagnostics.ProcessStartInfo]::new()
     $info.FileName='git.exe';$info.UseShellExecute=$false;$info.CreateNoWindow=$true
     $info.RedirectStandardOutput=$true;$info.RedirectStandardError=$true
+    $info.RedirectStandardInput=$true
     $info.StandardOutputEncoding=[Text.UTF8Encoding]::new($false,$true)
     $info.Arguments=(@(@('--literal-pathspecs','-c','core.hooksPath=NUL','-c','core.quotepath=false','-C',$Repo)+$Arguments | ForEach-Object {ConvertTo-DrainArgument $_}) -join ' ')
     $process=[Diagnostics.Process]::new();$process.StartInfo=$info
     try {
-        [void]$process.Start();$stderr=$process.StandardError.ReadToEndAsync();$stdout=$process.StandardOutput.ReadToEnd();$process.WaitForExit()
+        [void]$process.Start();$process.StandardInput.Close();$stderr=$process.StandardError.ReadToEndAsync();$stdout=$process.StandardOutput.ReadToEnd();$process.WaitForExit()
         $r=[pscustomobject]@{exit_code=$process.ExitCode;output=@($stdout.TrimEnd([char[]]@([char]13,[char]10)) -split '\r?\n');raw_output=$stdout;error=$stderr.Result}
     } finally {$process.Dispose()}
     if ($r.exit_code -ne 0 -and -not $AllowFailure) { throw "git failed: $($Arguments -join ' '): $($r.error)" }

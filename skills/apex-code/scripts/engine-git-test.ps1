@@ -98,6 +98,36 @@ try {
     Assert-True (Test-DotSourceStrictIsolation) 'dot-sourcing engine-git does not change caller strict mode'
     Write-Output 'ok - dot-source strict-mode isolation'
 
+    $jobRepo = Join-Path $testRoot 'job-repo'
+    [void][IO.Directory]::CreateDirectory($jobRepo)
+    [void](Invoke-TestGit $jobRepo @('init'))
+    $jobTrackedPath = 'tracked.txt'
+    Write-TestBytes (Join-Path $jobRepo $jobTrackedPath) (Get-Utf8Bytes "tracked`n")
+    [void](Invoke-TestGit $jobRepo @('add', '--', $jobTrackedPath))
+    $gitBytesJob = Start-Job -ArgumentList (Join-Path $PSScriptRoot 'apex-engine.ps1'), $jobRepo -ScriptBlock {
+        param($EnginePath, $Repo)
+        $ErrorActionPreference = 'Stop'
+        $tokens = $null; $errors = $null
+        $ast = [Management.Automation.Language.Parser]::ParseFile($EnginePath, [ref]$tokens, [ref]$errors)
+        if ($errors.Count -ne 0) { throw 'Engine script failed to parse' }
+        $definition = $ast.Find({ param($node) $node -is [Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq 'Invoke-RunnerGitBytes' }, $true)
+        if (-not $definition) { throw 'Engine Git bytes helper missing' }
+        . ([scriptblock]::Create($definition.Extent.Text))
+        Invoke-RunnerGitBytes $Repo 'ls-files -s -z'
+    }
+    try {
+        $completedJob = Wait-Job -Job $gitBytesJob -Timeout 60
+        Assert-True ($null -ne $completedJob) 'Engine Git bytes job completes within 60 seconds'
+        Assert-Equal 'Completed' $gitBytesJob.State 'Engine Git bytes job completed successfully'
+        [byte[]]$jobBytes = Receive-Job -Job $gitBytesJob -ErrorAction Stop
+        Assert-True ($jobBytes.Count -gt 0) 'Engine Git bytes job returns nonempty bytes'
+        Assert-True (Test-ByteSequence $jobBytes (Get-Utf8Bytes ("`t" + $jobTrackedPath + "`0"))) 'Engine Git bytes job returns the tracked index path'
+        Write-Output 'ok - Engine Git bytes from bounded job host'
+    } finally {
+        if ($gitBytesJob.State -notin @('Completed', 'Failed', 'Stopped')) { Stop-Job -Job $gitBytesJob }
+        Remove-Job -Job $gitBytesJob
+    }
+
     [void](Invoke-TestGit $repo @('init', '-b', 'main'))
     [void](Invoke-TestGit $repo @('config', 'user.name', 'Engine Test'))
     [void](Invoke-TestGit $repo @('config', 'user.email', 'engine@example.invalid'))
