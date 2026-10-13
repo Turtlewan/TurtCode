@@ -1,7 +1,7 @@
 ---
 skill: apex-init
-version: 1.7.4
-last_updated: 2026-10-10
+version: 1.8.0
+last_updated: 2026-10-13
 sources:
   - APEX Design Specification 2026-05-24
   - GSD (Get Shit Done) — github.com/gsd-build/get-shit-done
@@ -14,7 +14,7 @@ staleness_threshold: 30d
 description: >
   Use when bootstrapping a brand-new APEX project — triggered automatically when no
   docs/status.md exists. Scaffolds docs/, seeds PROJECT.md/REQUIREMENTS.md/ROADMAP.md/status.md
-  and the System Overview stub. Not for projects that already have status.md.
+  and the System Overview and system-map stubs. Not for projects that already have status.md.
 ---
 
 # APEX Init — New Project Bootstrap
@@ -89,6 +89,12 @@ if it doesn't already exist (template below). Leave it as the stub — it carrie
 "exists but not yet written." The host fills it in once the architecture
 takes shape; do not write the real overview during bootstrap.
 
+Also seed `docs/system-map.md` if it doesn't already exist, using the marker-only
+template below. It has no component sections: a marker-only stub is no map.
+The Opus host writes and verifies the first map later using
+`~/.claude/skills/apex-plan/references/system-map.md`; do not survey or write a real
+map during bootstrap. Keep the System Overview stub and its marker unchanged.
+
 **Data-model stub — only for data-bearing projects (ADR-008).** If the confirmed stack
 (Step 1 / apex-stack) includes a persistence layer (a database / ORM / local store), also seed the
 **conceptual data-model stub** at `docs/technical/architecture/data-model.md` (template below). It
@@ -124,6 +130,19 @@ home (ADR-037)** — Codex reads it natively and never sees status.md. Leave **P
 Codex-facing projection of the project's build context (commands + hard-blocks + structure); it tracks
 the stack recipe and hard-blocks, it is not hand-maintained in parallel with CLAUDE.md.
 
+Add exactly one pointer line to `AGENTS.md` in the **Verify commands** section:
+
+```markdown
+System map: [docs/system-map.md](docs/system-map.md) (stub until the host writes and verifies it).
+```
+
+When the verify fence exists, put the pointer after its closing fence, outside the
+commands. If the stack is TBD and `<!-- apex:agents:verify -->` remains, put the
+pointer after the entire stub block (after its closing `}` and existing grammar
+note), never inside the stub. Keep the fence directly under `## Verify commands`
+(blank lines only), and preserve this pointer when the stack replaces the stub.
+Leave one pointer if rerunning scaffolding; do not append a duplicate.
+
 ## Step 3: Write docs/status.md
 
 Use the template from ~/.claude/skills/apex-orchestrate/templates/status-template.md.
@@ -138,6 +157,7 @@ Fill in:
 "Project initialised. Here's what was created:
 
   docs/
+    system-map.md   ← component map (marker-only stub — Opus host writes and verifies it later)
     changes/        ← specs go here (ready for build)
     drafts/         ← specs-in-progress
     handoff/        ← session summaries
@@ -221,6 +241,16 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 # {project-name}
 
 {one-sentence description}
+```
+
+## docs/system-map.md initial content
+
+Seed this verbatim if the file does not already exist. There are no component
+sections, and the map checker reports no map sections until the host writes the
+first map. This artifact is separate from the System Overview stub below.
+
+```markdown
+<!-- apex:system-map -->
 ```
 
 ## docs/technical/architecture/overview.md initial content
