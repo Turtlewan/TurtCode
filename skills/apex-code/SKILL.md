@@ -1,7 +1,7 @@
 ---
 skill: apex-code
-version: 2.24.0
-last_updated: 2026-10-12
+version: 2.25.0
+last_updated: 2026-10-13
 sources:
   - docs/technical/adr/ADR-027-codex-primary-opus-fallback-deepseek-archived.md
   - docs/technical/adr/ADR-028-parallel-codex-dispatch.md
@@ -73,7 +73,7 @@ Use `-MaxParallel 1` for `risk: high`. Read the run's `engine-state.json` **stat
 An unchanged spec in a parked/paused run resumes with `apex-engine.ps1 -Resume <runId>` (pending review still requires the three review flags). An amended spec starts a **new run**, only after the parked run's partial work is inspected and discarded via `apex-engine.ps1 -Teardown <runId> -Discard` when permitted; never amend a live run's immutable plan. Discard teardown refuses live children and live non-terminal ledger rows; a row whose recorded process is dead is adopted before teardown proceeds. A complete run accepts `-Discard` only with a non-empty `-Reason`, which bypasses the hand-off journal and commit proof; otherwise successful complete teardown requires hand-off and commit proof, without `-Discard`.
 
 ## Unattended drain
-On the owner's `!` trigger, `scripts/apex-drain-plan.ps1 -Project <abs>` shows WILL BUILD / NEEDS YOU, then `scripts/apex-drain.ps1 -Project <abs>` builds WILL BUILD serially, without confirmation, on a local `codex/drain-<id>` branch per build repo (never master, never pushed; parks skip dependents; quota waits ≤300 min). Its only output is `<project>/docs/drain/<id>.md`; continue a stopped drain with `apex-drain.ps1 -Resume <id>` (for `stopped-integrity`, inspect first). Close-out stays attended: run the report's HOST checks and § Post-build per committed spec against the drain branch, a whole-queue Opus end-gate, batched commit approval, then fast-forward master locally and tear down the Engine runs (ADR-049).
+On the owner's `!` trigger, `scripts/apex-drain-plan.ps1 -Project <abs>` shows WILL BUILD / NEEDS YOU, then `scripts/apex-drain.ps1 -Project <abs>` builds WILL BUILD serially, without confirmation, on a local `codex/drain-<id>` branch per build repo (never master, never pushed; parks skip dependents; quota waits ≤300 min). Its only output is `<project>/docs/drain/<id>.md`; continue a stopped drain with `apex-drain.ps1 -Resume <id>` (for `stopped-integrity`, inspect first). Close-out stays attended: follow `references/drain-close-out.md` (ADR-049).
 
 ## Wave analysis — HOST manual/AFK path
 
