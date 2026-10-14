@@ -27,7 +27,7 @@ for: internal contradictions, acceptance criteria a builder cannot verify as wri
 producing mechanisms, files/anchors that don't exist, hazards the tasks don't cover, and
 simpler structures that meet the same criteria. Findings as BLOCK (spec will fail or build the
 wrong thing) / FLAG (planning should decide) / CLEAN, each with file/line + rationale. Judge
-the spec, do not rewrite it. Do not open docs/drafts/*.review.log."*
+the spec, do not rewrite it. Do not open docs/drafts/*.review.log, docs/drafts/*.findings.json or docs/plans/."*
 
 - **Input = spec + repo evidence only.** Never the spec AUTHOR's or the host's self-review notes, reviewer findings, or
   planning-discussion text — the cold first read is sacred (evaluator independence).
@@ -85,14 +85,102 @@ For the rarest, biggest decisions. Both models draft from the same problem brief
 (neither sees the other's draft) → exchange → ≤2 critique rounds → a **merge doc** of
 agreements + disputes for the user's final call. The host never suggests Tier 2 proactively.
 
+## Planning gate check
+
+Big changes use this gate BEFORE spec authoring. The HOST creates the C2 plan path,
+`docs/plans/<plan>.md`, in the spec-owning repo BEFORE the first gate dispatch.
+It contains the one-screen Big plan brief,
+a slices table with columns slice-id / spec name / wave / size / risk / predicted files,
+one `### Slice <slice-id>` section per slice containing that slice's intent, predicted files,
+and cited map sections, cross-slice contracts, and an empty gate-record table:
+
+| Round | Dispatched (UTC) | Reviewer | Plan digest | Verdict | Disposition |
+|---|---|---|---|---|---|
+
+The brief pastes the cited map sections of every target code repo: the wrapper runs in the
+spec-owning repo and may not see target code. Set the one-screen brief as the review input.
+Request design, contract, grounding, and decision findings, not wording findings.
+Keep `codex-review-schema.json` unchanged: `severity` carries `BLOCK` / `FLAG` / `CLEAN`,
+and `criterion` begins with `design:`, `contract:`, `grounding:`, or `decision:`.
+
+Dispatch gpt-6.1-sol at xhigh through
+`codex-dispatch.ps1 -Spec <plan> -Task gate-check -Phase review -Worktree <spec-owning repo> -BaseSha <HEAD> -Schema review -Effort xhigh -SkipScopeCheck -Prompt $prompt`.
+The prompt's first line is `SPEC-DIGEST: <git hash-object of the plan file at dispatch>`.
+The wrapper's default model is gpt-6.1-sol; Sol is read-only and never writes the plan.
+
+Use `gate-N` Round tokens and the sidecar's two-phase row lifecycle. Bind the digest to the
+plan content before appending its own pending gate row. At dispatch append a row with Round,
+Dispatched (UTC), Reviewer, and Plan digest filled, with Verdict and Disposition both `pending`.
+At adjudication reconstruct the dispatch-time plan by omitting this gate row entirely,
+including its lifecycle cells, and compare its hash to the recorded Plan digest. Preserve the
+remaining content byte-for-byte when reconstructing it; prior gate rows remain included.
+Any hash mismatch at adjudication makes the read `VOID` and discards its findings unread.
+
+At adjudication complete that same row with the returned JSON `verdict` field of
+`codex-review-schema.json` (BLOCK / FLAG / CLEAN as the schema defines it) and the outcome.
+A gate dispatch that the wrapper refuses, times out, or declares VOID (including a tree-pin VOID,
+exit 69), or that returns no parseable review JSON, completes its pending row with Disposition `VOID`;
+record Verdict as `—` when no valid review verdict exists. A digest-mismatch read also completes
+its pending row with Disposition `VOID`; do not inspect its findings to obtain a verdict.
+A VOID row does not count toward the two-read budget, and the HOST may re-dispatch the same read.
+This planning gate is the one exception to `No plan-check-family dispatch may occur outside the sidecar record`: its record is the plan file's gate-record table.
+
+After each row's adjudication, the HOST rules on every non-VOID finding once in writing in the
+plan: accept with the resulting change, or reject with evidence and reasoning. Allow a second
+read only when the approach changed, scoped to the changed section; maximum two reads per gate
+cycle. Then pass or park both sides for the owner, retaining rejected findings and unresolved
+disagreements for the owner's decision.
+
+Before any slice-author dispatch, render the apex-governance § Approval gate banner:
+
+```text
+Action: <approve the Big plan and authorize slice spec authoring>
+Scope: <plan path, target repos, slices and waves>
+Risks: <remaining risks, rejected findings and disputed positions>
+Rollback: <how to withdraw or revise the plan>
+Approve? [y / n / edit]
+```
+
+Attach the one-screen brief containing goal, approach and rejected alternatives, system changes
+with cited map sections, slices table with slice-id / spec name / wave / size / risk / predicted files,
+check summary including rejected findings, and decisions with proposals. Obtain the owner's
+explicit approval before authoring; an edit returns to planning, and a refusal parks the plan.
+
+## Plan artifact
+
+Keep the approved brief, slices table, each `### Slice <slice-id>` section, cross-slice contracts
+and `gate-N` rows in the C2 plan path. Gate rows never count toward a spec round cap.
+That slice's section text in C2 and the clean slice brief in C6 come from its `### Slice <slice-id>` section.
+Judge wave completion and the C4 pointer from the slices table's `wave` column.
+
+C1 headings in skills/apex-plan/references/sol-plan-check.md: `## Planning gate check` and `## Plan artifact`.
+
+C2 the Critic's optional input block is named **plan-slice inputs** = (a) the plan path `docs/plans/<plan>.md`, (b) that slice's section text, (c) the plan's cross-slice contracts section text, (d) the map sections the slice cites, all pasted into the prompt by the dispatcher. Gate findings, `gate-N` rows, adjudication history and the rest of the plan narrative are never plan-slice inputs. The plan path is a reference only: the Critic never opens the plan file and relies on the pasted section texts.
+
+C3 plan-gate finding transport: codex-review-schema.json unchanged; `severity` carries BLOCK/FLAG/CLEAN; the class is a prefix of `criterion`: `design:` `contract:` `grounding:` `decision:` (wording findings are not requested).
+
+C4 the In-Flight pointer row in docs/status.md: `plan · docs/plans/<plan>.md · next wave <N>`, HOST-maintained, one row per active plan. N = the earliest unfinished wave. The pointer advances only after every slice spec of wave N has archived to docs/changes/done/.
+The location is `docs/status.md` in the spec-owning repo.
+
+C5 spec-to-slice association: a slice spec's `## Intent` block carries the line `plan: docs/plans/<plan>.md · slice: <slice-id>`; the plan's slices table maps each slice-id to its spec name.
+
+C6 clean slice brief: for a Big plan slice, the spec-author pack and every Critic pack (spec mode) carry the slice brief (slice intent, cross-slice contracts, cited map sections) in place of the full adjudicated plan brief; gate findings and adjudication are removed.
+
+Every eligible slice gets its own independent post-readiness cold read by that slice spec's tier,
+without gate findings or adjudication.
+The HOST alone maintains the C4 In-Flight pointer row and close-out records. After the last slice
+archives to `docs/changes/done/`, the HOST moves the plan to `docs/plans/done/` and deletes the pointer.
+After the plan moves to `docs/plans/done/`, a slice spec's C5 line `plan: docs/plans/<plan>.md` resolves to `docs/plans/done/<plan>.md`.
+
 ## Pre-draft architecture pass (ADR-032 §1b)
 
 Runs BEFORE the spec author is dispatched.
 
-**Trigger:** Low and doc-only specs skip this pass; Medium and High retain it in addition to the
-cold read above, never as a replacement. An explicit `risk: high` overrides doc-only, and an
-unresolved High BLOCK remains blocking. Same wrapper, same read-only Sol; different input,
-different lens: it judges the PLAN, and no spec exists yet.
+**Trigger:** Big changes use § Planning gate check instead of this pass. For non-Big Deep Details
+specs, Low and doc-only skip this pass; Medium and High retain it in addition to their independent
+post-readiness cold read. An explicit `risk: high` overrides doc-only, and an unresolved High BLOCK
+remains blocking. Same wrapper, same read-only Sol; different input, different lens: it judges
+the PLAN, and no spec exists yet.
 
 ```powershell
 # $planBrief = a REQUIRED `risk:` field (host-assigned at plan time) + problem statement +
@@ -126,12 +214,14 @@ each with file/line + rationale. Judge the plan, do not write it."*
   **BEFORE any spec-author dispatch**. Adjudicate findings into the PLAN before dispatching the
   author. Sol never writes the plan and never edits the spec.
 - **The cold read stays cold.** Never pass this pass's findings, the host's answers to them, or the
-  fact that it ran into the post-readiness dispatch above — evaluator independence. The pre-draft
-  pass and post-readiness read use the same tier trigger: Low and doc-only skip both; Medium and
-  High retain both. Neither substitutes for the other.
+  fact that it ran into the post-readiness dispatch above — evaluator independence.
+  Big changes use the planning gate instead of the pre-draft pass; non-Big Medium/High Deep Details
+  specs retain both reads. Every eligible slice spec gets its own post-readiness cold read by its own
+  tier, without gate findings or adjudication. Neither planning read substitutes for the cold read.
 - **The cold-read prompt excludes the sidecar — discovery, not just delivery.** The prompt shape in
-  § The cold read above now ends with `Do not open docs/drafts/*.review.log.` The sidecar carries
-  prior findings, this pass's among them, so a cold reader that opens it is no longer cold.
+  § The cold read above now ends with `Do not open docs/drafts/*.review.log, docs/drafts/*.findings.json or docs/plans/.` The sidecar carries
+  prior findings, this pass's among them, so a cold reader that opens it is no longer cold. A cold
+  reader that opens a plan file would also see gate output.
 - **Round record — ALWAYS WHEN DISPATCHED.** Every arch-check dispatch creates (only when absent) or appends to
   `docs/drafts/<short-name>.review.log` (short-name fixed at plan time) with a normal `arch-N` row on
   apex-plan § Convergence control's terms — separate from the Critic spec-mode 3-round cap and
