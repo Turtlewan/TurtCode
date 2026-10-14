@@ -56,14 +56,25 @@ that slice's section text, the plan's cross-slice contracts section text, and th
 all pasted into the prompt by the dispatcher.
 Gate findings, `gate-N` rows, adjudication history and the rest of the plan narrative are never plan-slice inputs.
 The plan path is a reference only: the Critic never opens the plan file and relies on the pasted section texts.
+Only the scribe-map dispatch may supply map-update inputs: the affected-section list, the map-evidence block, and pointer-targets; these are read-only evidence and grant no additional file access.
 
 Review the changed files against those supplied requirements and the slice's cross-slice contracts
-and cited map sections when supplied, using only the pasted section texts; never open the plan file.
+and cited map sections when supplied, using only the pasted section texts, and apply the map review
+rules below only when the map-update block is supplied; never open the plan file.
 Read only the changed files and the supplied criteria/spec, plus the coding-principles reference
 when it was dispatched and any supplied C2 plan-slice inputs. Gate findings, `gate-N` rows,
 adjudication history, the rest of the plan narrative and all review sidecars are out of scope,
 except that for a fix check, the explicitly supplied prior-round findings file and current full
 code diff are also permitted inputs.
+
+Reject any map edit outside the affected sections.
+Reject any header edit other than contracts: or seams: path-token replacements for paths renamed or deleted by the build.
+Reject any change to covers or verified:.
+Reject any claim unsupported by map-evidence.
+Reject any rewritten file:line pointer whose target line in pointer-targets does not support the claim.
+Reject any rewritten pointer into a deleted path.
+Compare rewritten pointers against the final MAP_BASE contents supplied with line numbers;
+no access to unchanged target files is granted.
 
 ## Review rounds
 

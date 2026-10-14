@@ -1,7 +1,7 @@
 ---
 skill: apex-code
-version: 2.26.0
-last_updated: 2026-10-13
+version: 2.27.0
+last_updated: 2026-10-14
 sources:
   - docs/technical/adr/ADR-027-codex-primary-opus-fallback-deepseek-archived.md
   - docs/technical/adr/ADR-028-parallel-codex-dispatch.md
@@ -346,7 +346,7 @@ These are **HOST actions**, including Engine parks/exit 1; the Engine does not r
 
 ## Post-build
 
-The docs agent's (`apex-docs-technical-agent`) three host's-pen artifacts — the handoff, `docs/status.md`, and spec archival into `docs/changes/done/` — are **permitted post-build writes outside `## Files to Change`** (D6, ADR-046); they do **not** need to be listed there. **Exactly those three. Nothing else is exempt** — any other write outside the lock is flagged, not applied.
+The docs agent's (`apex-docs-technical-agent`) three host's-pen artifacts — the handoff, `docs/status.md`, and spec archival into `docs/changes/done/` — are **permitted post-build writes outside `## Files to Change`** (D6, ADR-046); they do **not** need to be listed there. The fourth permitted post-build write outside ## Files to Change is the map-update dispatch's affected-section edits in resolved map files only, under references/scribe.md section 9. **Exactly those four. Nothing else is exempt** — any other write outside the lock is flagged, not applied.
 
 **Pin the tree before you open a gate.** A gate reads the tree at time T and acts on a verdict at
 T+n. Nothing pins T — so if the tree moves in between, the verdict describes a tree that no longer

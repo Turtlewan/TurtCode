@@ -108,6 +108,8 @@ rerun `-Stale`. Leave fresh sections alone. A successful history comparison does
 not certify unstaged or staged edits: inspect live changes before trusting the
 claims. Git/live code wins when either contradicts the map.
 
+The map Scribe dispatch rewrites affected sections without stamping verified:. A rewritten section whose covers include a changed path reports stale at the next apex-map-check.ps1 -Stale run after the commit that integrates the change lands, because the checker compares the verified SHA to HEAD and ignores staged or working-tree edits; the HOST re-surveys and stamps it under the existing freshness protocol. A Touches-only section whose covers are unchanged keeps its stamp. When map_update is skipped or rejected, the handoff names the affected sections for targeted re-survey; -Stale catches only covers-changed sections. The HOST repairs covers listed in map_cover_repair during the next re-survey. Drained (AFK) specs get no map update.
+
 The checker also provides mutually exclusive lookup modes:
 
 ```powershell

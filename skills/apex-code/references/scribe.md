@@ -345,6 +345,13 @@ Discharge reported cleanup/branch obligations through the permitted D8 route.
 
 Deliver one per-repo result to `apex-docs-technical-agent`:
 
+Step 8 delivers per-repo map_update, the affected-section names when map_update is skipped or rejected, and HOST-derived map_cover_repair entries to apex-docs-technical-agent.
+The docs agent writes each map_cover_repair entry and each skipped or rejected affected-section name under What's Next.
+Run section 9 before this delivery. Include the exact skip/rejection reason and
+paths with the map outcome; keep `map_update` separate from
+`scribe_summary.status`. Preserve all `scribe_summary` fields and their
+source/doc meanings below; map files and outcomes do not enter those fields.
+
 ```text
 scribe_summary = {status: integrated|skipped|discarded, model: used model including fallback, files_written: paths, docs_skipped_unlisted: paths, reason: text}
 ```
@@ -359,3 +366,170 @@ including `gpt-6-sol` fallback and failed Luna attempt when applicable; use
 Send model/fallback/discard reasons for Decisions Made and unlisted-doc skips
 for What's Next in the technical-docs handoff. Do not hide a discarded attempt
 behind a successful retry; include its diagnosis in `reason`.
+
+## 9. Map update dispatch
+
+Section 9 runs after step 7 and before step 8 delivers the technical-docs input.
+When source/doc Scribe had no work, run this section directly after the build,
+using step 2's materialized `SCRIBE_BASE`. This section is attended only; it
+does not run in the AFK end-gate or drain runner. Require the bounded fourth
+`## Post-build` exception in [SKILL.md](../SKILL.md#post-build): only resolved
+map files and affected component sections are eligible for this separate
+post-build dispatch. Do not add resolved map files to `A` or the build spec;
+steps 1–8 and their source/doc authorization set `A` retain their meanings.
+Only the HOST may stamp `verified:` after re-survey.
+
+### Base, evidence, and affected sections
+
+MAP_BASE is the integrated Scribe result commit from step 7 when step 7 integrated a Scribe result; otherwise (Scribe skipped, made no change, was discarded, or failed) SCRIBE_BASE from step 2.
+
+Record this SHA; never substitute integration-tree HEAD. Materialize a fresh
+map branch/worktree at `MAP_BASE` before any lookups:
+
+```text
+git -C <repo> worktree add <repo>-wt/<spec>-scribe-map -b codex/<spec>-scribe-map MAP_BASE
+git diff --name-status -z --find-renames <pre-build-base> MAP_BASE
+```
+
+Compute the complete build delta with that NUL-delimited name-status command;
+parse every status, including deleted paths and both rename endpoints. Retain
+rename/move identities for cover-repair bookkeeping. Use `MAP_BASE` for the
+full read-only `map-evidence` diff, section resolution, `pointer-targets`, and
+the fresh map worktree. These inputs include build paths outside `A`.
+
+In all lookup commands below, `<repo>` is this fresh map worktree. A repo
+without `docs/system-map.md` or a split `docs/system-map/` records
+`map_update: skipped` with reason `no system map`; no map dispatch runs.
+For each build-delta path, including deleted paths and both rename endpoints,
+run both lookups and capture their individual exits and JSON:
+
+```text
+apex-map-check.ps1 -Repo <repo> -Owner <path> -Json
+apex-map-check.ps1 -Repo <repo> -Touches <path> -Json
+```
+
+Decode both `sections` arrays with `ConvertFrom-Json`. Union their names over
+all delta paths with every section whose body has a `file:line` pointer into
+a build-delta path. Read map text at `MAP_BASE`; match each union name to
+exactly one `## <component>` heading in the root map or split component files.
+A split index is a resolution source, not a write target unless it contains
+an affected component section. Retain the affected-section names, current
+section text, and exact resolved map files; deduplicate file identities.
+
+An unresolved or duplicated section name, checker exit 2, or a resolved map file whose filtered blob identity differs from MAP_BASE stops map work for that repo and reports the exact reason and paths.
+Checker exit 3 or an empty affected-section union skips the map dispatch.
+Unexpected checker failures also stop map work; no section name is guessed.
+Every MAP_BASE comparison uses filtered blob identities: git hash-object --path <path> <path> in the integration tree must equal git rev-parse MAP_BASE:<path>; never compare raw checkout bytes.
+
+Before dispatch, compare every resolved map file's filtered blob identity in
+the integration tree with `MAP_BASE`. Apply step 1's per-path
+`apex-critical-files.ps1 -Test -Paths <path> -Root <repo>` classifier to every
+resolved map file (here `-Root` is the map worktree); a classifier-excluded
+path stops this repo's map work. Unexpected classifier failures stop and
+report `map_update: skipped` with exact reason and paths as well.
+Each unresolved or duplicated name, checker exit 2, unexpected checker failure, classifier-excluded map path, map blob drift, or pre-integration drift records map_update: skipped for that repo together with the affected-section names and the exact reason.
+No directory authorization is granted. On a skip, a clean lookup-only
+worktree follows the existing D8 teardown guards; a skip alone does not
+authorize cleanup or bypass the owner handback.
+
+The HOST derives `map_cover_repair` mechanically from name-status rename or move entries: record each section and new path when a previously covered path moves outside every section's covers and `-Owner` of the new path returns no section.
+Use the old path's covering section(s) and the new path's lookup against
+`MAP_BASE`; retain these entries for step 8 even when no dispatch runs.
+This is HOST bookkeeping, not a Luna completion field or an unresolved item;
+the dispatch may return normal `done`. Do not add it to
+`codex-completion-schema.json` or automatically repair `covers`.
+
+### Dispatch and bounded edit contract
+
+Authorize only the resolved map files, each with operation `modify`, subject
+to the critical classifier. Do not authorize any source edit. Invoke:
+
+```text
+codex-dispatch.ps1 -Spec <s> -SpecSourcePath <absolute-spec> -Task scribe-map -Phase build -Model gpt-6-luna -Effort low -Attended -Worktree <map-worktree> -BaseSha MAP_BASE -Authorized <resolved-map-files> -Prompt <pack>
+```
+
+Use the wrapper, capture its exit, `.final`, log path, and launch identity.
+Keep step 5's one model-availability retry, exit-79 queue/park rule, and
+diagnostic-worktree retention. Any permitted retry uses a NEW map worktree
+at the same `MAP_BASE`, the same pack and modify-only resolved map files,
+`-Task scribe-map -BaseSha MAP_BASE`, and `-Model gpt-6-sol -Effort low`;
+never reuse failed-result bytes or the source/doc task id `scribe`.
+
+The pack carries the full `git diff --binary --find-renames <pre-build-base> MAP_BASE`
+as read-only `map-evidence`, including paths outside `A`, plus the
+affected-section names, their current text and resolved files, the modify-only
+operation map, and this exact bounded edit contract:
+
+Rewrite only affected sections' Role / Contracts / Seams / Dependents / Evidence claims and file:line pointers.
+Rewrite a file:line pointer only when its target file is in the build delta; leave other pointers unchanged.
+Header edits are limited to contracts: or seams: path-token replacements for paths renamed or deleted by the build; never change covers or verified:, and never add or remove sections.
+
+### Separate review, verification, and family identity
+
+After wrapper exit 0, select the latest matching `spec=<s>, task=scribe-map`
+ledger build row by selected worktree and launch identity. Follow step 6's
+ledger resolution and take `run_id`, `worktree_key`, and `end_tree_digest`
+verbatim from that row, including when a retry was selected.
+
+Follow step 6 on this separate map tree: pin with label `<spec>-scribe-map`,
+compute its digest and require equality to `end_tree_digest`, dispatch
+`apex-critic` through the Agent tool with `model: sonnet`, `mode: code`,
+verify that original pin before acting on the verdict, run the full repo
+`AGENTS.md` `## Verify commands` fence in order, then verify the pin again.
+Never re-pin to bless movement or use the source/doc pin for this review.
+
+Supply the Critic **map-update inputs**: the affected-section list, the
+identical read-only `map-evidence` block, and `pointer-targets`.
+After the map dispatch returns, the HOST derives the rewritten-pointer set by parsing the map diff (dispatch result versus MAP_BASE) for <path>:<n> tokens on added lines whose path is in the build delta, and supplies each such file's MAP_BASE contents with line numbers.
+A pointer whose target path the build deleted is listed in pointer-targets as deleted with no contents.
+Include the full map diff versus `MAP_BASE`, authorized files and operations,
+and the bounded edit contract. The Critic receives read-only pasted evidence
+with no extra file access. Require supported claims, pointer targets and line
+numbers consistent with the supplied contents, and edits confined to authorized
+files, affected sections, and the contract; BLOCK on any violation.
+
+Only after a clean Critic, passing verification, and both passing pin checks,
+append step 6's review row through the mutex-serialized ledger helper with
+`task = 'scribe-map'`, `reviewed_run_id` equal to the selected map build
+`run_id`, and `reviewed_tree_digest` equal to the pinned map digest. Keep the
+selected map row's `worktree_key`, selected model, and all other step 6 fields.
+Require append exit 0, then require exit 0 from:
+
+```text
+apex-family-gate.ps1 -Spec <s> -Task scribe-map -WorktreeKey <ledger worktree_key>
+```
+
+### Integrate only the clean map delta
+
+Use step 7's pin-before-commit, changed-path filtered blob/mode identity,
+and path-scoped indexed apply for the map delta only, substituting `MAP_BASE`,
+the selected map worktree/branch, label `<spec>-scribe-map`, and exact changed
+resolved map files with operation `modify`. Integrate only `MAP_BASE` to the
+committed map result, never the build or source/doc delta. If there are no
+map edits, do not create an empty commit; still require all review and gates.
+Section 9 owns post-apply verification and rejected-result routing for this
+map delta instead of step 7's source/doc failure routing.
+
+Before integration, every path in the build delta (<pre-build-base>..MAP_BASE) that exists in the integration tree, plus every map file, must have a filtered blob identity equal to MAP_BASE; a path absent from MAP_BASE is drift.
+Also require paths present in `MAP_BASE` to remain present in the integration
+tree and require its index blobs/modes to agree with `MAP_BASE` for these
+paths. A deleted build path must remain absent, including dangling links.
+On drift do not integrate, report the exact drifted paths, and record map_update: skipped.
+Before applying the map delta, the HOST saves the exact current bytes of every map file it will write.
+The HOST then applies the map delta, runs step 7's post-apply checks, and runs the integrated verification.
+If any verification fails, the HOST restores those saved bytes to each map file in both the worktree and index, records map_update: rejected, and integrates no map delta.
+Map files hold only map prose and are not part of the already-integrated Scribe review, so this restore is permitted.
+
+For restore, preserve the pre-apply modes and stage only those exact map paths
+using their saved bytes and normal Git filters; verify their restored filtered
+blob/index/mode identities against `MAP_BASE`. Report exact paths if restore
+verification fails; do not touch any source/doc path. The saved raw bytes are
+for restoration only; identity comparisons always use filtered blobs.
+
+A failed dispatch after the permitted availability retry, Critic rejection, or any pin, verification, ledger, or family-gate failure records map_update: rejected and integrates no map delta; retain the failed map worktree per step 7.
+A clean result records map_update: applied, including when the dispatch makes no map edit; integrate the map delta.
+Do not roll back or repin the already integrated source/doc Scribe tree.
+Apply the existing D8 teardown only after successful integration and its
+normal guards (with the lookup-only skip case above). Carry the separate
+per-repo outcome, exact reasons/paths, skipped or rejected affected-section
+names, and HOST-derived `map_cover_repair` entries to step 8.
