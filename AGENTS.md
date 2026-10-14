@@ -4,6 +4,8 @@
 
 This repository uses a two-tree layout: skills live in `~/.claude`, while documentation, the index, history, and ADRs live in `~/apex`. A change to APEX usually touches both trees.
 
+System map: [docs/system-map.md](docs/system-map.md) (host-written first map, verified at 0e3b863; check freshness with `apex-map-check.ps1 -Stale`).
+
 Never run `git commit` or `git push`. Leave the working tree dirty for the host to integrate.
 
 ## Verify commands
