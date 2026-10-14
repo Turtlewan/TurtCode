@@ -1,6 +1,6 @@
 ---
 skill: apex-code
-version: 2.25.0
+version: 2.26.0
 last_updated: 2026-10-13
 sources:
   - docs/technical/adr/ADR-027-codex-primary-opus-fallback-deepseek-archived.md
@@ -378,8 +378,8 @@ never changed, only what was inside it, so a `git status` check would have seen 
    `model: opus` for High, on every dispatch. The Agent tool's `model:` parameter takes precedence
    over the agent file's default frontmatter `model: sonnet`. After each integrated High-risk wave,
    review only that wave's changed files and criteria. Otherwise review once after the whole build.
-   Include the applicable spec criteria, full diff for the scope, and `<final>.concerns.md` verbatim.
-   Apply all four silent-regression lenses in `references/silent-regression-lenses.md`.
+   Include the applicable spec criteria, full diff for the scope, and `<final>.concerns.md` verbatim. When `## Intent` contains the C5 line `plan: docs/plans/<plan>.md · slice: <slice-id>`, the dispatcher also pastes the four C2 parts under **plan-slice inputs**: the plan path `docs/plans/<plan>.md`, that slice's section text, the plan's cross-slice contracts section text, and the map sections the slice cites.
+   Apply all four silent-regression lenses in `references/silent-regression-lenses.md`. The plan path is a reference only: the Critic never opens the plan file and relies on the pasted section texts.
 
    Each wave or whole-build scope has a three-round cap. Round 1 is a full adversarial review. After
    fixes and re-running verification, rounds 2–3 are fix checks; each receives the prior findings

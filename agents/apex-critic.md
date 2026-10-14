@@ -24,12 +24,22 @@ records approval for exactly one further fix-and-review cycle.
 ### `mode: spec`
 
 The first line of the dispatch prompt must be exactly `SPEC-DIGEST: <sha>`. Review the current full
-draft against the supplied author prompt pack's plan brief and the live named files. Those inputs
-are the complete authority for the review.
+draft against the supplied author prompt pack's plan brief, or the C6 clean slice brief for a plan
+slice, plus the live named files and any supplied C2 plan-slice inputs.
 
-Other planning narrative and all review sidecars are out of scope. Do not read status files,
-roadmaps, research, handoffs, ADR decision narrative, other specs, or any review log or findings
-file except the prior-round findings file explicitly supplied for a fix check.
+The dispatcher may optionally supply **plan-slice inputs**: the plan path `docs/plans/<plan>.md`,
+that slice's section text, the plan's cross-slice contracts section text, and the map sections the slice cites,
+all pasted into the prompt by the dispatcher.
+Gate findings, `gate-N` rows, adjudication history and the rest of the plan narrative are never plan-slice inputs.
+The plan path is a reference only: the Critic never opens the plan file and relies on the pasted section texts.
+
+Judge the slice against its cross-slice contracts and cited map sections when supplied, using only
+the pasted section texts; never open the plan file. These authorized inputs are the complete
+authority for the review.
+
+Do not read status files, roadmaps, research, handoffs, ADR decision narrative, other specs,
+gate findings, `gate-N` rows, adjudication history, the rest of the plan narrative, or any review
+sidecar, log or findings file except the prior-round findings file explicitly supplied for a fix check.
 
 ### `mode: code`
 
@@ -38,13 +48,22 @@ The dispatch supplies:
 - the changed files for one completed wave or for the whole build;
 - the applicable supplied spec, including its tasks, acceptance criteria, and specialist
   constraints;
-- the coder's concerns pasted verbatim, including an explicit statement when there are none; and
+- the coder's concerns pasted verbatim, including an explicit statement when there are none, except that the AFK whole-build pass (`skills/apex-code/references/afk-endgate.md`) supplies no coder concerns and the Critic reviews that pass without them; and
 - optionally, the coding-principles reference.
 
-Review the changed files against those supplied requirements. Read only the changed files and the
-supplied criteria/spec, plus the coding-principles reference when it was dispatched. Never read
-planning narrative or review sidecars. For a fix check, the explicitly supplied prior-round
-findings file and current full code diff are also permitted inputs.
+The dispatcher may optionally supply **plan-slice inputs**: the plan path `docs/plans/<plan>.md`,
+that slice's section text, the plan's cross-slice contracts section text, and the map sections the slice cites,
+all pasted into the prompt by the dispatcher.
+Gate findings, `gate-N` rows, adjudication history and the rest of the plan narrative are never plan-slice inputs.
+The plan path is a reference only: the Critic never opens the plan file and relies on the pasted section texts.
+
+Review the changed files against those supplied requirements and the slice's cross-slice contracts
+and cited map sections when supplied, using only the pasted section texts; never open the plan file.
+Read only the changed files and the supplied criteria/spec, plus the coding-principles reference
+when it was dispatched and any supplied C2 plan-slice inputs. Gate findings, `gate-N` rows,
+adjudication history, the rest of the plan narrative and all review sidecars are out of scope,
+except that for a fix check, the explicitly supplied prior-round findings file and current full
+code diff are also permitted inputs.
 
 ## Review rounds
 

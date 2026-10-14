@@ -17,9 +17,11 @@ agent file's default frontmatter `model: sonnet`. Supply the run spec and the wh
 `git diff <run_base_sha>..HEAD` — **not** one task's diff.
 
 This dispatch is the single whole-build round 1, a fresh full review of the complete code-review sequence. Do
-not launch another full review at build end. The pass is an independent read,
-so give it the run spec + whole-run diff and nothing else. **Never** give it earlier Critic findings or a coder
-summary. If fixes are made, use the normal fix-check rounds 2–3 under the normal review cap: each dispatch uses
+not launch another full review at build end. The pass is an independent read, so give it the run spec + whole-run diff.
+When the run spec's `## Intent` contains `plan: docs/plans/<plan>.md · slice: <slice-id>`, also paste the four C2 parts under the label **plan-slice inputs**: the plan path `docs/plans/<plan>.md`, that slice's section text, the plan's cross-slice contracts section text, and the map sections the slice cites.
+The plan path is a reference only: the Critic never opens the plan file and relies on the pasted section texts.
+Give it nothing else outside the run spec, whole-run diff, and conditional C2 inputs. **Never** give it earlier Critic findings or a coder summary.
+If fixes are made, use the normal fix-check rounds 2–3 under the normal review cap: each dispatch uses
 `apex-critic`, `mode: code`, and Agent tool parameter `model: opus`, and receives the prior round's findings file
 plus the current full whole-run diff. A fix check checks prior findings and defects in text touched by fixes; it
 does not re-audit unchanged text or become a second fresh whole-build review.
@@ -36,6 +38,13 @@ owned by the wrapper's Codex endgate mode; it does not declare the Claude agent'
 >
 > Run context/spec:
 > `<paste the applicable run specification and task intent>`
+>
+> Conditional **plan-slice inputs** (include only when the run spec's `## Intent` contains `plan: docs/plans/<plan>.md · slice: <slice-id>`):
+> - the plan path `docs/plans/<plan>.md` (reference only): `<paste the plan path>`
+> - that slice's section text: `<paste the slice section text>`
+> - the plan's cross-slice contracts section text: `<paste the cross-slice contracts section text>`
+> - the map sections the slice cites: `<paste the cited map sections>`
+> The plan path is a reference only: the Critic never opens the plan file and relies on the pasted section texts.
 >
 > Whole-run changed files (git diff `<run_base_sha>..HEAD`):
 > `<paste git diff <run_base_sha>..HEAD>`
