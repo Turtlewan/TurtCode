@@ -29,7 +29,7 @@ When an architectural decision is reached during planning:
 
 3. Reference the ADR in the spec's Documentation section
 
-**Light / Bug Fix modes:** note decisions inline in the spec doc. Skip formal ADRs.
+**Light mode:** note decisions inline in the spec doc. Skip formal ADRs.
 
 ---
 
@@ -43,6 +43,3 @@ At the end of every planning pass:
    - Open questions: carry over unresolved, add new, remove resolved
 3. Update _Last updated:_ line to today's date
 4. Write file back
-
-### Bug Fix
-No status.md update. Bug fix docs are ephemeral — consumed and archived within the session.
