@@ -1,7 +1,7 @@
 ---
 skill: apex-orchestrate
-version: 2.7.0
-last_updated: 2026-10-14
+version: 2.7.1
+last_updated: 2026-10-15
 sources:
   - docs/technical/adr/ADR-015-dispatch-return-contract.md
   - docs/technical/adr/ADR-036-remove-knowledge-layer.md
@@ -47,7 +47,7 @@ A `change held` row is not a mid-way row: it routes to the owner's disposition o
 
 A C4 plan pointer row (`plan · docs/plans/<plan>.md · next wave <N>`) is not a mid-way row: it routes to `apex-plan` § Session start's resume procedure instead of the continue / set aside / discard prompt.
 
-Never quietly build on top of it; never delete it. **Half-finished work is the highest-value thing
+Never quietly build on top of in-flight work; never delete it. **Half-finished work is the highest-value thing
 you can surface** — it's the one thing the user has forgotten and the one thing that will corrupt the
 next diff.
 

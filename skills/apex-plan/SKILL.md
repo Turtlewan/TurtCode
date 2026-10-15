@@ -1,6 +1,6 @@
 ---
 skill: apex-plan
-version: 2.9.1
+version: 2.9.2
 last_updated: 2026-10-15
 sources:
   - docs/technical/adr/ADR-010-multi-pass-review.md
@@ -121,7 +121,7 @@ ask-first aesthetic gate, the cheap-mockup loop, the visual review gate).
 
 ## Writing the spec
 
-Big uses C1 § Planning gate check instead of the pre-draft pass. Non-Big Medium/High Deep Details retains the pre-draft pass and its independent post-readiness cold read. Low and doc-only skip under the existing tier rule. The Big gate output never enters the cold read.
+Big uses C1 § Planning gate check instead of the pre-draft pass. Non-Big Medium/High Deep Details retains the pre-draft pass and its independent post-readiness cold read. Low and doc-only skip under the existing tier rule. The Big gate output never enters the cold read. Pre-draft pass recipe: `references/sol-plan-check.md` § Pre-draft architecture pass; for High an unresolved BLOCK is an approval gate — print the **apex-governance § Approval gate** banner and get the explicit `Approve? [y / n / edit]` answer before any spec-author dispatch.
 
 Template: `~/.claude/skills/apex-orchestrate/templates/spec-template.md`. Derive its execution manifest,
 Files to Change, and Tasks list from the same decisions: one entry per coder task, with explicit file operation and dependency IDs; exclude HOST/OWNER tasks from the manifest.

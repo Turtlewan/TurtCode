@@ -1,7 +1,7 @@
 ---
 skill: apex-debug
-version: 1.5.0
-last_updated: 2026-10-14
+version: 1.5.1
+last_updated: 2026-10-15
 sources:
   - APEX Design Specification 2026-05-24
   - Superpowers (obra) — github.com/obra/superpowers
@@ -73,6 +73,7 @@ One hypothesis at a time:
 A root cause statement must be specific:
 BAD:  "The auth is broken"
 GOOD: "The JWT expiry check uses server time but tokens are issued with client time, causing a 60-second window where expired tokens are accepted"
+
 After root-cause confirmation and before any fix, pass the specific root-cause statement to `apex-plan` § Intake for size/risk labels and route selection.
 
 ### Stage 4 — Fix
@@ -83,6 +84,7 @@ Surgical fix only:
 - No "while I'm here" improvements
 - No cleanup of unrelated issues
 - The fix must be directly traceable to the root cause
+
 Stage 4 builds through the Light or Deep Details route Intake selects; a contract-changing fix is Big and goes through the Big gate.
 
 ### Stage 5 — Verify
@@ -92,6 +94,8 @@ Stage 4 builds through the Light or Deep Details route Intake selects; a contrac
 3. If any test fails: this fix broke something — return to Stage 3
 
 ### Stage 6 — Prevent & record (one home per fact)
+
+The fix lands through the spec Intake selected: the regression test below is one of that spec's acceptance criteria, and the confirmed root-cause statement goes in the spec's Intent and in its commit message body.
 
 Each piece of the bug record gets ONE durable home — **git, not a doc that gets archived**:
 
@@ -149,8 +153,7 @@ bug was touched — it does not duplicate the record:
 For an **unfixed / deferred / escalated** bug (or a recurrence-risk:high left unaddressed):
 do NOT bury it in the handoff — route it to a **GitHub Issue**, subject to
 its security/visibility gate. **The Issue *is* the bug backlog; `status.md` does not carry one.**
-A bug fixed in-session with a regression test gets **no issue** (git + test only — avoid
-created-and-closed noise).
+A bug fixed through its spec with a regression test gets **no issue** (git + test only — avoid created-and-closed noise).
 
 ## Rules that cannot be broken
 
