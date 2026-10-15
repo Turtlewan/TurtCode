@@ -186,7 +186,7 @@ function Start-EngineDispatch {
         if (Test-Path -LiteralPath $oldPath) { Remove-Item -LiteralPath $oldPath -Force }
     }
 
-    $preview = Get-Content -LiteralPath $argsFile -Raw | ConvertFrom-Json
+    $preview = Get-Content -LiteralPath $argsFile -Raw -Encoding UTF8 | ConvertFrom-Json
     $isAdopt = (@($preview.PSObject.Properties.Name) -ccontains 'Adopt' -and [bool]$preview.Adopt)
     Write-EngineUtf8NoBom -Path "$output.invocation.json" -Text `
         (([ordered]@{ adopt = [bool]$isAdopt; args_path = $argsFile } | ConvertTo-Json -Compress))
@@ -207,7 +207,7 @@ function D([string]`$v) { [Text.Encoding]::UTF8.GetString([Convert]::FromBase64S
 `$env:APEX_STATE_DIR = D '$s64'
 `$outputPath = D '$o64'
 `$PSDefaultParameterValues['Out-File:Width'] = 32767
-`$raw = Get-Content -LiteralPath `$argsPath -Raw | ConvertFrom-Json
+`$raw = Get-Content -LiteralPath `$argsPath -Raw -Encoding UTF8 | ConvertFrom-Json
 `$splat = @{}
 foreach (`$property in `$raw.PSObject.Properties) {
     if (`$property.Name -in @('Authorized', 'CodexExecutableArgumentPrefix')) {
@@ -892,7 +892,7 @@ function Wait-EngineDispatch {
     $task = $null; $worktree = $null
     try {
         $meta = Get-Content -LiteralPath "$output.invocation.json" -Raw | ConvertFrom-Json
-        $argDoc = Get-Content -LiteralPath ([string]$meta.args_path) -Raw | ConvertFrom-Json
+        $argDoc = Get-Content -LiteralPath ([string]$meta.args_path) -Raw -Encoding UTF8 | ConvertFrom-Json
         $task = [string]$argDoc.Task; $worktree = [string]$argDoc.Worktree
     } catch { }
     if (-not $task -or -not $worktree) {

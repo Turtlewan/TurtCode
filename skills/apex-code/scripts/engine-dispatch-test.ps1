@@ -225,6 +225,7 @@ param(
     executable = $CodexExecutable
     prefix = [string[]]@($CodexExecutableArgumentPrefix)
     prefix_type = $CodexExecutableArgumentPrefix.GetType().FullName
+    prompt_hex = (($Prompt.ToCharArray() | ForEach-Object { '{0:X4}' -f [int]$_ }) -join ' ')
 } | ConvertTo-Json -Compress
 '@
     $defaultParameters = @{} + $common
@@ -272,6 +273,20 @@ param(
             @($typedCapture.prefix).Count -eq $prefix.Count -and
             $typedCapture.prefix_type -ceq 'System.String[]') `
         'explicit executable or string-array prefix lost its value/type in the child splat'
+
+    $utf8Args = Join-Path $stateRoot 'args\utf8-prompt.json'
+    $utf8Output = Join-Path $stateRoot 'children\utf8-prompt.out'
+    $utf8Parameters = @{} + $defaultParameters
+    $utf8Parameters.Prompt = -join @([char]0x00A7, [char]0x00B7, [char]0x2014, [char]0x2192)
+    Write-EngineDispatchArgs $utf8Args $utf8Parameters | Out-Null
+    $utf8Child = Start-EngineDispatch $captureWrapper $utf8Args $utf8Output $stateRoot
+    $utf8Handle = $script:EngineDispatchProcesses[$utf8Child.pid]
+    $utf8Completed = $utf8Handle.WaitForExit(10000)
+    if ($utf8Completed) { $script:EngineDispatchProcesses.Remove($utf8Child.pid) }
+    $utf8Capture = if ($utf8Completed) { Get-Content $utf8Output -Raw | ConvertFrom-Json } else { $null }
+    Assert-EngineCase 'non-ASCII prompt survives the child JSON bridge as UTF-8' `
+        ($utf8Completed -and $utf8Capture.prompt_hex -ceq '00A7 00B7 2014 2192') `
+        'child did not complete or prompt character codes changed in the child JSON bridge'
 
     $sleepWrapper = Join-Path $testRoot 'sleep-wrapper.ps1'
     Write-TestText $sleepWrapper @'

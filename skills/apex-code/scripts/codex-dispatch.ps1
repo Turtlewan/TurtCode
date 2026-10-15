@@ -2319,7 +2319,7 @@ function Invoke-Adopt {
     $adoptReviewSchema = @('review', 'codex-review-schema.json', 'endgate', 'afk-endgate-schema.json') -ccontains $adoptSchemaName
     if ($match.final_path -and (Test-Path -LiteralPath $match.final_path -PathType Leaf)) {
         try {
-            $adoptReport = Get-Content -LiteralPath $match.final_path -Raw | ConvertFrom-Json
+            $adoptReport = Get-Content -LiteralPath $match.final_path -Raw -Encoding UTF8 | ConvertFrom-Json
             $reportedAdoptStatus = [string]$adoptReport.status
 
             # Completion status is an exact, case-sensitive schema token. Review schemas carry no
@@ -4061,7 +4061,7 @@ try {
     $report = $null
     if (Test-Path -LiteralPath $finalPath -PathType Leaf) {
         try {
-            $report = Get-Content -LiteralPath $finalPath -Raw | ConvertFrom-Json
+            $report = Get-Content -LiteralPath $finalPath -Raw -Encoding UTF8 | ConvertFrom-Json
             $reportedCompletionStatus = [string]$report.status
             if ($Schema -ceq 'completion') {
                 # The completion schema has exactly three status tokens. PowerShell's normal
