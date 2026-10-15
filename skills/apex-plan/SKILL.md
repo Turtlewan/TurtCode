@@ -1,7 +1,7 @@
 ---
 skill: apex-plan
-version: 2.8.1
-last_updated: 2026-10-10
+version: 2.9.0
+last_updated: 2026-10-14
 sources:
   - docs/technical/adr/ADR-010-multi-pass-review.md
   - docs/technical/adr/ADR-011-instinct-loop-no-engine.md
@@ -38,6 +38,8 @@ the traps that only surface on a second pass.
 3. Check `docs/progress/*.md` â€” capture-at-halt records from blocked builds. Each must be **drained**:
    pull the spec back to `docs/drafts/` and apply the fixes through an `-AuthorSpec` revise
    dispatch (see Writing the spec). Delete the record once drained.
+   The wave-resume procedure runs only after every `docs/progress/*.md` capture-at-halt record is drained. An In-Flight slice row is surfaced for disposition only. Then surface an ordinary In-Flight row for a plan slice (partial, blocked or parked) for disposition before that plan's C4 pointer. A C4 pointer never authorizes a fresh build while its plan is stopped. While a plan is stopped, the resume procedure skips both its spec and build branches for that plan; only the revisions permitted while stopped run. The resume procedure never specs or builds a spec named in a `change held` row. For wave N, finish unfinished drafts in `docs/drafts/` first. Then spec against shipped code every wave-N slice with no draft in `docs/drafts/` and no spec in `docs/changes/` or `docs/changes/done/`. Then build wave-N specs in `docs/changes/`. Only after every wave-N slice spec archives to `docs/changes/done/`, advance the pointer and spec wave N+1 against shipped code.
+   Read the plan-stopped and change-held In-Flight rows before the pointer and enforce their guards across all affected slices and specs. Read each C4 pointer `plan · docs/plans/<plan>.md · next wave <N>` by that order. Use the slices table's wave column and C5 `plan: docs/plans/<plan>.md · slice: <slice-id>` in each slice spec's `## Intent`; after plan archival that path resolves under `docs/plans/done/`. The HOST maintains one pointer per active plan.
 4. Read the latest `docs/handoff/*.md` â€” see Â§ Drain the handoff.
 5. Run the doc-coverage check (below).
 6. Acknowledge: "{n} pending spec(s): {list}. Flags from last build: {or none}. Doc coverage:
@@ -55,6 +57,7 @@ One line, or "clean":
 5. Repo-root **`AGENTS.md`** still stubbed while â‰¥1 spec sits in `docs/changes/`, or its exact
    `## Verify commands` heading lacks the adjacent populated fence â€” **Codex builds read AGENTS.md,
    not these skills** (ADR-031/037).
+6. A target repo map is missing or has stale sections.
 
 ### Drain the handoff â€” inbox-zero, this session
 
@@ -69,6 +72,20 @@ at the drain. Don't wait for recurrence â€” when the user flags a deliverab
 it *while it's still in context*. A recurring lesson earns promotion via `apex-skill-author`
 (human-gated, Iron Law).
 
+## Intake
+
+The HOST proposes `Size: Trivial | Normal | Big; Risk: Low | Medium | High; target code repos: ...` in one line with evidence; the owner confirms labels only for Big or High, separately from plan approval. For Trivial, apply `references/system-map.md` § Four-part Trivial test before assigning the label; failure of any criterion means at least Normal. Bug is an entry route: `apex-debug` confirms root cause and passes its statement to Intake, which sizes the fix; a contract-changing fix is Big. Labels only rise.
+
+Selected repos are the target code repos, not the current directory or spec-owning repo. Normal selects per change; Big selects per plan, and each `### Slice <slice-id>` section has required `**Target code repos:**` and `**Cross-slice contracts produced or consumed:**` fields listing that slice's own selected repos and every cross-slice contract it produces or consumes. Before planning or author dispatch, for Normal, Big and non-Trivial bug fixes, run `apex-map-check.ps1 -Stale` for each selected repo with a map and read touched sections. Follow `references/system-map.md` § Freshness and targeted re-survey for exits, targeted re-survey and live-edit inspection; a no-map repo skips the read. After the slice-spec manifest exists, compare its build repos with that slice's selection (Normal: the change's selection). For Normal work, update the change's selection and read an added repo's map. A Big slice whose manifest names a repo outside its `**Target code repos:**` field stops its plan under the stop rule. Bring the mismatch to the OWNER before promotion. Update the slice's target-repo field through plan re-approval, then repeat the map step for each added repo before that slice builds. Repeat the map step before each just-in-time wave.
+
+Route Trivial to one-task Light on the normal wrapper path and `apex-size-guard.ps1` at HOST close-out; `OVER` triggers a map read and normal review before commit per `references/system-map.md` § Four-part Trivial test. Route Normal to one Light or Deep Details slice. If the existing split rule would require more than one spec for a change, the change is Big. The existing doc-only exception to the split rule remains in force. Route Big through C1 `## Planning gate check` and then one wave of slice specs at a time under C1 `## Plan artifact` in `references/sol-plan-check.md`. Apply the existing tier classification first: doc-only is Low unless it declares `risk: high`; explicit High wins. Every Medium or High Big-plan slice uses Deep Details, its readiness gate and its own post-readiness cold read by tier. A Low slice may use Light without a cold read. Keep Normal mode choice and Sol-skip rules.
+
+A completed plan archived under `docs/plans/done/` is never reopened; a change to it is new work that enters Intake as a new plan. A label rising to Big, or a contract change to an approved Big plan, stops that plan: the HOST starts no build dispatch, Engine run or unattended drain for any of its slices, brings every running or completed-but-uncommitted Engine run or drain touching the plan to the OWNER for disposition, and resumes the plan only after the owner re-approves it through § Planning gate check. While a plan is stopped, the only author dispatches permitted for its slices are revisions of slice specs authorized before the stop, including capture-at-halt drain revisions; authoring a new or changed slice waits for re-approval under § Planning gate check. A change that affects a slice already archived to `docs/changes/done/` in an active plan is new work: at re-approval the plan gains a new slice for it in the current C4 pointer wave N or a later wave; archived slice specs are never moved back. When a plan stops, the HOST adds an In-Flight row to `docs/status.md`: `plan stopped · docs/plans/<plan>.md · <trigger>`, and deletes it only after re-approval. Owner disposition also covers an unattended drain whose branch holds committed specs awaiting attended close-out: close-out of the stopped plan's slices waits for that disposition.
+
+The archived-slice rule applies only to changes made while a plan is stopped; any other change to a shipped slice is ordinary new work that enters Intake. An unbuilt spec has no committed build output on any branch; a spec with committed drain or Engine output awaits its owner disposition and is never listed for deletion until that disposition completes. A parked, paused or awaiting-review Engine run, a stopped drain, or an in-flight HOST manual-path dispatch touching a stopped plan or a spec held under the Normal-to-Big rule goes to the OWNER for disposition and is not resumed while the plan is stopped or the spec is held. At re-approval of a stopped plan, before deleting the stop row, the HOST lists every unbuilt slice spec the re-approved plan affects in `docs/drafts/` or `docs/changes/`. When a Normal change's label rises to Big, the HOST lists every unbuilt spec of that change in `docs/drafts/` or `docs/changes/`. When a Normal change's label rises to Big, the HOST adds an In-Flight row to `docs/status.md`: `change held · <spec names> · normal-to-big`, and deletes it only when the owner's disposition of every held spec completes. From the moment a Normal change's label rises to Big, the HOST starts no build dispatch, Engine run or unattended drain for any spec of that change, and brings every running Engine run or drain on such a spec to the OWNER; the specs stay held until the owner decides their deletion. If the owner declines the deletion, the specs stay held until the owner decides otherwise. For either disposition, the HOST expands the affected-spec list to include every unbuilt spec whose `## Prerequisites` names a listed spec and that is either in the same plan as that listed spec or outside any plan, repeating until no such spec remains. A prerequisite consumer that belongs to another plan is not deleted; that other plan stops under the stop rule instead, with trigger `prereq:<deleted-spec>`. With owner approval, the HOST deletes each listed spec together with its review sidecar and findings. When the re-approval and Normal-to-Big deletion rule deletes a spec, the HOST deletes that spec's `docs/progress/<name>.md` capture-at-halt record in the same owner-approved disposition. Every unbuilt spec whose `## Prerequisites` names a deleted spec and that is either in the same plan as that deleted spec or outside any plan is also affected: it is deleted and re-authored under the same owner-approved rule. Each affected slice is then re-authored as a fresh spec under a spec name no spec or draft has used, with its own new review record. The HOST renames the slices-table entries before the re-approval gate dispatch. The new Big plan created by a Normal-to-Big rise authors its slices fresh under unused names; an existing plan re-authors only its affected unbuilt slices. Built specs in `docs/changes/done/` are never deleted. No unbuilt spec moves from `docs/changes/` back to `docs/drafts/` through re-approval or Normal-to-Big disposition. The re-approval and Normal-to-Big deletion rule's no-move-back rule applies only to the re-approval and Normal-to-Big deletions; the capture-at-halt route and the revisions permitted while a plan is stopped are unchanged. The new slice goes in the current C4 pointer wave N or a later wave. `<trigger>` is `big-raise`, `contract:<name>`, `contract:target-code-repos/<slice-id>` or `prereq:<deleted-spec>`; each further trigger while the plan is stopped adds its own stop row, and the plan resumes only when re-approval deletes all of them. A Normal change whose label rises to Big has no plan to stop; it enters § Planning gate check as a new Big plan. Re-approval grants a fresh two-read budget under § Planning gate check; its reads continue the plan's existing `gate-N` numbering.
+
+Use the existing C1 `gate-N` review rows and approval path for re-approval.
+
 ## Mode
 
 Ask, and recommend the lightest that fits â€” don't default to heavy for a one-file change:
@@ -77,7 +94,6 @@ Ask, and recommend the lightest that fits â€” don't default to heavy for a 
 |------|-----|----------|
 | **Deep Details** | multi-file / architectural | full template Â· dispatched review Â· readiness gate Â· ADRs |
 | **Light** | a contained change | intent Â· key decisions Â· acceptance criteria Â· no gate |
-| **Bug Fix** | a bug | bug Â· root cause Â· fix approach Â· files. No gate, no ADR, no status.md update |
 
 ## Before drafting â€” resolve, don't discover
 
@@ -105,14 +121,7 @@ ask-first aesthetic gate, the cheap-mockup loop, the visual review gate).
 
 ## Writing the spec
 
-**FIRST, before you dispatch the author (Deep Details, Medium/High only): the pre-draft Sol
-architecture pass** â€” a cold `gpt-6.1-sol` read of the PLAN BRIEF (problem statement, proposed
-structure, file map), not of a spec. ADR-032 Â§1b; recipe in `references/sol-plan-check.md` Â§
-Pre-draft architecture pass. Low and doc-only specs skip this pass. It is advisory for Medium; for
-High it is an **approval gate** â€” an unresolved BLOCK means you print the **apex-governance Â§
-Approval gate** banner and get the explicit `Approve? [y / n / edit]` answer BEFORE any spec-author
-dispatch. Adjudicate its findings into the plan before drafting. It never replaces the
-post-readiness cold read below, and that read never sees its output.
+Big uses C1 § Planning gate check instead of the pre-draft pass. Non-Big Medium/High Deep Details retains the pre-draft pass and its independent post-readiness cold read. Low and doc-only skip under the existing tier rule. The Big gate output never enters the cold read.
 
 Template: `~/.claude/skills/apex-orchestrate/templates/spec-template.md`. Derive its execution manifest,
 Files to Change, and Tasks list from the same decisions: one entry per coder task, with explicit file operation and dependency IDs; exclude HOST/OWNER tasks from the manifest.
@@ -120,7 +129,11 @@ Files to Change, and Tasks list from the same decisions: one entry per coder tas
 spec author: gpt-6-sol through the wrapper's author mode. The host assembles a prompt pack (`$pack`)
 containing the adjudicated plan brief, the exact template path, the target `docs/drafts/<short-name>.md`
 (never straight to `docs/changes/`), and the three rules below (no why inline except Intent, mechanism
-in each task, one concern per task). For an absent draft, create:
+in each task, one concern per task).
+
+Normal and Trivial author dispatches keep the full adjudicated plan brief, the exact template path, the target draft and the three rules. For a Big slice, the author pack carries the C6 clean slice brief (slice intent, cross-slice contracts, cited map sections) in place of the full adjudicated plan brief, along with the existing template, target draft and three rules.
+
+For an absent draft, create:
 
 ```powershell
 & "$env:USERPROFILE\.claude\skills\apex-code\scripts\codex-dispatch.ps1" -AuthorSpec -Model gpt-6-sol -Task author -Spec <short-name> -Authorized "docs/drafts/<short-name>.md" -Worktree <repo> -BaseSha <HEAD> -Effort high -Prompt $pack
@@ -243,8 +256,12 @@ Before the readiness gate, dispatch `apex-critic` through the Agent tool with `m
 `model: opus` for High. The Agent tool's `model:` parameter takes precedence over the agent file's
 default frontmatter `model: sonnet`.
 
-Every Critic prompt contains the author prompt pack's adjudicated plan brief and the current full
-draft under review, so intent fidelity is reviewable. Before dispatching, the host runs
+Every Normal and Trivial Critic prompt contains the author prompt pack's adjudicated plan brief and the current full
+draft under review, so intent fidelity is reviewable.
+
+Normal and Trivial spec-mode Critic dispatches keep the full adjudicated plan brief and current full draft under review. Every spec-mode Critic dispatch of a Big slice receives the same C6 clean slice brief plus C2 plan-slice inputs: the plan path as reference only, the slice's section text, the plan's cross-slice contracts section text, and the map sections the slice cites, pasted in the prompt. The Big-slice Critic also receives the current full draft under review. Gate findings, `gate-N` rows, adjudication history and the rest of the plan narrative are excluded.
+
+Before dispatching, the host runs
 `git hash-object <draft>`, writes the value into the round's sidecar row, and passes it as the
 **FIRST line** of the prompt: `SPEC-DIGEST: <sha>`. Round 1 is a full fresh review. After an author
 revise dispatch, rounds 2â€“3 are fix checks: also pass the immediately prior
@@ -288,7 +305,7 @@ else counts. "Non-VOID rows" below means exactly this: every row except a comple
 - **Reviewer family and cap.** Reviewer-family rows are exactly the integer-numbered Critic
   spec-mode rows. At every tier, the cap is three non-VOID rows per spec lifetime unless the OWNER
   records approval for exactly one further fix-and-review cycle. The counter lives outside the
-  draft, so a re-draft does not reset it. Sol, author, and owner rows are not reviewer-family rows.
+  draft, so a re-draft does not reset it. Exception: an owner-approved deletion under the re-approval and Normal-to-Big deletion rule ends that spec's lifetime. For a spec still in `docs/drafts/`, the HOST first appends an `owner` row recording the deletion to its sidecar and the spec's row to `C:/Users/User/apex/docs/research/spec-author-trial.md`, dated the deletion day, then deletes the spec, sidecar and findings. A promoted spec in `docs/changes/` already has its trial row and no sidecar, so the HOST deletes it with no new rows. The re-authored spec under its new name starts a new lifetime. Sol, author, and owner rows are not reviewer-family rows.
 - **Host precondition â€” read before you dispatch.** Before any Critic spec-mode dispatch, read the
   sidecar and count non-VOID reviewer-family rows (`pending` counts; completed VOID does not). With
   three, refuse dispatch unless an `owner` row explicitly approves the one extra cycle; that
@@ -345,13 +362,7 @@ As the deterministic backstop to the prose Files-to-Change / Coverage / structur
                     what catches a silent DTO drop. deny-unknown-fields is a per-repo choice; this
                     gate never mandates it. Like Coverage and Sufficiency, this line is LLM-JUDGED
                     at gate time â€” apex-spec-validate.ps1 does not and cannot enforce it.
-[ ] Files evidenceâ€” the author GREPPED the live tree before listing ## Files to Change: a
-                    `Grep evidence:` line under the table records each pattern run and its hit
-                    count, for consumers of every changed file and for every path listed. Prose
-                    assurance ("checked the tree", "verified paths") FAILS this line â€” the check is
-                    for the evidence, not the claim. LLM-judged, like the line above. Doc-only
-                    criteria use presence/absence, version/date, cap, pointer, and verify-fence
-                    checks; exact-line manifests and whole-tree hashes are High-only.
+[ ] Map citations — the spec cites every map section it touches when a map exists.
 [ ] Review rounds â€” the spec's review-round sidecar shows FEWER THAN 3 non-VOID reviewer-family
                     rows (`pending` rows count; completed Disposition=VOID rows do not â€” Â§ Row
                     lifecycle) before any further Critic spec-mode dispatch, unless an `owner` row
@@ -375,7 +386,7 @@ As the deterministic backstop to the prose Files-to-Change / Coverage / structur
 ```
 
 **Then the Sol plan-check, for Medium/High only** (ADR-032): a cold `gpt-6.1-sol` read, read-only,
-schema'd, effort xhigh â€” `references/sol-plan-check.md`. Low and doc-only specs skip this pass.
+schema'd, effort xhigh â€” `references/sol-plan-check.md`. Apply each slice's own tier: doc-only is Low unless it declares `risk: high`; explicit High wins. Every Medium or High Big-plan slice receives this independent post-readiness cold read. Low slices and doc-only specs without explicit High skip this pass.
 It is advisory for Medium and **blocking for High**: an unresolved High BLOCK still gates
 promotion. Sol never edits the spec. For High work you may *offer* (never auto-run) the â‰¤2-round
 cross-model deliberation in that reference.
@@ -395,7 +406,7 @@ Never tell the user to "go read the file." Surface a digest in chat of **only th
 Omit the why, the task breakdown, boilerplate. They are auditing *fidelity*, not re-reading the spec.
 Close with: "Anything here not match what we discussed? Otherwise say 'start build.'"
 
-Deep Details â†’ digest + offer the file. Light â†’ digest only. Bug Fix â†’ one-line verbal confirm.
+Deep Details â†’ digest + offer the file. Light â†’ digest only.
 
 ## Closing the session
 
@@ -421,5 +432,4 @@ Deep Details â†’ digest + offer the file. Light â†’ digest only. Bug F
   and its separator, and verify that header with `Select-String -SimpleMatch` before the first append.
 - **status.md is LIVE STATE â€” rewritten, never appended. â‰¤100 lines** (ADR-037). A finished row is
   **deleted**, not marked done; git is the record. Never let a session narrative land here.
-- **Bug Fix:** no status.md update â€” ephemeral.
 - ADR + status procedures (formats, numbering) â†’ `references/adr-and-status-procedures.md`.

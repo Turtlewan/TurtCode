@@ -1,7 +1,7 @@
 ---
 skill: apex-orchestrate
-version: 2.6.0
-last_updated: 2026-10-10
+version: 2.7.0
+last_updated: 2026-10-14
 sources:
   - docs/technical/adr/ADR-015-dispatch-return-contract.md
   - docs/technical/adr/ADR-036-remove-knowledge-layer.md
@@ -41,6 +41,12 @@ Any In-Flight row, or a dirty tree that contradicts the table:
 
 > "You were mid-way through {X} ({state}). Continue, set it aside, or discard?"
 
+A `plan stopped` row is not a mid-way row: it routes to apex-plan's re-approval through § Planning gate check and is never offered continue, set aside or discard.
+
+A `change held` row is not a mid-way row: it routes to the owner's disposition of the held specs and is never offered continue, set aside or discard.
+
+A C4 plan pointer row (`plan · docs/plans/<plan>.md · next wave <N>`) is not a mid-way row: it routes to `apex-plan` § Session start's resume procedure instead of the continue / set aside / discard prompt.
+
 Never quietly build on top of it; never delete it. **Half-finished work is the highest-value thing
 you can surface** — it's the one thing the user has forgotten and the one thing that will corrupt the
 next diff.
@@ -57,7 +63,7 @@ half-refactor is unreviewable), then move. Two reads, one line, go.
 | build · implement · execute · start build — attended, Engine-eligible | **apex-code**, Engine path (default, attended): `& "$env:USERPROFILE\.claude\skills\apex-code\scripts\apex-engine.ps1" -SpecPath <absolute> -Repo <absolute> -Attended -MaxParallel 2` (`1` for `risk: high`). Read `engine-state.json` **status and diagnosis** when present; otherwise use the console `Engine refused: <message>` diagnosis. Exit **0** = build/hand-off complete, HOST close-out pending; **1** = refused/parked/failed/partial/quota-paused — diagnose, fix inputs/spec or seek owner disposition; **2** = `awaiting-review` — HOST runs Opus Critic on the integrated wave, then resumes with the bound clean/reject review record per **apex-code**. Follow its resume/recovery rules; after exit 0, run **apex-code/SKILL.md § Post-build** against the integrated tip, then owner-approved commit and proof-gated `-Teardown <runId>`. |
 | attended build — Engine-refused spec or owner-directed recovery | **apex-code**, attended **HOST manual path**: no manifest, shared-file tasks, multi-repo, `coder_model: sonnet`, or owner-directed escalation/fixes. For other refusals, use durable status/diagnosis or the console `Engine refused:` message to fix inputs/spec or route to manual recovery. HOST owns scheduling, dispatch, verify adjudication, integration, and recovery; close out per **apex-code/SKILL.md § Post-build**. Sonnet quota fallback requires owner decision. |
 | unattended (AFK) build | **apex-code**, documented HOST AFK/manual mechanics and governance gates; Engine is the default **attended** route only. |
-| broken · failing · bug · regression · "why does X" | **apex-debug** |
+| broken · failing · bug · regression · "why does X" | **apex-debug**; return its confirmed root-cause statement to **apex-plan** § Intake before any fix |
 | review this spec | apex-plan (dispatched spec review) |
 | review the built code | dispatch **`apex-critic`** with `mode: code`; on every Agent tool dispatch pass `model: sonnet` for Low/Medium or doc-only work and `model: opus` for High (`risk: high` overrides doc-only). The Agent tool's `model:` parameter overrides the agent file's default frontmatter `model: sonnet`. Follow **apex-code** for code review scope and cadence. |
 | deep dive · explore options · should we A or B | apex-deep-dive |
@@ -73,7 +79,7 @@ The Engine owns deterministic build mechanics on the attended eligible path. HOS
 your default in one line, then proceed on the default unless corrected. Ambiguity that changes *what
 gets built* is worth a question; ambiguity that changes only wording is not.
 
-**Auto-detect "what's next":** In-Flight rows → surface those. Else specs in `docs/changes/` → "next:
+**Auto-detect "what's next":** Surface ordinary In-Flight rows first, including a plan slice's partial, blocked or parked row for disposition before that plan's C4 pointer. Read `change held · <spec names> · normal-to-big` and route held specs to owner disposition. Read `plan stopped · docs/plans/<plan>.md · <trigger>` and hold the plan until owner re-approval. For a plan without such a row, read C4 `plan · docs/plans/<plan>.md · next wave <N>` and answer `next: finish/spec/build wave <N> of <plan>` according to the single wave-resume procedure in `apex-plan` § Session start. A pointer never implicitly authorizes a fresh build and cannot bypass a stopped plan. Auto-detect and the queued-spec fallback skip every spec named in a `change held` row. Else specs in `docs/changes/` → "next:
 build {spec}". Else drafts in `docs/drafts/` → "unfinished spec: {name}. Finish it?". Else → "Nothing
 queued. What do you want to plan next?"
 

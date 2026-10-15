@@ -1,7 +1,7 @@
 ---
 skill: apex-debug
-version: 1.4.1
-last_updated: 2026-07-29
+version: 1.5.0
+last_updated: 2026-10-14
 sources:
   - APEX Design Specification 2026-05-24
   - Superpowers (obra) — github.com/obra/superpowers
@@ -12,7 +12,7 @@ staleness_threshold: 30d
 description: >
   Use when investigating a bug, crash, test failure, or regression — "X is broken/not
   working". Reproduce-then-root-cause, one-hypothesis-at-a-time. Triggers: "debug X",
-  "why is X failing", Bug Fix mode, --forensic. Not new features.
+  "why is X failing", bug intake, --forensic. Not new features.
 ---
 
 # APEX Bug Investigation
@@ -73,6 +73,7 @@ One hypothesis at a time:
 A root cause statement must be specific:
 BAD:  "The auth is broken"
 GOOD: "The JWT expiry check uses server time but tokens are issued with client time, causing a 60-second window where expired tokens are accepted"
+After root-cause confirmation and before any fix, pass the specific root-cause statement to `apex-plan` § Intake for size/risk labels and route selection.
 
 ### Stage 4 — Fix
 
@@ -82,6 +83,7 @@ Surgical fix only:
 - No "while I'm here" improvements
 - No cleanup of unrelated issues
 - The fix must be directly traceable to the root cause
+Stage 4 builds through the Light or Deep Details route Intake selects; a contract-changing fix is Big and goes through the Big gate.
 
 ### Stage 5 — Verify
 
