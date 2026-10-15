@@ -1,7 +1,7 @@
 ---
 skill: apex-plan
-version: 2.9.0
-last_updated: 2026-10-14
+version: 2.9.1
+last_updated: 2026-10-15
 sources:
   - docs/technical/adr/ADR-010-multi-pass-review.md
   - docs/technical/adr/ADR-011-instinct-loop-no-engine.md
@@ -255,9 +255,6 @@ Before the readiness gate, dispatch `apex-critic` through the Agent tool with `m
 **every dispatch**, pass Agent tool `model: sonnet` for Low, Medium, and doc-only specs, and
 `model: opus` for High. The Agent tool's `model:` parameter takes precedence over the agent file's
 default frontmatter `model: sonnet`.
-
-Every Normal and Trivial Critic prompt contains the author prompt pack's adjudicated plan brief and the current full
-draft under review, so intent fidelity is reviewable.
 
 Normal and Trivial spec-mode Critic dispatches keep the full adjudicated plan brief and current full draft under review. Every spec-mode Critic dispatch of a Big slice receives the same C6 clean slice brief plus C2 plan-slice inputs: the plan path as reference only, the slice's section text, the plan's cross-slice contracts section text, and the map sections the slice cites, pasted in the prompt. The Big-slice Critic also receives the current full draft under review. Gate findings, `gate-N` rows, adjudication history and the rest of the plan narrative are excluded.
 
