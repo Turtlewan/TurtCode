@@ -37,7 +37,7 @@ spec: $Spec
 status: draft
 autonomy_level: L2
 risk: low
-coder_model: gpt-5.6-sol
+coder_model: gpt-6.1-sol
 coder_effort: medium
 max_parallel_codex: 2
 ---
@@ -134,7 +134,7 @@ function Invoke-TestWrapperEvent {
     }
     $parameters = @{
         Phase = 'build'; Spec = $Spec; Task = '1'; Worktree = $Repo; BaseSha = $BaseSha
-        Authorized = [string[]]@($Authorized); Effort = 'medium'; Model = 'gpt-5.6-sol'
+        Authorized = [string[]]@($Authorized); Effort = 'medium'; Model = 'gpt-6.1-sol'
         Prompt = "Engine adapter real-wrapper fixture: $CaseName"
         ScratchDirectory = (Join-Path $StateRoot 'scratch')
         CodexExecutable = 'powershell.exe'
@@ -202,7 +202,7 @@ try {
     $prefix = [string[]]@('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $fakeCodex)
     $common = @{
         Phase = 'build'; Spec = $spec; Task = '1'; BaseSha = $base1; SpecSourcePath = $snapshot
-        Authorized = [string[]]@('src/a.py', 'src/two.py'); Effort = 'medium'; Model = 'gpt-5.6-sol'
+        Authorized = [string[]]@('src/a.py', 'src/two.py'); Effort = 'medium'; Model = 'gpt-6.1-sol'
         Prompt = "typed prompt with 'quotes', spaces, and`na second line"
         CodexExecutable = 'powershell.exe'; CodexExecutableArgumentPrefix = $prefix
         ScratchDirectory = (Join-Path $stateRoot 'scratch')
@@ -697,7 +697,7 @@ exit 2
     $refusalOutput = Join-Path $stateRoot 'children\refusal.out'
     $refusalParameters = [ordered]@{
         Phase = 'build'; Spec = $spec; Task = '1'; Worktree = $repo1; BaseSha = $base1
-        SpecSourcePath = $snapshot; Effort = 'medium'; Model = 'gpt-5.6-sol'; Prompt = 'refusal fixture'
+        SpecSourcePath = $snapshot; Effort = 'medium'; Model = 'gpt-6.1-sol'; Prompt = 'refusal fixture'
         CodexExecutable = 'powershell.exe'; CodexExecutableArgumentPrefix = $prefix
         ScratchDirectory = (Join-Path $stateRoot 'scratch')
     }

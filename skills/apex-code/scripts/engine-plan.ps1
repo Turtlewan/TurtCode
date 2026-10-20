@@ -595,7 +595,7 @@ function Get-EnginePlan {
     $model = 'gpt-6.1-sol'
     if ($frontmatter.ContainsKey('coder_model')) {
         $declaredModel = [string]$frontmatter['coder_model']
-        if (@('codex', 'gpt-5.6-sol', 'gpt-6-sol', 'gpt-6.1-sol') -cnotcontains $declaredModel) {
+        if (@('codex', 'gpt-6-sol', 'gpt-6.1-sol') -cnotcontains $declaredModel) {
             $emptySpec.coder_model = $declaredModel
             if ($null -eq $frontmatterRefusal) { $frontmatterRefusal = 'frontmatter coder_model is not an allowed Codex model' }
         }

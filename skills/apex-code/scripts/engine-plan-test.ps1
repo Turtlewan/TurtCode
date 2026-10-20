@@ -545,13 +545,13 @@ try {
     }
     Assert-Case 'pinned model defaults and allowlist' {
         $default = Invoke-Plan (New-Fixture -SpecOptions @{ CoderModel = $null })
-        $legacyPinned = Invoke-Plan (New-Fixture -SpecOptions @{ CoderModel = 'gpt-5.6-sol' })
+        $legacyPinned = Invoke-Plan (New-Fixture -SpecOptions @{ CoderModel = ('gpt-5.6' + '-sol') })
         $pinned = Invoke-Plan (New-Fixture -SpecOptions @{ CoderModel = 'gpt-6-sol' })
         $newPinned = Invoke-Plan (New-Fixture -SpecOptions @{ CoderModel = 'gpt-6.1-sol' })
         $alias = Invoke-Plan (New-Fixture -SpecOptions @{ CoderModel = 'codex' })
         $bad = Invoke-Plan (New-Fixture -SpecOptions @{ CoderModel = 'sonnet' })
         return $default.allowed -and $default.spec.coder_model -ceq 'gpt-6.1-sol' -and
-            $legacyPinned.allowed -and $legacyPinned.spec.coder_model -ceq 'gpt-5.6-sol' -and
+            -not $legacyPinned.allowed -and
             $pinned.allowed -and $pinned.spec.coder_model -ceq 'gpt-6-sol' -and
             $newPinned.allowed -and $newPinned.spec.coder_model -ceq 'gpt-6.1-sol' -and
             $alias.allowed -and $alias.spec.coder_model -ceq 'gpt-6.1-sol' -and -not $bad.allowed

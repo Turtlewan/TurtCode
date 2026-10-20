@@ -192,7 +192,7 @@ spec: $name
 status: approved
 autonomy_level: L2
 risk: $Risk
-coder_model: gpt-5.6-sol
+coder_model: gpt-6.1-sol
 coder_effort: $Effort
 max_parallel_codex: 2
 ---
@@ -286,7 +286,7 @@ spec: $name
 status: approved
 autonomy_level: L2
 risk: medium
-coder_model: gpt-5.6-sol
+coder_model: gpt-6.1-sol
 coder_effort: $Effort
 ${ceilingLine}---
 
@@ -578,7 +578,7 @@ function New-TestRouteContext {
     $attempts = @()
     for ($n = 1; $n -le $AttemptCount; $n++) {
         $attempts += [pscustomobject][ordered]@{
-            number = $n; status = 'running'; effort = 'medium'; model = 'gpt-5.6-sol'; worktree = $testRoot
+            number = $n; status = 'running'; effort = 'medium'; model = 'gpt-6.1-sol'; worktree = $testRoot
             branch = "test-$n"; child_pid = $null; child_start_time = $null; wrapper_run_id = $null
             exit_code = $null; event_path = $null; args_path = (Join-Path $testRoot "route-$n.args.json")
             child_output_path = (Join-Path $testRoot "route-$n.out"); end_tree_digest = $null; diagnosis = $null
@@ -1659,7 +1659,7 @@ exit `$LASTEXITCODE
     Write-EngineDispatchArgs -ArgsPath $capacityArgs -Parameters @{
         Phase = 'build'; Spec = 'live-capacity'; Task = '1'; Worktree = $capacityRepo
         BaseSha = (Invoke-TestGit $capacityRepo @('rev-parse', 'HEAD'))[-1]; SpecSourcePath = $capacitySpec
-        Authorized = [string[]]@('src/a.py'); Effort = 'medium'; Model = 'gpt-5.6-sol'; Prompt = 'capacity fixture'
+        Authorized = [string[]]@('src/a.py'); Effort = 'medium'; Model = 'gpt-6.1-sol'; Prompt = 'capacity fixture'
         ScratchDirectory = (Join-Path $capacityStateRoot 'scratch'); CodexExecutable = 'powershell.exe'
         CodexExecutableArgumentPrefix = $prefix
     } | Out-Null
@@ -1708,7 +1708,7 @@ exit `$LASTEXITCODE
     $startTimeContext.attempt.child_output_path = Join-Path $testRoot 'start-time-child.out'
     $script:EngineState.spec | Add-Member -NotePropertyName snapshot_path -NotePropertyValue $spec -Force
     $script:EngineState | Add-Member -NotePropertyName plan -NotePropertyValue ([pscustomobject]@{
-        spec = [pscustomobject]@{ coder_model = 'gpt-5.6-sol' }
+        spec = [pscustomobject]@{ coder_model = 'gpt-6.1-sol' }
     }) -Force
     $script:EngineStatePath = Join-Path $testRoot 'start-time-state\engine-state.json'
     $suppliedStartTime = '2001-02-03T04:05:06.0000000Z'
@@ -2230,7 +2230,7 @@ exit 0
     $ladderEfforts = @($ladderCase.state.tasks[0].attempts | ForEach-Object { [string]$_.effort })
     Assert-Test 'verify failure climbs low to medium to high to xhigh then exhausts' `
         ($ladderCase.state.status -ceq 'partial' -and ($ladderEfforts -join ',') -ceq 'low,medium,high,xhigh' -and
-            @($ladderCase.state.tasks[0].attempts | Where-Object { $_.model -cne 'gpt-5.6-sol' }).Count -eq 0 -and
+            @($ladderCase.state.tasks[0].attempts | Where-Object { $_.model -cne 'gpt-6.1-sol' }).Count -eq 0 -and
             $ladderCase.state.tasks[0].diagnosis -ceq 'verification effort ladder exhausted') `
         ($ladderEfforts -join ',')
     $ladderResume = Invoke-TestEngine @('-Resume', $ladderCase.state.run_id, '-StateRoot', $ladderCase.state_root)
@@ -2479,7 +2479,7 @@ exit $code
             @($parkedAfter.tasks[0].attempts).Count -eq 1) $parkedResume.output
 
     $criticalJson.tasks[0].attempts = @([pscustomobject][ordered]@{
-        number = 1; status = 'running'; effort = 'medium'; model = 'gpt-5.6-sol'
+        number = 1; status = 'running'; effort = 'medium'; model = 'gpt-6.1-sol'
         worktree = $criticalJson.integration.worktree; branch = $criticalJson.integration.branch; child_pid = $PID
         child_start_time = (Get-RunnerProcessStamp $PID)
         wrapper_run_id = $null; exit_code = $null; event_path = $null
