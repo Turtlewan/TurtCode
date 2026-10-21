@@ -29,6 +29,11 @@ $oldResidueCaptureFailure = $env:APEX_ENGINE_TEST_FAIL_RESIDUE_CAPTURE
 $oldAgentsFetchFailure = $env:APEX_ENGINE_TEST_FAIL_AGENTS_FETCH
 $oldAgentsFetchTrace = $env:APEX_ENGINE_TEST_AGENTS_FETCH_TRACE_PATH
 $oldStageTrace = $env:APEX_ENGINE_TEST_STAGE_TRACE_PATH
+$fenceEnvironmentNames = @('ENGINE_TEST_BASELINE_LONG_OUTPUT', 'ENGINE_TEST_BASELINE_SEQUENCE',
+    'ENGINE_TEST_GATE_COUNTER', 'ENGINE_TEST_BASELINE_EXIT', 'ENGINE_TEST_PIN_EXIT', 'ENGINE_TEST_VERIFY_SEQUENCE',
+    'ENGINE_TEST_ACCEPT_COUNTER', 'APEX_ENGINE_TEST_CRASH_AFTER_VERIFICATION_FAILURE', 'ENGINE_TEST_REAL_TREE_PIN')
+$oldFenceEnvironment = @{}
+foreach ($name in $fenceEnvironmentNames) { $oldFenceEnvironment[$name] = [Environment]::GetEnvironmentVariable($name) }
 
 function Write-TestText {
     param([string]$Path, [string]$Text)
@@ -44,12 +49,19 @@ param([switch]$Full, [string]$Worktree)
 $counter = Join-Path $env:ENGINE_TEST_GATE_COUNTER 'baseline.txt'
 $count = if (Test-Path $counter) { [int](Get-Content $counter -Raw) } else { 0 }
 $count++; [IO.File]::WriteAllText($counter, [string]$count)
+$code = [int]$env:ENGINE_TEST_BASELINE_EXIT
 if ($env:ENGINE_TEST_BASELINE_SEQUENCE) {
     $sequence = @($env:ENGINE_TEST_BASELINE_SEQUENCE -split ',')
-    if ($count -le $sequence.Count) { exit ([int]$sequence[$count - 1]) }
+    if ($count -le $sequence.Count) { $code = [int]$sequence[$count - 1] }
 }
-Write-Host "baseline diagnosis $env:ENGINE_TEST_BASELINE_EXIT"
-exit ([int]$env:ENGINE_TEST_BASELINE_EXIT)
+if ($env:ENGINE_TEST_BASELINE_LONG_OUTPUT -ceq '1') {
+    [Console]::OutputEncoding = New-Object Text.UTF8Encoding($false)
+    Write-Output "baseline-invocation-$count-early-sentinel"
+    1..45 | ForEach-Object { Write-Output "baseline-invocation-$count-line-$_" }
+    Write-Output ([string][char]0x4e2d + [char]0x6587 + '-' + [char]0xe9)
+    Write-Output "baseline-invocation-$count-tail-sentinel"
+} else { Write-Host "baseline diagnosis $code" }
+exit $code
 '@
 
 }
@@ -442,6 +454,7 @@ function Invoke-TestEngineSplat {
     Write-TestText $jsonPath ($Parameters | ConvertTo-Json -Depth 20)
     if (-not (Test-Path -LiteralPath $launcher)) { Write-TestText $launcher @'
 param([string]$Engine, [string]$ParametersPath)
+if ($env:ENGINE_TEST_BASELINE_LONG_OUTPUT -ceq '1') { [Console]::OutputEncoding = New-Object Text.UTF8Encoding($false) }
 $raw = Get-Content -LiteralPath $ParametersPath -Raw | ConvertFrom-Json
 $splat = @{}
 foreach ($property in $raw.PSObject.Properties) {
@@ -453,8 +466,11 @@ foreach ($property in $raw.PSObject.Properties) {
 exit $LASTEXITCODE
 '@ }
     $old = $ErrorActionPreference; $ErrorActionPreference = 'Continue'
-    try { $output = @(& powershell.exe -NoProfile -ExecutionPolicy Bypass -File $launcher -Engine $engine -ParametersPath $jsonPath 2>&1 | ForEach-Object { [string]$_ }); $code = $LASTEXITCODE }
-    finally { $ErrorActionPreference = $old }
+    $oldEncoding = [Console]::OutputEncoding
+    try {
+        if ($env:ENGINE_TEST_BASELINE_LONG_OUTPUT -ceq '1') { [Console]::OutputEncoding = New-Object Text.UTF8Encoding($false) }
+        $output = @(& powershell.exe -NoProfile -ExecutionPolicy Bypass -File $launcher -Engine $engine -ParametersPath $jsonPath 2>&1 | ForEach-Object { [string]$_ }); $code = $LASTEXITCODE
+    } finally { [Console]::OutputEncoding = $oldEncoding; $ErrorActionPreference = $old }
     [pscustomobject]@{ code = [int]$code; output = ($output -join "`n") }
 }
 
@@ -478,6 +494,37 @@ function Get-TestFileSha256 {
     return (Get-FileHash -LiteralPath $Path -Algorithm SHA256).Hash.ToLowerInvariant()
 }
 
+function Get-TestBaselineOutput {
+    param([int]$Invocation)
+    $lines = @("baseline-invocation-$Invocation-early-sentinel")
+    $lines += @(1..45 | ForEach-Object { "baseline-invocation-$Invocation-line-$_" })
+    $lines += ([string][char]0x4e2d + [char]0x6587 + '-' + [char]0xe9)
+    $lines += "baseline-invocation-$Invocation-tail-sentinel"
+    return $lines -join "`n"
+}
+
+function Get-TestFenceLogs {
+    param([string]$StateRoot, [int]$WaveNumber = 1)
+    $stateFile = Get-TestOnlyStateFile $StateRoot
+    if ($null -eq $stateFile) { return @() }
+    $directory = Join-Path $stateFile.DirectoryName 'fence'
+    if (-not (Test-Path -LiteralPath $directory)) { return @() }
+    return @(Get-ChildItem -LiteralPath $directory -File -Filter "wave-$WaveNumber-*.log" | Sort-Object Name)
+}
+
+function Assert-TestFenceDiagnosis {
+    param([object]$Case, [int]$Count, [string]$Kind)
+    $logs = @(Get-TestFenceLogs $Case.state_root)
+    $diagnosis = [string]$Case.state.diagnosis
+    $transition = @($Case.state.transitions | Where-Object { $_.kind -ceq $Kind } | Select-Object -Last 1)
+    $suffix = ' -- fence logs: ' + (@($logs | ForEach-Object { $_.FullName }) -join '; ')
+    Assert-Test "$Kind diagnosis, transition and console retain every wave fence path once" `
+        ($logs.Count -eq $Count -and $diagnosis.EndsWith($suffix) -and
+            ([regex]::Matches($diagnosis, ' -- fence logs: ')).Count -eq 1 -and
+            $transition.Count -eq 1 -and $transition[0].detail -ceq $diagnosis -and
+            $Case.result.output.Contains("Diagnosis: $diagnosis")) $Case.result.output
+}
+
 function Test-NoWaveReview {
     param([AllowNull()][object]$State)
     if ($null -eq $State -or -not $State.PSObject.Properties['wave_runtime']) { return $true }
@@ -495,7 +542,8 @@ function Invoke-TestScenario {
         [AllowNull()][string]$BaselinePath, [AllowNull()][string]$TreePinPath,
         [AllowNull()][string]$CriticalPath, [string]$BuildOutput, [switch]$IgnoredFile,
         [AllowNull()][string]$AgentsFetchFailure, [AllowNull()][string]$AgentsFetchTrace,
-        [string]$AcceptanceText, [switch]$Delete
+        [string]$AcceptanceText, [switch]$Delete, [switch]$Attended,
+        [AllowEmptyString()][string]$CriticalFilesConfirmedNote
     )
     $repoPath = New-TestRepo "$Name-repo" -BuildOutput $BuildOutput
     $specPath = Join-Path $testRoot "$Name.md"
@@ -518,10 +566,13 @@ function Invoke-TestScenario {
         if ($BaselinePath) { $env:APEX_ENGINE_TEST_BASELINE_PATH = $BaselinePath } else { Remove-Item Env:APEX_ENGINE_TEST_BASELINE_PATH -ErrorAction SilentlyContinue }
         if ($TreePinPath) { $env:APEX_ENGINE_TEST_TREE_PIN_PATH = $TreePinPath } else { Remove-Item Env:APEX_ENGINE_TEST_TREE_PIN_PATH -ErrorAction SilentlyContinue }
         if ($CriticalPath) { $env:APEX_ENGINE_TEST_CRITICAL_PATH = $CriticalPath } else { Remove-Item Env:APEX_ENGINE_TEST_CRITICAL_PATH -ErrorAction SilentlyContinue }
-        $result = Invoke-TestEngineSplat @{
+        $parameters = @{
             SpecPath = $specPath; Repo = $repoPath; StateRoot = $statePath; WorktreeRoot = $worktrees
             CodexExecutable = 'powershell.exe'; CodexExecutableArgumentPrefix = $script:prefix
-        } $Name
+        }
+        if ($Attended) { $parameters.Attended = $true }
+        if ($PSBoundParameters.ContainsKey('CriticalFilesConfirmedNote')) { $parameters.CriticalFilesConfirmedNote = $CriticalFilesConfirmedNote }
+        $result = Invoke-TestEngineSplat $parameters $Name
         [pscustomobject]@{
             result = $result; state = (Get-TestOnlyState $statePath); repo = $repoPath
             spec = $specPath; state_root = $statePath; worktree_root = $worktrees
@@ -701,6 +752,7 @@ try {
     $env:GIT_CONFIG_GLOBAL = Join-Path $testRoot 'empty.gitconfig'
     Write-TestText $env:GIT_CONFIG_GLOBAL "[user]`nname = Engine Test`nemail = engine@example.invalid`n"
     $env:APEX_ENGINE_TEST_MODE = '1'
+    Remove-Item Env:ENGINE_TEST_BASELINE_LONG_OUTPUT -ErrorAction SilentlyContinue
     Remove-Item Env:APEX_ENGINE_TEST_FAIL_AGENTS_FETCH, Env:APEX_ENGINE_TEST_AGENTS_FETCH_TRACE_PATH -ErrorAction SilentlyContinue
     # apex-engine.ps1 reads this test-only timing seam while it is imported.
     $env:APEX_ENGINE_TEST_RETRY_DELAY_SECONDS = '0'
@@ -1740,6 +1792,7 @@ exit `$LASTEXITCODE
     $gateBaseline = Join-Path $testRoot 'fake-baseline.ps1'
     Write-TestText $gatePin @'
 param([switch]$Pin, [switch]$Verify, [switch]$Digest, [string]$Worktree, [string]$Label, [string]$PinDirectory)
+if ($Digest) { & $env:ENGINE_TEST_REAL_TREE_PIN -Digest -Worktree $Worktree; exit $LASTEXITCODE }
 $kind = if ($Pin) { 'pin' } elseif ($Verify) { 'verify' } else { 'digest' }
 $counter = Join-Path $env:ENGINE_TEST_GATE_COUNTER "$kind.txt"
 $count = if (Test-Path $counter) { [int](Get-Content $counter -Raw) } else { 0 }
@@ -1753,6 +1806,10 @@ if ($Verify) {
 Write-Host "$kind ok"; exit 0
 '@
     New-TestGateBaseline $gateBaseline
+    $matrixStage = ${function:Stage-EngineWave}
+    $matrixEnvironment = @{}
+    foreach ($name in $fenceEnvironmentNames) { $matrixEnvironment[$name] = [Environment]::GetEnvironmentVariable($name) }
+    try {
     function Stage-EngineWave { param($TargetWorktree, $IntegrationWorktree, $Files) [pscustomobject]@{ ok = $script:TestStageOk; failures = @() } }
     $script:EngineTreePinScript = $gatePin; $script:EngineBaselineScript = $gateBaseline; $script:TestStageOk = $true
     $gateContext = New-TestRouteContext
@@ -1763,33 +1820,62 @@ Write-Host "$kind ok"; exit 0
     $script:EngineStatePath = Join-Path $testRoot 'gate-state\engine-state.json'
     [void][IO.Directory]::CreateDirectory((Split-Path $script:EngineStatePath -Parent))
     $gateCodes = @{}
+    $matrixEncoding = [Console]::OutputEncoding
+    $matrixLongOutput = $env:ENGINE_TEST_BASELINE_LONG_OUTPUT
+    try {
+    [Console]::OutputEncoding = New-Object Text.UTF8Encoding($false)
+    $env:ENGINE_TEST_BASELINE_LONG_OUTPUT = '1'
     foreach ($baselineCode in @(0, 1, 3, 4, 9)) {
         $counterRoot = Join-Path $testRoot "gate-$baselineCode"; [void][IO.Directory]::CreateDirectory($counterRoot)
         $env:ENGINE_TEST_GATE_COUNTER = $counterRoot; $env:ENGINE_TEST_BASELINE_EXIT = [string]$baselineCode
         $env:ENGINE_TEST_VERIFY_SEQUENCE = '0'; Remove-Item Env:ENGINE_TEST_PIN_EXIT -ErrorAction SilentlyContinue
-        $gateCodes[[string]$baselineCode] = Invoke-RunnerGate @() 1
+        $gateCodes[[string]$baselineCode] = Invoke-RunnerGate @() ($baselineCode + 20)
+        $logs = @(Get-RunnerWaveFenceLogPaths ($baselineCode + 20))
+        Assert-Test "baseline $baselineCode creates a full fence log only for nonzero exits" `
+            ($logs.Count -eq $(if ($baselineCode -eq 0) { 0 } else { 1 })) ($logs -join '; ')
+        if ($logs.Count -eq 1) {
+            $bytes = [IO.File]::ReadAllBytes($logs[0])
+            $full = (New-Object Text.UTF8Encoding($false, $true)).GetString($bytes)
+            $tail = [string]$gateCodes[[string]$baselineCode].output_tail
+            Assert-Test "baseline $baselineCode preserves full non-ASCII UTF-8 output and last forty lines" `
+                ($full -ceq (Get-TestBaselineOutput 1) -and $full -ceq $gateCodes[[string]$baselineCode].diagnosis -and
+                    -not ($bytes[0] -eq 239 -and $bytes[1] -eq 187 -and $bytes[2] -eq 191) -and
+                    @($tail -split "`n").Count -eq 40 -and -not $tail.Contains('early-sentinel') -and
+                    $tail.EndsWith('baseline-invocation-1-tail-sentinel') -and
+                    $tail -ceq (@((Get-TestBaselineOutput 1) -split "`n" | Select-Object -Last 40) -join "`n") -and
+                    (Split-Path -Parent $logs[0]) -ceq (Join-Path (Split-Path -Parent $script:EngineStatePath) 'fence') -and
+                    (Split-Path -Leaf $logs[0]) -cmatch ('^wave-' + ($baselineCode + 20) + '-combined-[0-9]{8}T[0-9]{9}Z\.log$')) $full
+        }
     }
+    } finally { [Console]::OutputEncoding = $matrixEncoding; $env:ENGINE_TEST_BASELINE_LONG_OUTPUT = $matrixLongOutput }
     Assert-Test 'baseline behavior distinguishes GREEN 0, RED 1, UNPARSEABLE 3, NO_RECIPE 4, and other' `
         ($gateCodes['0'].gate -ceq 'baseline' -and $gateCodes['0'].code -eq 0 -and $gateCodes['1'].code -eq 1 -and
             $gateCodes['3'].code -eq 3 -and $gateCodes['4'].code -eq 4 -and $gateCodes['9'].code -eq 9) 'baseline codes were collapsed'
     $script:TestStageOk = $false
-    $stageFailure = Invoke-RunnerGate @() 1
+    $stageFailure = Invoke-RunnerGate @() 30
     $script:TestStageOk = $true
     Assert-Test 'operation-precondition stage failure is classified as verify failure' `
-        ($stageFailure.gate -ceq 'stage' -and $stageFailure.code -eq 1 -and $stageFailure.diagnosis -ceq 'operation precondition failure') `
+        ($stageFailure.gate -ceq 'stage' -and $stageFailure.code -eq 1 -and $stageFailure.diagnosis -ceq 'operation precondition failure' -and
+            @(Get-RunnerWaveFenceLogPaths 30).Count -eq 0) `
         ($stageFailure | ConvertTo-Json -Compress)
 
     $pinCounter = Join-Path $testRoot 'gate-pin-fail'; [void][IO.Directory]::CreateDirectory($pinCounter)
     $env:ENGINE_TEST_GATE_COUNTER = $pinCounter; $env:ENGINE_TEST_BASELINE_EXIT = '0'; $env:ENGINE_TEST_PIN_EXIT = '1'; $env:ENGINE_TEST_VERIFY_SEQUENCE = '0'
-    $pinFailure = Invoke-RunnerGate @() 1
+    $pinFailure = Invoke-RunnerGate @() 31
     Assert-Test 'tree-pin infrastructure failure is not baseline RED and preserves exit/diagnosis' `
-        ($pinFailure.gate -ceq 'pin' -and $pinFailure.code -eq 1 -and $pinFailure.diagnosis -match 'pin infrastructure diagnosis') `
+        ($pinFailure.gate -ceq 'pin' -and $pinFailure.code -eq 1 -and $pinFailure.diagnosis -match 'pin infrastructure diagnosis' -and
+            @(Get-RunnerWaveFenceLogPaths 31).Count -eq 0 -and -not (Test-Path (Join-Path $pinCounter 'baseline.txt'))) `
         ($pinFailure | ConvertTo-Json -Compress)
 
     Remove-Item Env:ENGINE_TEST_PIN_EXIT -ErrorAction SilentlyContinue
     $repinCounter = Join-Path $testRoot 'gate-repin'; [void][IO.Directory]::CreateDirectory($repinCounter)
-    $env:ENGINE_TEST_GATE_COUNTER = $repinCounter; $env:ENGINE_TEST_VERIFY_SEQUENCE = '69,0'
-    $repin = Invoke-RunnerGate @() 1
+    $env:ENGINE_TEST_GATE_COUNTER = $repinCounter; $env:ENGINE_TEST_VERIFY_SEQUENCE = '69,0'; $env:ENGINE_TEST_BASELINE_EXIT = '1'
+    $repin = Invoke-RunnerGate @() 32
+    $repinLogs = @(Get-RunnerWaveFenceLogPaths 32)
+    Assert-Test 'nonzero baseline is logged before a superseding integrity failure' `
+        ($repin.gate -ceq 'verify' -and $repinLogs.Count -eq 1 -and
+            [IO.File]::ReadAllText($repinLogs[0]) -ceq 'baseline diagnosis 1') ($repinLogs -join '; ')
+    $env:ENGINE_TEST_BASELINE_EXIT = '0'
     $repinCounts = @((Get-Content (Join-Path $repinCounter 'pin.txt') -Raw), (Get-Content (Join-Path $repinCounter 'verify.txt') -Raw), (Get-Content (Join-Path $repinCounter 'baseline.txt') -Raw))
     Assert-Test 'single-pass gate' `
         ($repin.gate -ceq 'verify' -and $repin.code -eq 69 -and
@@ -1813,6 +1899,37 @@ Write-Host "$kind ok"; exit 0
             $identityFailure.diagnosis -match 'git index identity read before pin failed' -and
             $identityFailure.diagnosis -match 'git ls-files') ($identityFailure | ConvertTo-Json -Compress)
     Remove-Item Env:ENGINE_TEST_GATE_COUNTER, Env:ENGINE_TEST_BASELINE_EXIT, Env:ENGINE_TEST_VERIFY_SEQUENCE -ErrorAction SilentlyContinue
+    } finally {
+        Set-Item Function:Stage-EngineWave $matrixStage
+        foreach ($name in $fenceEnvironmentNames) { [Environment]::SetEnvironmentVariable($name, $matrixEnvironment[$name]) }
+    }
+
+    $collisionStatePath = $script:EngineStatePath
+    try {
+        $script:EngineStatePath = Join-Path $testRoot 'fence-helper/engine-state.json'
+        Assert-Test 'absent wave fence inventory is empty' (@(Get-RunnerWaveFenceLogPaths 1).Count -eq 0) ''
+        $stamp = '20261021T010203004Z'
+        $firstLog = Write-RunnerFenceLog 1 combined 'original' $stamp
+        $secondLog = Write-RunnerFenceLog 1 combined 'second' $stamp
+        $thirdLog = Write-RunnerFenceLog 1 combined 'third' $stamp
+        $taskLog = Write-RunnerFenceLog 1 task-12 'isolated' $stamp
+        [void](Write-RunnerFenceLog 10 combined 'wave ten' $stamp)
+        [void](Write-RunnerFenceLog 11 combined 'wave eleven' $stamp)
+        Write-TestText (Join-Path (Split-Path -Parent $firstLog) 'wave-1-unrelated.log.extra') 'not a log'
+        Assert-Test 'exclusive collisions preserve original and -2 and create -3' `
+            ([IO.File]::ReadAllText($firstLog) -ceq 'original' -and [IO.File]::ReadAllText($secondLog) -ceq 'second' -and
+                [IO.File]::ReadAllText($thirdLog) -ceq 'third' -and $secondLog.EndsWith("$stamp-2.log") -and $thirdLog.EndsWith("$stamp-3.log")) $thirdLog
+        $inventory = @(Get-RunnerWaveFenceLogPaths 1)
+        $expectedInventory = @($firstLog, $secondLog, $thirdLog, $taskLog) | Sort-Object { Split-Path -Leaf $_ }
+        Assert-Test 'wave inventory uses exact trailing dash and deterministic full filename order' `
+            ($inventory.Count -eq 4 -and ($inventory -join "`n") -ceq ($expectedInventory -join "`n")) ($inventory -join '; ')
+        # A file blocking the fence directory is an I/O failure, not a filename collision.
+        $script:EngineStatePath = Join-Path $testRoot 'fence-io-error/engine-state.json'
+        Write-TestText (Join-Path (Split-Path -Parent $script:EngineStatePath) 'fence') 'blocking file'
+        $ioFailed = $false
+        try { [void](Write-RunnerFenceLog 1 combined 'must fail' $stamp) } catch { $ioFailed = $true }
+        Assert-Test 'non-collision fence I/O failures propagate' $ioFailed ''
+    } finally { $script:EngineStatePath = $collisionStatePath }
 
     $env:APEX_ENGINE_TEST_FAIL_INDEX_IDENTITY = '1'
     try { $identityFailureCase = Invoke-TestScenario -Name 'git-identity-failure' -Scenario 'done' -Single }
@@ -1903,15 +2020,26 @@ Write-Host "$kind ok"; exit 0
         $processResume.output
 
     foreach ($baselineExit in @(3, 4, 9)) {
+        $env:ENGINE_TEST_GATE_COUNTER = Join-Path $testRoot "baseline-$baselineExit-counter"
+        [void][IO.Directory]::CreateDirectory($env:ENGINE_TEST_GATE_COUNTER)
         $env:ENGINE_TEST_BASELINE_EXIT = [string]$baselineExit
-        $baselineCase = Invoke-TestScenario -Name "baseline-$baselineExit" -Scenario 'done' -Single -BaselinePath $gateBaseline
+        $parkLongOutput = $env:ENGINE_TEST_BASELINE_LONG_OUTPUT
+        try {
+            $env:ENGINE_TEST_BASELINE_LONG_OUTPUT = '1'
+            $baselineCase = Invoke-TestScenario -Name "baseline-$baselineExit" -Scenario 'done' -Single -BaselinePath $gateBaseline
+        } finally { $env:ENGINE_TEST_BASELINE_LONG_OUTPUT = $parkLongOutput }
         Assert-Test "baseline exit $baselineExit parks with exact code and never enters RED retry" `
             ($baselineCase.result.code -ne 0 -and $baselineCase.state.status -ceq 'parked' -and
                 @($baselineCase.state.tasks[0].attempts).Count -eq 1 -and
                 $baselineCase.state.diagnosis -match "baseline gate exit $baselineExit") `
             $baselineCase.result.output
+        Assert-TestFenceDiagnosis $baselineCase 1 parked
+        $parkLogs = @(Get-TestFenceLogs $baselineCase.state_root)
+        Assert-Test "park code $baselineExit retains full combined baseline invocation" `
+            ($parkLogs.Count -eq 1 -and $parkLogs[0].Name -match '^wave-1-combined-' -and
+                [IO.File]::ReadAllText($parkLogs[0].FullName) -ceq (Get-TestBaselineOutput 1)) $baselineCase.result.output
     }
-    Remove-Item Env:ENGINE_TEST_BASELINE_EXIT -ErrorAction SilentlyContinue
+    Remove-Item Env:ENGINE_TEST_BASELINE_EXIT, Env:ENGINE_TEST_GATE_COUNTER -ErrorAction SilentlyContinue
 
     $stageAwarePin = Join-Path $testRoot 'stage-aware-tree-pin.ps1'
     Write-TestText $stageAwarePin @'
@@ -2028,6 +2156,8 @@ exit 0
     $script:EngineState | Add-Member -MemberType NoteProperty -Name wave_runtime `
         -Value ([pscustomobject]@{ '1' = [pscustomobject]@{ residue_inventory = @() } }) -Force
     $originalInvokeRunnerScript = ${function:Invoke-RunnerScript}
+    $headGateStage = ${function:Stage-EngineWave}
+    function Stage-EngineWave { param($TargetWorktree, $IntegrationWorktree, $Files) [pscustomobject]@{ ok = $true } }
     function Invoke-RunnerScript {
         param([string]$Path, [string[]]$Arguments)
         if ($Path -ceq $script:EngineBaselineScript) {
@@ -2039,7 +2169,10 @@ exit 0
         return [pscustomobject]@{ exit_code = 0; output = 'pin fixture ok' }
     }
     try { $headGate = Invoke-RunnerGate @() 1 }
-    finally { Set-Item -LiteralPath Function:Invoke-RunnerScript -Value $originalInvokeRunnerScript }
+    finally {
+        Set-Item -LiteralPath Function:Invoke-RunnerScript -Value $originalInvokeRunnerScript
+        Set-Item Function:Stage-EngineWave $headGateStage
+    }
     Assert-Test 'verify HEAD commit mutation parks without changing integration.tip' `
         ($headGate.gate -ceq 'verify' -and $headGate.diagnosis -ceq 'integration verify moved HEAD' -and
             $script:EngineState.integration.tip -ceq $headGateTip) ($headGate | ConvertTo-Json -Compress)
@@ -2238,6 +2371,19 @@ exit 0
     Assert-Test 'ladder-exhausted task remains exhausted across resume without cycling' `
         ($ladderResume.code -ne 0 -and @($ladderAfter.tasks[0].attempts).Count -eq 4 -and
             $ladderAfter.tasks[0].diagnosis -ceq 'verification effort ladder exhausted') $ladderResume.output
+    Assert-TestFenceDiagnosis $ladderCase 4 partial
+    Assert-TestFenceDiagnosis ([pscustomobject]@{ state = $ladderAfter; state_root = $ladderCase.state_root; result = $ladderResume }) 4 partial
+    Assert-Test 'exhaustion keeps attempt verification discriminants unchanged' `
+        (@($ladderAfter.tasks[0].attempts | Where-Object { $_.diagnosis -cne 'verification failure' }).Count -eq 0) $ladderResume.output
+    # Recreate the failed-attempt/no-next-rung resume window in the external fixture.
+    $ladderAfter.tasks[0].diagnosis = $null
+    Write-TestText (Get-TestOnlyStateFile $ladderCase.state_root).FullName ($ladderAfter | ConvertTo-Json -Depth 100)
+    $lastRungResume = Invoke-TestEngine @('-Resume', $ladderAfter.run_id, '-StateRoot', $ladderCase.state_root)
+    $lastRungAfter = Get-TestOnlyState $ladderCase.state_root
+    Assert-Test 'failed terminal attempt resume exhausts without redispatch or losing fence paths' `
+        ($lastRungResume.code -ne 0 -and @($lastRungAfter.tasks[0].attempts).Count -eq 4 -and
+            $lastRungAfter.tasks[0].diagnosis -ceq 'verification effort ladder exhausted') $lastRungResume.output
+    Assert-TestFenceDiagnosis ([pscustomobject]@{ state = $lastRungAfter; state_root = $ladderCase.state_root; result = $lastRungResume }) 4 partial
 
     foreach ($terminalEffort in @('max', 'ultra')) {
         $terminalCase = Invoke-TestScenario -Name "ladder-$terminalEffort" -Scenario 'always_verify_fail' -Single -Effort $terminalEffort
@@ -2253,6 +2399,124 @@ exit 0
         ($isolationCase.result.code -eq 0 -and @($taskOne.attempts).Count -eq 1 -and
             @($taskTwelve.attempts).Count -eq 2 -and ($taskTwelve.attempts.effort -join ',') -ceq 'medium,high') `
         $isolationCase.result.output
+
+    # All new fence/confirmation fixtures live beneath the existing TEMP test root.
+    $caseEnvironment = @{}
+    foreach ($name in $fenceEnvironmentNames) { $caseEnvironment[$name] = [Environment]::GetEnvironmentVariable($name) }
+    try {
+        $env:ENGINE_TEST_BASELINE_LONG_OUTPUT = '1'
+        $env:ENGINE_TEST_BASELINE_EXIT = '0'
+        Remove-Item Env:ENGINE_TEST_PIN_EXIT, Env:APEX_ENGINE_TEST_CRASH_AFTER_VERIFICATION_FAILURE -ErrorAction SilentlyContinue
+        foreach ($isolatedRed in @($true, $false)) {
+            $caseName = if ($isolatedRed) { 'fence-ambiguous-many' } else { 'fence-ambiguous-none' }
+            $env:ENGINE_TEST_GATE_COUNTER = Join-Path $testRoot "$caseName-counter"
+            [void][IO.Directory]::CreateDirectory($env:ENGINE_TEST_GATE_COUNTER)
+            $env:ENGINE_TEST_BASELINE_SEQUENCE = if ($isolatedRed) { '1,1,1' } else { '1,0,0' }
+            $ambiguous = Invoke-TestScenario -Name $caseName -FirstId 1 -SecondId 12 -BaselinePath $gateBaseline
+            Assert-Test "$caseName preserves ambiguous attribution and avoids retries" `
+                ($ambiguous.result.code -ne 0 -and $ambiguous.state.status -ceq 'partial' -and
+                    $ambiguous.state.diagnosis.StartsWith('ambiguous wave verification failure -- fence logs: ') -and
+                    @($ambiguous.state.tasks | Where-Object { @($_.attempts).Count -ne 1 }).Count -eq 0) $ambiguous.result.output
+            $expectedCount = if ($isolatedRed) { 3 } else { 1 }
+            Assert-TestFenceDiagnosis $ambiguous $expectedCount partial
+            $ambiguousLogs = @(Get-TestFenceLogs $ambiguous.state_root)
+            foreach ($invocation in 1..$expectedCount) {
+                $scope = @('combined', 'task-1', 'task-12')[$invocation - 1]
+                $scopeLogs = @($ambiguousLogs | Where-Object { $_.Name -match ("^wave-1-$scope-") })
+                Assert-Test "$caseName $scope log retains only its full invocation" `
+                    ($scopeLogs.Count -eq 1 -and [IO.File]::ReadAllText($scopeLogs[0].FullName) -ceq (Get-TestBaselineOutput $invocation)) ($ambiguousLogs.FullName -join '; ')
+            }
+        }
+
+        $env:ENGINE_TEST_REAL_TREE_PIN = Join-Path $PSScriptRoot 'tree-pin.ps1'
+        $env:ENGINE_TEST_GATE_COUNTER = Join-Path $testRoot 'fence-integrity-counter'
+        [void][IO.Directory]::CreateDirectory($env:ENGINE_TEST_GATE_COUNTER)
+        $env:ENGINE_TEST_BASELINE_SEQUENCE = '1'; $env:ENGINE_TEST_VERIFY_SEQUENCE = '24'
+        $integrityFence = Invoke-TestScenario -Name 'fence-integrity-park' -Single -BaselinePath $gateBaseline -TreePinPath $gatePin
+        Assert-Test 'integrity park supersedes RED routing while retaining the prior baseline log' `
+            ($integrityFence.state.status -ceq 'parked' -and $integrityFence.state.diagnosis -match '^verify gate exit 24:' -and
+                @($integrityFence.state.tasks[0].attempts).Count -eq 1) $integrityFence.result.output
+        Assert-TestFenceDiagnosis $integrityFence 1 parked
+        $integrityLogs = @(Get-TestFenceLogs $integrityFence.state_root)
+        Assert-Test 'superseded baseline log contains its complete captured output' `
+            ($integrityLogs.Count -eq 1 -and [IO.File]::ReadAllText($integrityLogs[0].FullName) -ceq (Get-TestBaselineOutput 1)) $integrityFence.result.output
+        Remove-Item Env:ENGINE_TEST_VERIFY_SEQUENCE -ErrorAction SilentlyContinue
+
+        foreach ($singleTask in @($true, $false)) {
+            $caseName = if ($singleTask) { 'fence-tail-single' } else { 'fence-tail-isolation' }
+            $note = 'owner approved critical writes for fence regression'
+            $confirmationLine = "OWNER LIVE CONFIRMATION (attended): the owner confirmed critical-file writes for this run: $note. Any spec requirement for live confirmation of these files is satisfied."
+            $env:ENGINE_TEST_GATE_COUNTER = Join-Path $testRoot "$caseName-counter"
+            [void][IO.Directory]::CreateDirectory($env:ENGINE_TEST_GATE_COUNTER)
+            $env:ENGINE_TEST_BASELINE_SEQUENCE = if ($singleTask) { '1,0' } else { '1,0,1,0' }
+            $env:APEX_ENGINE_TEST_CRASH_AFTER_VERIFICATION_FAILURE = 'low'
+            $tailCase = Invoke-TestScenario -Name $caseName -Single:$singleTask -FirstId 1 -SecondId 12 -Effort low `
+                -BaselinePath $gateBaseline -Attended -CriticalFilesConfirmedNote $note
+            Remove-Item Env:APEX_ENGINE_TEST_CRASH_AFTER_VERIFICATION_FAILURE -ErrorAction SilentlyContinue
+            $failedIndex = if ($singleTask) { 0 } else { 1 }
+            $invocation = if ($singleTask) { 1 } else { 3 }
+            $failedAttempt = $tailCase.state.tasks[$failedIndex].attempts[0]
+            $savedTail = [string]$failedAttempt.acceptance_output_tail
+            $expectedTail = @((Get-TestBaselineOutput $invocation) -split "`n" | Select-Object -Last 40) -join "`n"
+            $frozenPlan = $tailCase.state.plan | ConvertTo-Json -Depth 100 -Compress
+            Assert-Test "$caseName journals only the attributed baseline last forty lines before resume" `
+                ($tailCase.result.code -ne 0 -and $failedAttempt.status -ceq 'failed' -and $failedAttempt.diagnosis -ceq 'verification failure' -and
+                    $savedTail -ceq $expectedTail -and -not $savedTail.Contains('early-sentinel') -and
+                    ($singleTask -or (-not $savedTail.Contains('baseline-invocation-1-') -and -not $savedTail.Contains('baseline-invocation-2-')))) $tailCase.result.output
+            $resumeBaseline = $env:APEX_ENGINE_TEST_BASELINE_PATH
+            try {
+                $env:APEX_ENGINE_TEST_BASELINE_PATH = $gateBaseline
+                $tailResume = Invoke-TestEngineSplat @{
+                    Resume = $tailCase.state.run_id; StateRoot = $tailCase.state_root
+                    Attended = $true; CriticalFilesConfirmedNote = $note
+                } "$caseName-resume"
+            } finally { $env:APEX_ENGINE_TEST_BASELINE_PATH = $resumeBaseline }
+            $tailAfter = Get-TestOnlyState $tailCase.state_root
+            $retryArgs = Get-Content -LiteralPath $tailAfter.tasks[$failedIndex].attempts[1].args_path -Raw -Encoding UTF8 | ConvertFrom-Json
+            Assert-Test "$caseName resumes only the failed task with the current tail and frozen prompt/digest" `
+                ($tailResume.code -eq 0 -and $tailAfter.status -ceq 'complete' -and
+                    @($tailAfter.tasks[$failedIndex].attempts).Count -eq 2 -and
+                    ($singleTask -or @($tailAfter.tasks[0].attempts).Count -eq 1) -and
+                    $tailAfter.tasks[$failedIndex].attempts[0].acceptance_output_tail -ceq $savedTail -and
+                    $retryArgs.Prompt -ceq ($confirmationLine + "`n" + $tailAfter.plan.waves[0].tasks[$failedIndex].prompt +
+                        "`n`nPrevious verification output (last 40 lines):`n" + $savedTail) -and
+                    ($tailAfter.plan | ConvertTo-Json -Depth 100 -Compress) -ceq $frozenPlan -and
+                    (Get-EngineSha256 -Text $tailAfter.plan.waves[0].tasks[$failedIndex].prompt) -ceq $tailAfter.plan.waves[0].tasks[$failedIndex].prompt_digest) $tailResume.output
+            foreach ($task in @($tailAfter.tasks)) { foreach ($attempt in @($task.attempts)) {
+                $dispatchArgs = Get-Content -LiteralPath $attempt.args_path -Raw -Encoding UTF8 | ConvertFrom-Json
+                Assert-Test "$caseName task $($task.id) attempt $($attempt.number) confirmation is first with original dispatch switches" `
+                    (($dispatchArgs.Prompt -split "`n")[0] -ceq $confirmationLine -and
+                        $dispatchArgs.Attended -eq $true -and $dispatchArgs.CriticalFilesConfirmed -eq $true -and
+                        $dispatchArgs.CriticalFilesConfirmedNote -ceq $note) $dispatchArgs.Prompt
+            } }
+            $tailLogs = @(Get-TestFenceLogs $tailCase.state_root)
+            Assert-Test "$caseName logs survive resume and GREEN adds none" `
+                ($tailLogs.Count -eq $(if ($singleTask) { 1 } else { 2 })) ($tailLogs.FullName -join '; ')
+        }
+
+        Remove-Item Env:ENGINE_TEST_BASELINE_SEQUENCE -ErrorAction SilentlyContinue
+        foreach ($confirmation in @(
+            @{ name = 'absent'; attended = $true },
+            @{ name = 'empty'; attended = $true; note = '' },
+            @{ name = 'whitespace'; attended = $true; note = " `t " },
+            @{ name = 'note-only'; attended = $false; note = 'supplied without attended' }
+        )) {
+            $parameters = @{ Name = ('confirmation-' + $confirmation.name); Single = $true; Attended = $confirmation.attended }
+            if ($confirmation.ContainsKey('note')) { $parameters.CriticalFilesConfirmedNote = $confirmation.note }
+            $withoutConfirmation = Invoke-TestScenario @parameters
+            Assert-Test "confirmation $($confirmation.name) completes" ($withoutConfirmation.state.status -ceq 'complete') $withoutConfirmation.result.output
+            foreach ($task in @($withoutConfirmation.state.tasks)) { foreach ($attempt in @($task.attempts)) {
+                $dispatchArgs = Get-Content -LiteralPath $attempt.args_path -Raw -Encoding UTF8 | ConvertFrom-Json
+                $hasConfirmationSwitch = $null -ne $dispatchArgs.PSObject.Properties['CriticalFilesConfirmed']
+                Assert-Test "confirmation $($confirmation.name) emits no owner line and retains switch predicate" `
+                    (-not $dispatchArgs.Prompt.Contains('OWNER LIVE CONFIRMATION (attended):') -and
+                        $hasConfirmationSwitch -eq ($confirmation.name -ceq 'note-only') -and
+                        ($null -ne $dispatchArgs.PSObject.Properties['Attended']) -eq $confirmation.attended) $dispatchArgs.Prompt
+            } }
+        }
+    } finally {
+        foreach ($name in $fenceEnvironmentNames) { [Environment]::SetEnvironmentVariable($name, $caseEnvironment[$name]) }
+    }
 
     foreach ($handoffPath in @('src/a.py', 'src/b.py')) {
         $caseName = if ($handoffPath -ceq 'src/a.py') { 'write-before-journal' } else { 'partial-journal' }
@@ -2748,9 +3012,9 @@ exit 0
         first_task_once = @($acceptAfter.tasks[0].attempts).Count -eq 1
         second_task_retried = @($acceptAfter.tasks[1].attempts).Count -eq 2
         next_effort = $acceptAfter.tasks[1].attempts[1].effort -ceq 'medium'
-        prompt_prefix = $retryPrompt.Contains('Previous acceptance check output:')
+        prompt_prefix = $retryPrompt.Contains('Previous verification output (last 40 lines):')
         prompt_tail = $retryPrompt.Contains($acceptFailed.tasks[1].attempts[0].acceptance_output_tail)
-        frozen = -not $frozenPrompt.Contains('Previous acceptance check output:') -and $frozenPrompt -ceq $acceptFailed.plan.waves[0].tasks[1].prompt
+        frozen = -not $frozenPrompt.Contains('Previous verification output (last 40 lines):') -and $frozenPrompt -ceq $acceptFailed.plan.waves[0].tasks[1].prompt
         frozen_digest = (Get-EngineSha256 -Text $frozenPrompt) -ceq $acceptAfter.plan.waves[0].tasks[1].prompt_digest
     }
     Assert-Test 'two-task acceptance failure retries only failing task and appends tail to next prompt' `
@@ -2776,15 +3040,20 @@ exit 0
 '@
     foreach ($singleTask in @($true, $false)) {
         $caseName = if ($singleTask) { 'accept-stale-tail-single' } else { 'accept-stale-tail-isolation' }
+        $staleNote = "owner confirmed writes for $caseName"
+        $staleConfirmationLine = "OWNER LIVE CONFIRMATION (attended): the owner confirmed critical-file writes for this run: $staleNote. Any spec requirement for live confirmation of these files is satisfied."
+        $staleEnvironment = @{}
+        foreach ($name in $fenceEnvironmentNames) { $staleEnvironment[$name] = [Environment]::GetEnvironmentVariable($name) }
+        try {
         $env:ENGINE_TEST_ACCEPT_COUNTER = Join-Path $testRoot "$caseName-check"
         $env:ENGINE_TEST_GATE_COUNTER = Join-Path $testRoot "$caseName-baseline"
         [void][IO.Directory]::CreateDirectory($env:ENGINE_TEST_GATE_COUNTER)
         $env:ENGINE_TEST_BASELINE_EXIT = '0'
+        $env:ENGINE_TEST_BASELINE_LONG_OUTPUT = '1'
         $env:ENGINE_TEST_BASELINE_SEQUENCE = if ($singleTask) { '0,1,0' } else { '0,1,1,0,0' }
         $caseCriteria = if ($singleTask) { $staleTailCriteria } else { $staleTailCriteria + "`n- [ ] Task 2 - HOST reviews second task`n" }
-        try {
             $staleTailCase = Invoke-TestScenario -Name $caseName -Single:$singleTask -Effort low `
-                -AcceptanceText $caseCriteria -BaselinePath $gateBaseline
+                -AcceptanceText $caseCriteria -BaselinePath $gateBaseline -Attended -CriticalFilesConfirmedNote $staleNote
             $staleAttempts = @($staleTailCase.state.tasks[0].attempts)
             $thirdPrompt = if ($staleAttempts.Count -eq 3) {
                 (Get-Content -LiteralPath $staleAttempts[2].args_path -Raw -Encoding UTF8 | ConvertFrom-Json).Prompt
@@ -2792,14 +3061,24 @@ exit 0
             $secondTail = if ($staleAttempts.Count -ge 2 -and $staleAttempts[1].PSObject.Properties['acceptance_output_tail']) {
                 [string]$staleAttempts[1].acceptance_output_tail
             } else { '' }
-            Assert-Test "$caseName baseline failure never reuses a prior attempt acceptance tail" `
+            $baselineInvocation = if ($singleTask) { 2 } else { 3 }
+            $currentBaselineTail = @((Get-TestBaselineOutput $baselineInvocation) -split "`n" | Select-Object -Last 40) -join "`n"
+            Assert-Test "$caseName replaces the stale acceptance tail with this pass baseline tail" `
                 ($staleTailCase.result.code -eq 0 -and $staleTailCase.state.status -ceq 'complete' -and
                 $staleAttempts.Count -eq 3 -and $staleAttempts[0].acceptance_output_tail -match 'attempt-one-stale-tail-sentinel' -and
                 $staleAttempts[1].status -ceq 'failed' -and $staleAttempts[1].diagnosis -ceq 'verification failure' -and
-                [string]::IsNullOrEmpty($secondTail) -and -not $thirdPrompt.Contains('attempt-one-stale-tail-sentinel') -and
-                -not $thirdPrompt.Contains('Previous acceptance check output:')) $staleTailCase.result.output
+                $secondTail -ceq $currentBaselineTail -and $thirdPrompt.Contains('Previous verification output (last 40 lines):') -and
+                $thirdPrompt.Contains($secondTail) -and -not $thirdPrompt.Contains('attempt-one-stale-tail-sentinel') -and
+                -not $thirdPrompt.Contains('early-sentinel') -and ($thirdPrompt -split "`n")[0] -ceq $staleConfirmationLine -and
+                ($singleTask -or (-not $secondTail.Contains('baseline-invocation-2-') -and -not $secondTail.Contains('baseline-invocation-4-')))) $staleTailCase.result.output
+            foreach ($task in @($staleTailCase.state.tasks)) { foreach ($attempt in @($task.attempts)) {
+                $dispatchArgs = Get-Content -LiteralPath $attempt.args_path -Raw -Encoding UTF8 | ConvertFrom-Json
+                Assert-Test "$caseName same-run retry keeps confirmation first and switches intact" `
+                    (($dispatchArgs.Prompt -split "`n")[0] -ceq $staleConfirmationLine -and $dispatchArgs.Attended -eq $true -and
+                        $dispatchArgs.CriticalFilesConfirmed -eq $true -and $dispatchArgs.CriticalFilesConfirmedNote -ceq $staleNote) $dispatchArgs.Prompt
+            } }
         } finally {
-            Remove-Item Env:ENGINE_TEST_BASELINE_SEQUENCE, Env:ENGINE_TEST_GATE_COUNTER, Env:ENGINE_TEST_BASELINE_EXIT -ErrorAction SilentlyContinue
+            foreach ($name in $fenceEnvironmentNames) { [Environment]::SetEnvironmentVariable($name, $staleEnvironment[$name]) }
         }
     }
 
@@ -3111,6 +3390,7 @@ exit 0
     $env:APEX_ENGINE_TEST_FAIL_RESIDUE_CAPTURE = $oldResidueCaptureFailure
     $env:APEX_ENGINE_TEST_FAIL_AGENTS_FETCH = $oldAgentsFetchFailure
     $env:APEX_ENGINE_TEST_AGENTS_FETCH_TRACE_PATH = $oldAgentsFetchTrace
+    foreach ($name in $fenceEnvironmentNames) { [Environment]::SetEnvironmentVariable($name, $oldFenceEnvironment[$name]) }
     if (Test-Path -LiteralPath $testRoot) { Remove-Item -LiteralPath $testRoot -Recurse -Force -ErrorAction SilentlyContinue }
     if (Test-Path -LiteralPath $machineLocalRoot) { Remove-Item -LiteralPath $machineLocalRoot -Recurse -Force -ErrorAction SilentlyContinue }
 }

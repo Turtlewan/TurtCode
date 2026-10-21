@@ -28,6 +28,7 @@ $script:EngineScriptRoot = $PSScriptRoot
 $script:EngineState = $null
 $script:EngineBuildOutputDeclarations = @{}
 $script:EngineStatePath = $null
+$script:EngineFenceWaveNumber = $null
 $script:EngineStateRoot = $null
 $script:EngineWrapper = $null
 $script:EngineWorktreeRoot = $null
@@ -516,6 +517,9 @@ function Save-RunnerState {
 function Set-RunnerParked {
     param([string]$Diagnosis, [AllowNull()][object]$TaskState)
     if ($null -ne $TaskState) { $TaskState.status = 'parked'; $TaskState.diagnosis = $Diagnosis }
+    if ($null -ne $script:EngineFenceWaveNumber) {
+        $Diagnosis = Add-RunnerWaveFenceDiagnosis $Diagnosis $script:EngineFenceWaveNumber
+    }
     $script:EngineState.status = 'parked'; $script:EngineState.diagnosis = $Diagnosis
     Add-RunnerTransition 'parked' $Diagnosis
     Save-RunnerState
@@ -625,10 +629,13 @@ function Start-RunnerAttempt {
     if (-not (Test-RunnerCriticalGate $TaskPlan $TaskState)) { return $null }
     $timeoutProperty = $script:EngineState.PSObject.Properties['no_output_timeout_min']
     $prompt = [string]$TaskPlan.prompt
+    if ($script:EngineAttended -and -not [string]::IsNullOrWhiteSpace($script:EngineConfirmation)) {
+        $prompt = "OWNER LIVE CONFIRMATION (attended): the owner confirmed critical-file writes for this run: $($script:EngineConfirmation). Any spec requirement for live confirmation of these files is satisfied.`n" + $prompt
+    }
     $previousFailed = @($TaskState.attempts | Where-Object { $_.number -lt $Attempt.number -and $_.status -ceq 'failed' } | Select-Object -Last 1)
     if ($previousFailed.Count -gt 0 -and $previousFailed[0].PSObject.Properties['acceptance_output_tail'] -and
             -not [string]::IsNullOrEmpty([string]$previousFailed[0].acceptance_output_tail)) {
-        $prompt += "`n`nPrevious acceptance check output:`n" + [string]$previousFailed[0].acceptance_output_tail
+        $prompt += "`n`nPrevious verification output (last 40 lines):`n" + [string]$previousFailed[0].acceptance_output_tail
     }
     $parameters = @{
         Phase = 'build'; Spec = [string]$script:EngineState.spec.name; Task = [string]$TaskPlan.id
@@ -1091,8 +1098,54 @@ function Invoke-RunnerTaskAcceptance {
     return $null
 }
 
+function Write-RunnerFenceLog {
+    param(
+        [int]$WaveNumber,
+        [ValidatePattern('^(combined|task-[0-9]+[a-z]?)$')][string]$Scope,
+        [AllowEmptyString()][string]$Output,
+        [string]$Timestamp = [DateTime]::UtcNow.ToString('yyyyMMddTHHmmssfffZ')
+    )
+    $directory = Join-Path (Split-Path -Parent $script:EngineStatePath) 'fence'
+    [void][IO.Directory]::CreateDirectory($directory)
+    $stem = "wave-$WaveNumber-$Scope-$Timestamp"
+    $suffix = 1
+    while ($true) {
+        $name = if ($suffix -eq 1) { "$stem.log" } else { "$stem-$suffix.log" }
+        $path = [IO.Path]::GetFullPath((Join-Path $directory $name))
+        try {
+            $stream = [IO.File]::Open($path, [IO.FileMode]::CreateNew, [IO.FileAccess]::Write, [IO.FileShare]::None)
+        } catch [IO.IOException] {
+            # ERROR_FILE_EXISTS / ERROR_ALREADY_EXISTS are the only retryable failures.
+            if (($_.Exception.GetBaseException().HResult -band 0xffff) -notin @(80, 183)) { throw }
+            $suffix++; continue
+        }
+        try {
+            $bytes = [Text.UTF8Encoding]::new($false).GetBytes($Output)
+            $stream.Write($bytes, 0, $bytes.Length)
+        } finally { $stream.Dispose() }
+        return $path
+    }
+}
+
+function Get-RunnerWaveFenceLogPaths {
+    param([int]$WaveNumber)
+    $directory = Join-Path (Split-Path -Parent $script:EngineStatePath) 'fence'
+    if (-not (Test-Path -LiteralPath $directory -PathType Container)) { return @() }
+    return @(Get-ChildItem -LiteralPath $directory -File -Filter "wave-$WaveNumber-*.log" |
+        Where-Object { $_.Name.StartsWith("wave-$WaveNumber-", [StringComparison]::Ordinal) -and $_.Extension -ceq '.log' } |
+        Sort-Object -Property Name | ForEach-Object { $_.FullName })
+}
+
+function Add-RunnerWaveFenceDiagnosis {
+    param([string]$Diagnosis, [int]$WaveNumber)
+    $paths = @(Get-RunnerWaveFenceLogPaths $WaveNumber)
+    if ($paths.Count -eq 0) { return $Diagnosis }
+    # Refresh an existing suffix from disk so retries/resume cannot duplicate or stale it.
+    return (($Diagnosis -split ' -- fence logs: ', 2)[0] + ' -- fence logs: ' + ($paths -join '; '))
+}
+
 function Invoke-RunnerGate {
-    param([object[]]$Files, [int]$WaveNumber)
+    param([object[]]$Files, [int]$WaveNumber, [string]$Scope = 'combined')
     try { $stage = Stage-EngineWave -TargetWorktree $script:EngineState.repo -IntegrationWorktree $script:EngineState.integration.worktree -Files $Files }
     catch {
         return [pscustomobject]@{ code = 1; diagnosis = "git stage operation failed: $($_.Exception.Message)"; moved = $false; gate = 'verify' }
@@ -1108,6 +1161,9 @@ function Invoke-RunnerGate {
     if ($pin.exit_code -ne 0) { return [pscustomobject]@{ code = $pin.exit_code; diagnosis = $pin.output; moved = $false; gate = 'pin' } }
     $baseline = Invoke-RunnerScript $script:EngineBaselineScript `
         @('-Full', '-Worktree', [string]$script:EngineState.integration.worktree)
+    if ($baseline.exit_code -ne 0) {
+        [void](Write-RunnerFenceLog -WaveNumber $WaveNumber -Scope $Scope -Output ([string]$baseline.output))
+    }
     $acceptanceFailure = $null
     if ($baseline.exit_code -eq 0) { $acceptanceFailure = Invoke-RunnerTaskAcceptance $Files }
     $verify = Invoke-RunnerScript $script:EngineTreePinScript `
@@ -1134,7 +1190,8 @@ function Invoke-RunnerGate {
         return [pscustomobject]@{ code = 69; diagnosis = "unexpected residue: integration tree has untracked/ignored residue outside wave manifest: $(@($residue | Select-Object -First 10) -join ', ')"; moved = $true; gate = 'verify' }
     }
     if ($null -ne $acceptanceFailure) { return $acceptanceFailure }
-    return [pscustomobject]@{ code = $baseline.exit_code; diagnosis = $baseline.output; moved = $false; gate = 'baseline' }
+    $lines = @([string]$baseline.output -split "`r?`n")
+    return [pscustomobject]@{ code = $baseline.exit_code; diagnosis = $baseline.output; moved = $false; gate = 'baseline'; output_tail = (@($lines | Select-Object -Last 40) -join "`n") }
 }
 
 function Restore-RunnerWave {
@@ -1154,9 +1211,9 @@ function Find-RunnerWaveFailure {
             -TaskWorktree $attempt.worktree -WaveBaseSha $WaveBase -Files ([object[]]@($taskPlan.files))
         if (-not $copy.ok) { $failed += $taskPlan.id }
         else {
-            $gate = Invoke-RunnerGate ([object[]]@($taskPlan.files)) ([int]$Wave.number)
+            $gate = Invoke-RunnerGate ([object[]]@($taskPlan.files)) ([int]$Wave.number) ('task-' + [string]$taskPlan.id)
             if ([string]$gate.gate -in @('pin', 'verify')) {
-                Set-RunnerParked "$($gate.gate) gate exit $($gate.code): $($gate.diagnosis)" $null
+                Set-RunnerParked (Add-RunnerWaveFenceDiagnosis "$($gate.gate) gate exit $($gate.code): $($gate.diagnosis)" ([int]$Wave.number)) $null
                 return [string[]]@()
             }
             if ($gate.code -ne 0) {
@@ -1171,6 +1228,10 @@ function Find-RunnerWaveFailure {
 
 function Invoke-RunnerWave {
     param([object]$Wave)
+    # Scope parked diagnoses (including nested retry gates) to this wave without persisting state.
+    $previousFenceWaveNumber = $script:EngineFenceWaveNumber
+    $script:EngineFenceWaveNumber = [int]$Wave.number
+    try {
     $waveBase = Invoke-RunnerGitText $script:EngineState.integration.worktree 'rev-parse' 'HEAD'
     $waveFiles = [object[]]@($Wave.tasks | ForEach-Object { @($_.files) })
 
@@ -1192,7 +1253,7 @@ function Invoke-RunnerWave {
             continue
         }
         if ([string]$taskState.diagnosis -ceq 'verification effort ladder exhausted') {
-            $script:EngineState.status = 'partial'; $script:EngineState.diagnosis = [string]$taskState.diagnosis
+            $script:EngineState.status = 'partial'; $script:EngineState.diagnosis = Add-RunnerWaveFenceDiagnosis ([string]$taskState.diagnosis) ([int]$Wave.number)
             Save-RunnerState; return $false
         }
         $resumeEffort = [string]$taskPlan.effort
@@ -1203,8 +1264,8 @@ function Invoke-RunnerWave {
             $resumeEffort = Get-RunnerNextEffort ([string]$lastAttempt.effort)
             if (-not $resumeEffort) {
                 $taskState.status = 'failed'; $taskState.diagnosis = 'verification effort ladder exhausted'
-                $script:EngineState.status = 'partial'; $script:EngineState.diagnosis = $taskState.diagnosis
-                Add-RunnerTransition 'partial' $taskState.diagnosis; Save-RunnerState; return $false
+                $script:EngineState.status = 'partial'; $script:EngineState.diagnosis = Add-RunnerWaveFenceDiagnosis $taskState.diagnosis ([int]$Wave.number)
+                Add-RunnerTransition 'partial' $script:EngineState.diagnosis; Save-RunnerState; return $false
             }
         } elseif ($null -ne $lastAttempt -and [string]$taskState.status -in @('parked', 'failed')) {
             $resumeEffort = [string]$lastAttempt.effort
@@ -1257,7 +1318,7 @@ function Invoke-RunnerWave {
         $failureIds = [string[]]$copyFailures
         $failureGates = @{}
         $gate = $null
-        if ($failureIds.Count -eq 0) { $gate = Invoke-RunnerGate $waveFiles ([int]$Wave.number) }
+        if ($failureIds.Count -eq 0) { $gate = Invoke-RunnerGate $waveFiles ([int]$Wave.number) 'combined' }
         if ($failureIds.Count -eq 0 -and $gate.code -eq 0) {
             $allowedPaths = [string[]]@($waveFiles | ForEach-Object { [string]$_.path })
             $runtime = $null; $hadCommitIntent = $false; $previousCommitIntent = $null; $intentAssigned = $false
@@ -1312,25 +1373,27 @@ function Invoke-RunnerWave {
         }
         if ($script:EngineState.status -cne 'running') { return $false }
         if ($failureIds.Count -ne 1) {
-            $script:EngineState.status = 'partial'; $script:EngineState.diagnosis = 'ambiguous wave verification failure'
+            $script:EngineState.status = 'partial'; $script:EngineState.diagnosis = Add-RunnerWaveFenceDiagnosis 'ambiguous wave verification failure' ([int]$Wave.number)
             Add-RunnerTransition 'partial' $script:EngineState.diagnosis; Save-RunnerState; return $false
         }
         $failedPlan = Get-RunnerTaskPlan $failureIds[0]; $failedState = Get-RunnerTaskState $failureIds[0]
         $currentAttempt = @($failedState.attempts | Where-Object { $_.status -ceq 'succeeded' })[-1]
-        # Only a check failure from this verification pass can supply a tail.
-        # Runtime acceptance records also contain results from earlier attempts.
-        $failureGate = if ($failureGates.ContainsKey($failureIds[0])) { $failureGates[$failureIds[0]] } else { $gate }
+        # Only an attributed gate from this pass can supply a tail; copy failures have none.
+        $failureGate = if ($failureGates.ContainsKey($failureIds[0])) { $failureGates[$failureIds[0]] }
+            elseif (@($Wave.tasks).Count -eq 1 -or ($null -ne $gate -and $gate.PSObject.Properties['failing_task_id'])) { $gate }
+            else { $null }
         $currentAttempt.PSObject.Properties.Remove('acceptance_output_tail')
-        if ($null -ne $failureGate -and [string]$failureGate.gate -ceq 'accept' -and
-                [string]$failureGate.failing_task_id -ceq [string]$failedState.id -and $failureGate.PSObject.Properties['output_tail']) {
+        if ($null -ne $failureGate -and $failureGate.PSObject.Properties['output_tail'] -and
+                ([string]$failureGate.gate -ceq 'baseline' -or ([string]$failureGate.gate -ceq 'accept' -and
+                [string]$failureGate.failing_task_id -ceq [string]$failedState.id))) {
             $currentAttempt | Add-Member -NotePropertyName acceptance_output_tail -NotePropertyValue ([string]$failureGate.output_tail) -Force
         }
         $currentAttempt.status = 'failed'; $currentAttempt.diagnosis = 'verification failure'
         $next = Get-RunnerNextEffort ([string]$currentAttempt.effort)
         if (-not $next) {
             $failedState.status = 'failed'; $failedState.diagnosis = 'verification effort ladder exhausted'
-            $script:EngineState.status = 'partial'; $script:EngineState.diagnosis = $failedState.diagnosis
-            Add-RunnerTransition 'partial' $failedState.diagnosis; Save-RunnerState; return $false
+            $script:EngineState.status = 'partial'; $script:EngineState.diagnosis = Add-RunnerWaveFenceDiagnosis $failedState.diagnosis ([int]$Wave.number)
+            Add-RunnerTransition 'partial' $script:EngineState.diagnosis; Save-RunnerState; return $false
         }
         $script:EngineState.counters.retries++; Save-RunnerState
         $crashEffort = [string]$env:APEX_ENGINE_TEST_CRASH_AFTER_VERIFICATION_FAILURE
@@ -1341,6 +1404,11 @@ function Invoke-RunnerWave {
         if (-not (Invoke-RunnerTaskUntilBuilt $failedPlan $failedState $next)) { return $false }
     }
     return $false
+    } catch {
+        $diagnosis = Add-RunnerWaveFenceDiagnosis $_.Exception.Message ([int]$Wave.number)
+        if ($diagnosis -cne $_.Exception.Message) { throw $diagnosis }
+        throw
+    } finally { $script:EngineFenceWaveNumber = $previousFenceWaveNumber }
 }
 
 function Get-RunnerReviewTreeDigest {
