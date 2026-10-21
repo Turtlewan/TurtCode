@@ -1,6 +1,6 @@
 ---
 skill: apex-plan
-version: 2.10.0
+version: 2.10.1
 last_updated: 2026-10-21
 sources:
   - docs/technical/adr/ADR-010-multi-pass-review.md
@@ -129,7 +129,7 @@ Files to Change, and Tasks list from the same decisions: one entry per coder tas
 spec author: gpt-6.1-sol through the wrapper's author mode. The host assembles a prompt pack (`$pack`)
 containing the adjudicated plan brief, the exact template path, the target `docs/drafts/<short-name>.md`
 (never straight to `docs/changes/`), and the three rules below (no why inline except Intent, mechanism
-in each task, one concern per task).
+in each task, one concern per task). The pack also states three build facts: the build root is the worktree each task is dispatched into, so build-repo paths are written relative to it (only the manifest's `repos` value and HOST paths stay absolute) and no task may stop because its working directory differs from the repository path; coders make no Git operations and run only their own task's tagged checks, never the full verify recipe; and a task's done-when cites only its own or earlier tasks' outputs.
 
 Normal and Trivial author dispatches keep the full adjudicated plan brief, the exact template path, the target draft and the three rules. For a Big slice, the author pack carries the C6 clean slice brief (slice intent, cross-slice contracts, cited map sections) in place of the full adjudicated plan brief, along with the existing template, target draft and three rules.
 
