@@ -1,7 +1,7 @@
 # Sol plan-check gate + cross-model deliberation (ADR-032)
 
 Runs after the readiness gate, before an applicable Deep Details spec moves to `docs/changes/`.
-For a gpt-6-sol-authored spec (ADR-048), the Claude `apex-critic` in spec mode is the cross-family
+For a gpt-6.1-sol-authored spec (ADR-048), the Claude `apex-critic` in spec mode is the cross-family
 check; this gpt-6.1-sol cold read (the wrapper default) is an independent same-family read.
 
 ## The cold read (the gate)
@@ -37,19 +37,26 @@ the spec, do not rewrite it. Do not open docs/drafts/*.review.log, docs/drafts/*
 - Effort `xhigh` — the standing DEFAULT (retro P7(a); the drop from `max` pre-authorized in this
   file has been taken, and xhigh's named use case is review). A per-spec rubric may still override
   UPWARD to `max` for a known-hard spec — that remains legal; never below `xhigh`.
-- Every plan-check dispatch appends its own digest-bound row (Round token `sol-N`) to
-  `docs/drafts/<short-name>.review.log` (apex-plan § Convergence control). Plan-check rows are
-  separate from the Critic spec-mode 3-round cap, but the `SPEC-DIGEST` header line is still
-  mandatory, and a verdict whose digest no longer matches at adjudication is VOID. Plan-check
-  repair cycling is bounded by the announced pass-or-park rule, not by that cap.
+- Every plan-check dispatch appends its own digest-bound `sol-N` row to
+  `docs/drafts/<short-name>.review.log` (apex-plan § Convergence control). Sol rows are separate
+  from the reviewer-family risk-tier ceiling: Low 3 / Medium 5 / High 10 non-VOID Critic spec-mode
+  rows per spec lifetime (doc-only Low unless explicit High). The `SPEC-DIGEST` header remains
+  mandatory; a digest mismatch at adjudication makes the verdict VOID. Sol dispatches remain
+  bounded by the announced pass-or-park rule. A Medium or High post-readiness cold-read BLOCK
+  is adjudicated and fixed by author revise, then reviewed by Critic against
+  that same reviewer-family ceiling: a full fresh round 1 without prior non-VOID reviewer-family findings, otherwise a fix check. Continue automatically under it; ask the OWNER only when
+  an open BLOCK or required FLAG-fix confirmation would require a round beyond the ceiling:
+  (a) accept and promote, (b) exactly one further fix-and-review cycle, (c) park or kill, recorded
+  as an `owner` row. Once that extra cycle has been used for a spec, any later escalation, including a post-readiness Sol cold-read BLOCK, offers only (a) accept and promote or (c) park or kill.
 
 ## Disposition
 
 | Spec | Sol verdict | Action |
 |---|---|---|
 | any | CLEAN | proceed to ready |
-| routine | FLAG / BLOCK | advisory — resolve or explicitly accept with reasoning (verify-before-implementing: findings can be wrong; rebut with evidence, no performative agreement) |
-| `risk: high` | BLOCK | **blocking** — the spec does not move to ready with an unresolved Sol BLOCK; resolve, or run deliberation, or the user overrides explicitly. This path is an **approval gate** (apex-governance § Approval gate format), not an advisory review — the "review" label stays with the advisory rows |
+| routine | FLAG | advisory — resolve or explicitly accept with reasoning (verify-before-implementing: findings can be wrong; rebut with evidence, no performative agreement) |
+| Medium or High | BLOCK | HOST adjudicates and sends accepted fixes through author revise, then a Critic review against the same reviewer-family risk-tier ceiling (full fresh round 1 without prior non-VOID reviewer-family findings, otherwise a fix check); OWNER escalation only at that ceiling under apex-plan § Convergence control |
+| `risk: high` | unresolved BLOCK | promotion remains blocked unless the OWNER accepts the open finding under the ceiling disposition; optional deliberation retains its existing user-invoked ≤2-round budget |
 
 Terminology: this gate reviews *plans* and is distinct from the build-side `cross_model_review`
 frontmatter flag (code review — apex-governance § Cross-model review).
@@ -149,7 +156,7 @@ explicit approval before authoring; an edit returns to planning, and a refusal p
 ## Plan artifact
 
 Keep the approved brief, slices table, each `### Slice <slice-id>` section, cross-slice contracts
-and `gate-N` rows in the C2 plan path. Gate rows never count toward a spec round cap.
+and `gate-N` rows in the C2 plan path. Gate rows never count toward a spec reviewer-family ceiling.
 That slice's section text in C2 and the clean slice brief in C6 come from its `### Slice <slice-id>` section.
 Judge wave completion and the C4 pointer from the slices table's `wave` column.
 
@@ -208,11 +215,14 @@ a file map that fights the repo's existing seams, and simpler structures that me
 Findings as BLOCK (the plan will build the wrong thing) / FLAG (planning should decide) / CLEAN,
 each with file/line + rationale. Judge the plan, do not write it."*
 
-- **Disposition:** advisory for routine specs; **blocking for `risk: high`**. The blocking path is
-  an **approval gate**: on an unresolved arch-pass BLOCK for a `risk: high` plan, print the
-  **apex-governance § Approval gate** banner and get the explicit `Approve? [y / n / edit]` answer
-  **BEFORE any spec-author dispatch**. Adjudicate findings into the PLAN before dispatching the
-  author. Sol never writes the plan and never edits the spec.
+- **Disposition:** when no draft exists, advisory for routine specs; **blocking for `risk: high`**.
+  The no-draft-yet blocking path is an **approval gate**: on an unresolved arch-pass BLOCK for
+  a `risk: high` plan, print the **apex-governance § Approval gate** banner and get the explicit
+  `Approve? [y / n / edit]` answer **BEFORE any spec-author dispatch**. Adjudicate findings into
+  the PLAN before dispatching the author. Once a draft exists, an arch-pass BLOCK is adjudicated
+  and fixed by author revise, then reviewed by Critic (full fresh round 1 without prior non-VOID reviewer-family findings, otherwise a fix check) against the same
+  reviewer-family risk-tier ceiling, with OWNER escalation only per apex-plan § Convergence
+  control at the ceiling. Sol never writes the plan and never edits the spec.
 - **The cold read stays cold.** Never pass this pass's findings, the host's answers to them, or the
   fact that it ran into the post-readiness dispatch above — evaluator independence.
   Big changes use the planning gate instead of the pre-draft pass; non-Big Medium/High Deep Details
@@ -224,7 +234,7 @@ each with file/line + rationale. Judge the plan, do not write it."*
   reader that opens a plan file would also see gate output.
 - **Round record — ALWAYS WHEN DISPATCHED.** Every arch-check dispatch creates (only when absent) or appends to
   `docs/drafts/<short-name>.review.log` (short-name fixed at plan time) with a normal `arch-N` row on
-  apex-plan § Convergence control's terms — separate from the Critic spec-mode 3-round cap and
+  apex-plan § Convergence control's terms — separate from the reviewer-family risk-tier ceiling (Low 3 / Medium 5 / High 10) and
   bounded by pass-or-park. `Spec digest` = the literal `— (pre-draft)` when no draft exists yet, or the real
   `git hash-object` digest when re-planning against a live draft: a value convention inside the
   existing row schema, not a schema change, and no counting rule moves. **While the cell holds the

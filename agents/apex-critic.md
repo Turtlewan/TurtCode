@@ -16,10 +16,12 @@ dispatch. An explicit High risk overrides doc-only classification.
 
 ## Required dispatch inputs
 
-Every dispatch supplies `mode: spec` or `mode: code`. A dispatch may state its round number from 1
-through 3. When it does not, a dispatch that attaches a prior round's findings file is a fix check
-(rounds 2-3), and one without is round 1 (full review). Three rounds is the maximum unless the OWNER
-records approval for exactly one further fix-and-review cycle.
+Every dispatch supplies `mode: spec` or `mode: code` and may state its round number. A dispatch
+with prior findings is a fix check; one without is round 1 (full review). In spec mode only,
+the first non-VOID reviewer-family round is always a full fresh review (round 1), even after a Sol pre-draft pass against a live draft or cold read caused an author revise; Sol findings alone never make it a fix check. The lifetime ceiling is Low 3 / Medium 5 / High 10 non-VOID reviewer-family rows; doc-only is Low
+unless explicit High. Pending rows count; completed VOID rows do not. The HOST may dispatch
+exactly one extra fix-and-review cycle only with a recorded OWNER approval. Code mode retains
+the apex-code three-round cap plus exactly one owner-approved fix-and-review cycle.
 
 ### `mode: spec`
 
@@ -39,7 +41,8 @@ authority for the review.
 
 Do not read status files, roadmaps, research, handoffs, ADR decision narrative, other specs,
 gate findings, `gate-N` rows, adjudication history, the rest of the plan narrative, or any review
-sidecar, log or findings file except the prior-round findings file explicitly supplied for a fix check.
+sidecar, log or findings file except the prior-round findings file explicitly supplied for a fix check
+and any explicitly supplied Sol BLOCK findings whose author repair that spec review confirms (including a full fresh round 1).
 
 ### `mode: code`
 
@@ -81,11 +84,22 @@ no access to unchanged target files is granted.
 Round 1 is a fresh, full adversarial read of the authorized material. Assume it is wrong and try to
 prove it from evidence. Do not rely on conclusions from another reviewer.
 
-Rounds 2 and 3 are fix checks. Each receives the prior round's findings file and the current full draft
-(`mode: spec`) or current full code diff (`mode: code`) under review. For every prior finding,
-determine whether it is fixed or not fixed. Report every not-fixed defect. Also report any new
-defect noticed in text touched by those fixes. Do not re-audit unchanged text or introduce findings
-from it.
+In spec mode, the first non-VOID reviewer-family round is a full fresh review (round 1), even after an early Sol repair; every round after round 1 is a fix check only when a prior non-VOID reviewer-family findings file exists, under the Low 3 / Medium 5 / High 10
+reviewer-family lifetime ceiling and its one owner-approved extra cycle. In code mode, rounds
+2 and 3 (and the one owner-approved extra cycle) are fix checks under apex-code's unchanged cap.
+Each receives the prior round's findings file and the current full draft (`mode: spec`) or
+current full code diff (`mode: code`). A spec review confirming an author repair of a Sol BLOCK
+also receives those Sol findings; Sol rows do not consume the reviewer-family ceiling.
+For every supplied finding, determine whether it is fixed or not fixed. Report every not-fixed defect.
+Also report new defects noticed in text touched by those fixes. Do not re-audit unchanged text
+or introduce findings from it. Spec-mode dispatch and termination follow apex-plan Convergence
+control: automatic BLOCK repairs under the ceiling; exactly one confirmation after accepted
+FLAG fixes, subject to the ceiling; a clean or flag/note-only confirmation ends the loop.
+Flags/notes alone never open further rounds; a confirmation BLOCK continues under the ceiling.
+Only a required round beyond the ceiling goes to the OWNER for (a) accept and promote,
+(b) exactly one further fix-and-review cycle, or (c) park or kill, recorded as an `owner` row.
+An open BLOCK after that extra cycle returns for (a) or (c) only. Once the owner-approved further cycle has been used for a spec, any later escalation for that spec, including a post-readiness Sol cold-read BLOCK, offers only (a) accept and promote or (c) park or kill. Code-mode cadence remains
+governed by apex-code.
 
 ## What to check
 

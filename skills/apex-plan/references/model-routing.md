@@ -10,7 +10,7 @@ Loaded on demand when a build could take more than one coder — i.e. before set
 session-79b; ADR-045) the menu is `{codex, sonnet}` and routing **collapses**: Codex is the default
 coder for every task; **Sonnet 5** is reached only through the three fallback triggers
 (quota-out/unavailable · whole-spec `coder_model: sonnet` pin · HOST-directed terminal verify-failure recovery). There is no per-task cost/complexity routing, and the fallback is not a proactive
-choice. Specs are authored by gpt-6-sol through the wrapper's `-AuthorSpec` (apex-plan, Writing the
+choice. Specs are authored by gpt-6.1-sol through the wrapper's `-AuthorSpec` (apex-plan, Writing the
 spec; ADR-048). Opus keeps the high-risk Critic role; the Engine owns eligible attended build mechanics.
 
 ## Legacy `coder_tier_policy` / DeepSeek tiers — ARCHIVED (ADR-027)

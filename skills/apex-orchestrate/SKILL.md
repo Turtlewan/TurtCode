@@ -1,7 +1,7 @@
 ---
 skill: apex-orchestrate
-version: 2.7.1
-last_updated: 2026-10-15
+version: 2.7.2
+last_updated: 2026-10-21
 sources:
   - docs/technical/adr/ADR-015-dispatch-return-contract.md
   - docs/technical/adr/ADR-036-remove-knowledge-layer.md
@@ -59,7 +59,7 @@ half-refactor is unreviewable), then move. Two reads, one line, go.
 
 | Signal | Route to |
 |--------|----------|
-| plan · design · architect · spec · "let's build" · what if | **apex-plan**, which dispatches a gpt-6-sol spec author through the wrapper's `-AuthorSpec` (apex-plan, "Writing the spec"; ADR-048) |
+| plan · design · architect · spec · "let's build" · what if | **apex-plan**, which dispatches a gpt-6.1-sol spec author through the wrapper's `-AuthorSpec` (apex-plan, "Writing the spec"; ADR-048) |
 | build · implement · execute · start build — attended, Engine-eligible | **apex-code**, Engine path (default, attended): `& "$env:USERPROFILE\.claude\skills\apex-code\scripts\apex-engine.ps1" -SpecPath <absolute> -Repo <absolute> -Attended -MaxParallel 2` (`1` for `risk: high`). Read `engine-state.json` **status and diagnosis** when present; otherwise use the console `Engine refused: <message>` diagnosis. Exit **0** = build/hand-off complete, HOST close-out pending; **1** = refused/parked/failed/partial/quota-paused — diagnose, fix inputs/spec or seek owner disposition; **2** = `awaiting-review` — HOST runs Opus Critic on the integrated wave, then resumes with the bound clean/reject review record per **apex-code**. Follow its resume/recovery rules; after exit 0, run **apex-code/SKILL.md § Post-build** against the integrated tip, then owner-approved commit and proof-gated `-Teardown <runId>`. |
 | attended build — Engine-refused spec or owner-directed recovery | **apex-code**, attended **HOST manual path**: no manifest, shared-file tasks, multi-repo, `coder_model: sonnet`, or owner-directed escalation/fixes. For other refusals, use durable status/diagnosis or the console `Engine refused:` message to fix inputs/spec or route to manual recovery. HOST owns scheduling, dispatch, verify adjudication, integration, and recovery; close out per **apex-code/SKILL.md § Post-build**. Sonnet quota fallback requires owner decision. |
 | unattended (AFK) build | **apex-code**, documented HOST AFK/manual mechanics and governance gates; Engine is the default **attended** route only. |
