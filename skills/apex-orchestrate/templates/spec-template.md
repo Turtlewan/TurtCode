@@ -202,7 +202,9 @@ docs/audit/ is different and stricter: TIER-1, refused outright on a path match.
      index), which makes "`git diff --stat` lists exactly N files" unsatisfiable for any spec that
      creates one. `-uall` is required, or a new directory collapses to `dir/` and the file path never
      shows. The output cannot separate your writes from the repo's normal dirty state, so assert the
-     LISTED paths — never a total file count. -->
+     LISTED paths — never a total file count.
+This is a HOST check; never place it (or any git command) in a `powershell apex-accept` fence.
+-->
 - [ ] Scope — nothing written outside `## Files to Change` → verify: `git status --porcelain -uall`
       lists every path in `## Files to Change` (`??` = created, ` M` = modified), and every other
       path it shows was already dirty before this build (name them in the report).

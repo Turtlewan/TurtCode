@@ -336,6 +336,171 @@ try {
     Write-Utf8 -Path $failureValidator -Text "param([string]`$SpecPath)`nWrite-Output REFUSED-BY-SEAM`nexit 17`n"
     . $planner
 
+    # Shared in-memory prompt inputs: no payload quotes legacy instructions unless a case says so.
+    $promptTemplate = [pscustomobject]@{ Surgical = '- Surgical scope: fixture'; Scratch = '- Scratch: local'; Autonomy = 'Follow AGENTS.md; run the verify recipe, then finish.'; Final = '- Final message: fixture' }
+    $promptArgs = @{ Identity = 'fixture'; RepoPath = (Get-Location).Path; Intent = 'fixture'; Assumptions = 'fixture'; SpecialistContext = @(); VerifyFence = ('```text' + "`nRECIPE-COMMAND-SENTINEL`n" + '```'); Template = $promptTemplate }
+    $ownVerify = "- Verify: run only this task's tagged checks above; do not run the repository verify recipe (the Engine runs it after integration)."
+    $noneVerify = '- Verify: this task has no tagged checks; do not run the repository verify recipe (the Engine runs it after integration).'
+    $engineClause = "run only this task's tagged checks (never the repository verify recipe)"
+
+    Assert-Case 'real-validator declaration heading matrix and equivalent prompt bytes' {
+        $rows = New-Object 'System.Collections.Generic.List[object]'
+        $index = 0
+        foreach ($bullet in @('-', '*', '+', '1.', '1)')) {
+            foreach ($checkbox in @('', '[ ] ', '[x] ', '[X] ')) {
+                foreach ($form in @('title', '-', [string][char]0x2013, [string][char]0x2014)) {
+                    $rows.Add([pscustomobject]@{ Bullet = $bullet; Checkbox = $checkbox; Form = $form; Id = @('1', '1a')[$index % 2]; Indent = @('', " `t")[$index % 2]; BoldSpace = @('', " `t")[[int][Math]::Floor($index / 2) % 2] })
+                    $index++
+                }
+            }
+        }
+        foreach ($row in $rows) {
+            $id = $row.Id; $bullet = $row.Bullet; $checkbox = $row.Checkbox
+            $form = $row.Form; $indent = $row.Indent; $boldSpace = $row.BoldSpace
+            $fixture = New-Fixture -Tasks @(New-Task -Id $id -Files @(New-File -Path 'heading.txt'))
+            $payload = "Alpha. files: heading.txt $([char]0x2014) done when: complete."
+            $heading = if ($form -ceq 'title') { "**${boldSpace}Task $id - Alpha.** files: heading.txt $([char]0x2014) done when: complete." } else { "**${boldSpace}Task $id** $form $payload" }
+            $source = [IO.File]::ReadAllText($fixture.Spec)
+            $source = [regex]::Replace($source, '(?m)^- \[ \] \*\*Task [^\n]+', ($indent + $bullet + ' ' + $checkbox + $heading))
+            Write-Utf8 $fixture.Spec $source
+            $plan = Invoke-Plan -Fixture $fixture -Validator $realValidator
+            if (-not $plan.allowed) { throw ('heading refused (including missing declaration): ' + $heading + ': ' + $plan.refusal) }
+            $task = $plan.waves[0].tasks[0]
+            if ($task.text -cne $payload -or $task.done_when -cne 'complete.') { throw 'heading extraction differs' }
+            $expectedTask = [pscustomobject]@{ text = $payload; done_when = 'complete.'; files = $task.files; acceptance = $task.acceptance; acceptance_checks = $task.acceptance_checks }
+            $template = Get-EngineTemplateParts (Join-Path (Split-Path -Parent $PSScriptRoot) 'references/dispatch-pack.md')
+            $expected = New-EnginePrompt -Task $expectedTask -Identity '**Identity:** Fixture identity for fixture-plan.' -RepoPath $fixture.Repo -Intent $plan.spec.intent -Assumptions $plan.spec.assumptions -SpecialistContext $plan.spec.specialist_context -VerifyFence (Get-EngineVerifyFence (Join-Path $fixture.Repo 'AGENTS.md')) -Template $template
+            if ($task.prompt -cne $expected) { throw 'equivalent heading prompt bytes differ' }
+        }
+        return $true
+    }
+    Assert-Case 'bare current-form bytes punctuation continuation and last completion' {
+        foreach ($separator in @('-', [string][char]0x2013, [string][char]0x2014)) {
+            foreach ($punctuation in @('- keep', ': keep', '. keep', ([string][char]0x2014 + ' keep'))) {
+                $expected = "$punctuation done when: first.`n `tcontinuation  `n  done-when: last.  "
+                $source = "## Tasks`r`n- [ ] **Task 1** $separator $($expected.Replace("`n", "`r`n"))`r`n`r`n## Other`r`n"
+                $decl = Get-EngineTaskDeclarations $source
+                if ($decl['1'].Text -cne $expected -or $decl['1'].DoneWhen -cne 'last.') { throw 'current-form bytes changed' }
+                $task = [pscustomobject]@{ text = $decl['1'].Text; done_when = $decl['1'].DoneWhen; files = @([pscustomobject]@{ path = 'fixture.txt'; op = 'modify' }); acceptance = @(); acceptance_checks = @() }
+                $prompt = New-EnginePrompt -Task $task @promptArgs
+                # Explicit pre-change prompt layout for the same inputs; only the prescribed edits are allowed.
+                $oldPrompt = @('## Goal', $expected, 'Done when: last.', '', '## Context', '- Spec: fixture', ('- Repo: ' + (ConvertTo-EngineDisplayPath $promptArgs.RepoPath)), "- Files for this task (authorized set - touch nothing else):`n- fixture.txt (modify)", "- Intent:`nfixture", "- Assumptions:`nfixture", '', '## Constraints', "- Surgical scope: fixture`n- Authorized paths:`n- fixture.txt (modify)`n- Scratch: local`n$($promptTemplate.Autonomy)", '', '## Done-when', "- Done when: last.`n- Verify: run the exact build-repo recipe commands:`n$($promptArgs.VerifyFence)`n- Final message: fixture") -join "`n"
+                $expectedPrompt = $oldPrompt.Replace('run the verify recipe', $engineClause).Replace("- Verify: run the exact build-repo recipe commands:`n$($promptArgs.VerifyFence)", $noneVerify)
+                if ($prompt -cne $expectedPrompt) { throw 'unexpected prompt byte change' }
+                if ((Get-EngineSha256 $prompt) -ceq (Get-EngineSha256 $oldPrompt)) { throw 'old digest retained' }
+            }
+        }
+        return $true
+    }
+    Assert-Case 'HOST OWNER boundaries fence decoys and exact section classification' {
+        foreach ($kind in @('(HOST)', 'OWNER')) {
+            foreach ($fence in @('````', '~~~~')) {
+                $fixture = New-Fixture -Tasks @((New-Task -Id '1' -Files @(New-File 'one.txt')), (New-Task -Id '2' -Files @(New-File 'two.txt')))
+                $body = "- [ ] **Task 1** - Alpha. files: one.txt $([char]0x2014) done when: first.`n  done when: own last.`n  $fence`n## Other`n- [ ] **Task 8** - fenced payload`n  $fence`n- [ ] **Task 9 $kind** - HOST-PAYLOAD done when: host marker.`n- [ ] **Task 2** - Beta. files: two.txt $([char]0x2014) done when: second.`n"
+                $source = [regex]::Replace([IO.File]::ReadAllText($fixture.Spec), '(?ms)(## Tasks\n).*?(?=## Wave plan)', ('$1' + $body + "`n"))
+                $source += "`n## Other`n- [ ] **Task 7** - outside payload`n"
+                Write-Utf8 $fixture.Spec $source
+                $plan = Invoke-Plan $fixture
+                if (-not $plan.allowed) { throw $plan.refusal }
+                $tasks = @($plan.waves | ForEach-Object { $_.tasks })
+                $decl = Get-EngineTaskDeclarations $source
+                if (($tasks.id -join ',') -cne '1,2' -or $decl.Count -ne 2 -or $tasks[0].text.Contains('HOST-PAYLOAD') -or $tasks[0].prompt.Contains('HOST-PAYLOAD') -or $tasks[0].done_when -cne 'own last.' -or -not $tasks[0].text.Contains('fenced payload') -or $tasks[1].done_when -cne 'second.') { throw 'boundary or completion leak' }
+            }
+        }
+        foreach ($title in @('owner', 'HOMEOWNER', '(HOSTILE)')) {
+            $decl = Get-EngineTaskDeclarations "## tasks`n- **Task 8** decoy`n ## Tasks`n- **Task 7** decoy`n## Tasks`n- **Task 1 $title** body`n## Other`n- **Task 9** decoy"
+            if ($decl.Count -ne 1 -or $decl['1'].Text -cne "$title body") { throw 'case-sensitive classification failed' }
+        }
+        $modified = Get-EngineTaskDeclarations "## Tasks`n- [ ] **Task 1 (modify)** - : payload"
+        if ($modified['1'].Text -cne '(modify) : payload') { throw 'in-bold title remainder lost' }
+        # A shorter, wrong-character or non-whitespace suffix cannot close the opener.
+        foreach ($fence in @('````', '~~~~')) {
+            $other = if ($fence[0] -eq [char]96) { '~~~~' } else { '````' }
+            $source = "## Tasks`n- **Task 1** body`n$fence`n$($fence.Substring(1))`n$other`n$fence suffix`n- **Task 8** decoy`n$fence`n## Other`n"
+            $decl = Get-EngineTaskDeclarations $source
+            if ($decl.Count -ne 1 -or -not $decl['1'].Text.Contains('Task 8')) { throw 'invalid fence closer accepted' }
+        }
+        return $true
+    }
+    Assert-Case 'own tagged checks Verify variants quoted payload and immutable template' {
+        $savedAutonomy = $promptTemplate.Autonomy
+        $livePath = Join-Path (Split-Path -Parent $PSScriptRoot) 'references/dispatch-pack.md'
+        $liveBytes = [Convert]::ToBase64String([IO.File]::ReadAllBytes($livePath))
+        $liveAutonomy = (Get-EngineTemplateParts $livePath).Autonomy
+        foreach ($quoted in @($false, $true)) {
+            foreach ($count in @(0, 1, 2, -1)) {
+                $quote = if ($quoted) { 'run the verify recipe; run the exact build-repo recipe commands' } else { 'safe fixture payload' }
+                $task = [pscustomobject]@{ text = "Alpha $quote"; done_when = 'complete'; files = @(); acceptance = @("criterion $quote"); acceptance_checks = @() }
+                if ($count -eq -1) { $task.PSObject.Properties.Remove('acceptance_checks') }
+                elseif ($count -gt 0) { $task.acceptance_checks = @(1..$count | ForEach-Object { [pscustomobject]@{ body = "Write-Output '$quote check $_'`n  # continuation  " } }) }
+                $prompt = New-EnginePrompt -Task $task @promptArgs
+                $verify = if ($count -gt 0) { $ownVerify } else { $noneVerify }
+                if (@($prompt -split "`n" | Where-Object { $_ -ceq $verify }).Count -ne 1 -or $prompt.Contains($promptArgs.VerifyFence) -or $prompt.Contains('RECIPE-COMMAND-SENTINEL')) { throw 'Verify selection or recipe leak' }
+                foreach ($check in @($task.acceptance_checks)) {
+                    if ($null -ne $check -and -not $prompt.Contains("``````powershell apex-accept`n$($check.body)`n``````")) { throw 'tagged body changed' }
+                }
+                if (@([regex]::Matches($prompt, '(?m)^```powershell apex-accept$')).Count -ne [Math]::Max(0, $count)) { throw 'foreign tagged check embedded' }
+                if (-not $prompt.Contains($task.text) -or -not $prompt.Contains($task.acceptance[0])) { throw 'quoted payload changed' }
+                $injected = @($prompt -split "`n" | Where-Object { $_.StartsWith('Follow AGENTS.md;', [StringComparison]::Ordinal) -or $_.StartsWith('- Verify:', [StringComparison]::Ordinal) }) -join "`n"
+                if ($injected -cne ($savedAutonomy.Replace('run the verify recipe', $engineClause) + "`n" + $verify)) { throw 'injected clauses differ' }
+                $inspect = if ($quoted) { $injected } else { $prompt }
+                foreach ($legacy in @('run the verify recipe', 'run the exact build-repo recipe commands')) {
+                    if ($inspect.Contains($legacy)) { throw 'legacy instruction leaked' }
+                }
+                if ([regex]::Matches($prompt, [regex]::Escape($engineClause)).Count -ne 1 -or $promptTemplate.Autonomy -cne $savedAutonomy) { throw 'autonomy mutation or replacement count' }
+            }
+        }
+        if ($liveAutonomy -cne (Get-EngineTemplateParts $livePath).Autonomy -or $liveBytes -cne [Convert]::ToBase64String([IO.File]::ReadAllBytes($livePath))) { throw 'live template changed' }
+        return $true
+    }
+    Assert-Case 'planned tasks embed only their own multiple tagged bodies' {
+        $fixture = New-Fixture -Tasks @((New-Task -Id '1' -Files @(New-File 'one.txt')), (New-Task -Id '2' -Files @(New-File 'two.txt')))
+        $criteria = New-Object 'System.Collections.Generic.List[string]'
+        foreach ($label in @('Task 1 - first', 'Task 1 - second', 'Task 2 - third', 'spec fixture')) {
+            $criteria.Add("- [ ] $label`n``````powershell apex-accept`nWrite-Output '$label sentinel'`n  # keep whitespace  `n``````")
+        }
+        $source = [regex]::Replace([IO.File]::ReadAllText($fixture.Spec), '(?ms)(## Acceptance Criteria\n).*?(?=\n## Progress)', ('$1' + ($criteria.ToArray() -join "`n") + "`n"))
+        Write-Utf8 $fixture.Spec $source
+        $plan = Invoke-Plan $fixture
+        if (-not $plan.allowed) { throw $plan.refusal }
+        $tasks = @($plan.waves | ForEach-Object { $_.tasks })
+        foreach ($task in $tasks) {
+            if (@($task.prompt -split "`n" | Where-Object { $_ -ceq $ownVerify }).Count -ne 1) { throw 'missing own Verify line' }
+            foreach ($check in $task.acceptance_checks) {
+                if (-not $task.prompt.Contains("``````powershell apex-accept`n$($check.body)`n``````")) { throw 'own body bytes changed' }
+            }
+            $foreign = @($tasks | Where-Object { $_.id -cne $task.id } | ForEach-Object { $_.acceptance_checks }) + @($plan.spec_acceptance_checks)
+            foreach ($check in $foreign) { if ($task.prompt.Contains($check.body)) { throw 'foreign body leaked' } }
+            # These payloads contain neither legacy instruction string nor recipe commands.
+            foreach ($value in @('node --check exact-one.js', 'powershell.exe -NoProfile -File exact-two.ps1', 'run the verify recipe', 'run the exact build-repo recipe commands')) {
+                if ($task.prompt.Contains($value)) { throw 'repository verification leaked' }
+            }
+        }
+        return @($tasks[0].acceptance_checks).Count -eq 2 -and @($tasks[1].acceptance_checks).Count -eq 1
+    }
+    Assert-Case 'autonomy drift direct throw and planning refusal without executable waves' {
+        $original = (Get-Item Function:Get-EngineTemplateParts).ScriptBlock
+        $fixture = New-Fixture
+        $savedAutonomy = $promptTemplate.Autonomy
+        try {
+            foreach ($bad in @('Follow AGENTS.md; finish.', 'run the verify recipe; run the verify recipe', 'Run the verify recipe')) {
+                $promptTemplate.Autonomy = $bad
+                $task = [pscustomobject]@{ text = 'Alpha'; done_when = 'complete'; files = @(); acceptance = @() }
+                $message = ''
+                try { $null = New-EnginePrompt -Task $task @promptArgs } catch { $message = $_.Exception.Message }
+                if ($message -notmatch 'live dispatch-pack.md autonomy drift' -or -not $message.Contains("exact-once substring 'run the verify recipe'")) { throw 'direct drift throw missing' }
+                $stubTemplate = $promptTemplate
+                Set-Item Function:Get-EngineTemplateParts -Value { param($TemplatePath) return $stubTemplate }.GetNewClosure()
+                $plan = Invoke-Plan $fixture
+                if ($plan.allowed -or @($plan.waves).Count -ne 0 -or $plan.refusal -cne $message) { throw 'drift did not refuse planning' }
+            }
+        } finally {
+            Set-Item Function:Get-EngineTemplateParts -Value $original
+            $promptTemplate.Autonomy = $savedAutonomy
+        }
+        return $true
+    }
+
     Assert-Case 'raw UTF-8 marked blocks include unique markers and identical EOL and bytes' {
         $baselineBlock = Get-MarkedRecipeBytes -Path $baseline
         $plannerBlock = Get-MarkedRecipeBytes -Path $planner
@@ -405,11 +570,11 @@ try {
                 $tasks = @($plan.waves | ForEach-Object { $_.tasks })
                 if (@($tasks).Count -eq 0) { throw 'accepted plan has no task prompts' }
                 foreach ($task in $tasks) {
-                    $promptFences = [regex]::Matches($task.prompt,
-                        '(?ms)^- Verify: run the exact build-repo recipe commands:\n(?<Fence>.*?)(?=\n- Final message:|\z)')
-                    if (@($promptFences).Count -ne 1 -or $promptFences[0].Groups['Fence'].Value -cne $row.Fence) {
-                        throw 'prompt fence differs from exact source fence (including info string and whitespace)'
-                    }
+                    # These fixture payloads contain no recipe commands or legacy instruction strings.
+                    $verify = '- Verify: this task has no tagged checks; do not run the repository verify recipe (the Engine runs it after integration).'
+                    if (@($task.prompt -split "`n" | Where-Object { $_ -ceq $verify }).Count -ne 1 -or
+                        $task.prompt.Contains($row.Fence) -or $task.prompt.Contains('run the verify recipe') -or
+                        $task.prompt.Contains('run the exact build-repo recipe commands')) { throw 'task-specific Verify or recipe omission failed' }
                 }
             }
             else {
@@ -911,6 +1076,7 @@ try {
             @($plannedTasks | Where-Object { [string]::IsNullOrWhiteSpace($_.prompt) }).Count -eq 0
     }
     Assert-Case 'exact live-template slots commands and prompt digest' {
+        # Own task/acceptance payloads contain neither recipe commands nor either legacy substring.
         $fixture = New-Fixture -SpecOptions @{
             Intent = "- **Intent:** Preserve this intent verbatim.`n- **Invariants:** Keep order."
             Assumptions = '- Preserve this assumption verbatim.'
@@ -927,9 +1093,9 @@ try {
             performance = $task.prompt.Contains('PERFORMANCE-HAZARD-VERBATIM')
             no_accessibility = -not $task.prompt.Contains('### Accessibility')
             scratch = $task.prompt.Contains('- Scratch:')
-            autonomy = $task.prompt.Contains('"Follow AGENTS.md.')
-            command_one = $task.prompt.Contains('node --check exact-one.js')
-            command_two = $task.prompt.Contains('powershell.exe -NoProfile -File exact-two.ps1')
+            autonomy = $task.prompt.Contains("run only this task's tagged checks (never the repository verify recipe)") -and -not $task.prompt.Contains('run the verify recipe') -and -not $task.prompt.Contains('run the exact build-repo recipe commands')
+            command_one = -not $task.prompt.Contains('node --check exact-one.js')
+            command_two = -not $task.prompt.Contains('powershell.exe -NoProfile -File exact-two.ps1')
             digest = $task.prompt_digest -eq (Get-EngineSha256 -Text $task.prompt)
         }
         if (@($checks.GetEnumerator() | Where-Object { -not $_.Value }).Count -gt 0) { throw ('prompt checks failed: ' + (($checks.GetEnumerator() | Where-Object { -not $_.Value } | ForEach-Object { $_.Key }) -join ',')) }
@@ -937,8 +1103,9 @@ try {
             $task.done_when -eq 'task 1 is complete.' -and @($task.acceptance).Count -eq 1 -and
             $task.prompt.Contains('SECURITY-HAZARD-VERBATIM') -and $task.prompt.Contains('PERFORMANCE-HAZARD-VERBATIM') -and
             -not $task.prompt.Contains('### Accessibility') -and $task.prompt.Contains('- Scratch:') -and
-            $task.prompt.Contains('"Follow AGENTS.md.') -and $task.prompt.Contains('node --check exact-one.js') -and
-            $task.prompt.Contains('powershell.exe -NoProfile -File exact-two.ps1') -and
+            $task.prompt.Contains("run only this task's tagged checks (never the repository verify recipe)") -and -not $task.prompt.Contains('node --check exact-one.js') -and
+            -not $task.prompt.Contains('powershell.exe -NoProfile -File exact-two.ps1') -and
+            -not $task.prompt.Contains('run the verify recipe') -and -not $task.prompt.Contains('run the exact build-repo recipe commands') -and
             $task.prompt_digest -eq (Get-EngineSha256 -Text $task.prompt)
     }
     $vectors = Get-Content -LiteralPath (Join-Path (Split-Path -Parent $PSScriptRoot) 'references/accept-grammar-vectors.json') -Raw | ConvertFrom-Json

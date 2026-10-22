@@ -365,16 +365,68 @@ function Get-EngineTemplateParts {
 function Get-EngineTaskDeclarations {
     param([Parameter(Mandatory = $true)][string]$Text)
 
-    $tasksBody = Get-EngineSectionBody -Text $Text -Heading 'Tasks'
-    $matches = [regex]::Matches($tasksBody, '(?ms)^- \[[ xX]\][ \t]+\*\*Task[ \t]+(?<Id>[0-9]+[A-Za-z]?)(?:[^*]*)\*\*[ \t]*[-\u2013\u2014][ \t]*(?<Text>.*?)(?=^- \[[ xX]\][ \t]+\*\*Task[ \t]+|\z)')
+    $textLf = ConvertTo-EngineLfText -Text $Text
+    $options = [System.Text.RegularExpressions.RegexOptions]::CultureInvariant
+    $taskDeclarationRegex = [regex]::new('^\s*(?:[-*+]|\d+[.)])\s+(?:\[[ xX]\]\s+)?\*\*\s*(?<Title>Task\s+(?<Id>[0-9]+[A-Za-z]?)(?=\b).*?)\*\*', $options)
+    $headingRegex = [regex]::new('^##\s+(.+?)\s*$', $options)
+    $fenceRegex = [regex]::new('^[ ]{0,3}(?<Fence>`{3,}|~{3,})(?<Trailing>.*)$', $options)
+    $declarations = New-Object 'System.Collections.Generic.List[object]'
+    $section = ''; $fence = $null; $offset = 0
+    foreach ($line in ($textLf -split "`n")) {
+        $lineOffset = $offset
+        $offset += $line.Length + 1
+        $fenceMatch = $fenceRegex.Match($line)
+        if ($null -ne $fence) {
+            if ($fenceMatch.Success) {
+                $candidate = $fenceMatch.Groups['Fence'].Value
+                if ($candidate[0] -eq $fence.character -and $candidate.Length -ge $fence.length -and
+                    [string]::IsNullOrWhiteSpace($fenceMatch.Groups['Trailing'].Value)) { $fence = $null }
+            }
+            continue
+        }
+        if ($fenceMatch.Success) {
+            $opening = $fenceMatch.Groups['Fence'].Value
+            $fence = @{ character = $opening[0]; length = $opening.Length }
+            continue
+        }
+        $heading = $headingRegex.Match($line)
+        if ($heading.Success) {
+            if ($section -ceq 'Tasks' -and $declarations.Count -gt 0 -and $null -eq $declarations[$declarations.Count - 1].End) {
+                $declarations[$declarations.Count - 1].End = $lineOffset
+            }
+            $section = $heading.Groups[1].Value
+            continue
+        }
+        if (-not [string]::Equals($section, 'Tasks', [System.StringComparison]::Ordinal)) { continue }
+        $match = $taskDeclarationRegex.Match($line)
+        if (-not $match.Success) { continue }
+        if ($declarations.Count -gt 0 -and $null -eq $declarations[$declarations.Count - 1].End) {
+            $declarations[$declarations.Count - 1].End = $lineOffset
+        }
+        $declarations.Add([pscustomobject]@{
+            Start = $lineOffset; BodyStart = $lineOffset + $match.Length; End = $null
+            Title = $match.Groups['Title'].Value; Id = $match.Groups['Id'].Value.ToLowerInvariant()
+        })
+    }
     $result = @{}
-    foreach ($match in $matches) {
-        $id = $match.Groups['Id'].Value.ToLowerInvariant()
-        $taskText = $match.Groups['Text'].Value.TrimEnd("`n")
+    foreach ($declaration in $declarations) {
+        # HOST/OWNER declarations bound the previous body before they are excluded.
+        if ($declaration.Title.Contains('(HOST)') -or [regex]::IsMatch($declaration.Title, '\bOWNER\b', $options)) { continue }
+        $end = $textLf.Length
+        if ($null -ne $declaration.End) { $end = $declaration.End }
+        $body = $textLf.Substring($declaration.BodyStart, $end - $declaration.BodyStart)
+        $body = [regex]::Replace($body, '^[ \t]*(?:[-\u2013\u2014][ \t]*)?', '')
+        $remainder = [regex]::Replace($declaration.Title, '^Task\s+[0-9]+[A-Za-z]?', '').TrimStart([char[]]@([char]32, [char]9, [char]45, [char]0x2013, [char]0x2014, [char]58, [char]46))
+        $taskText = $body
+        if ($remainder.Length -gt 0) {
+            $taskText = $remainder
+            if ($body.Length -gt 0) { $taskText += ' ' + $body }
+        }
+        $taskText = $taskText.TrimEnd("`n")
         $doneMatches = [regex]::Matches($taskText, '(?i)done[ -]when:[ \t]*(?<Done>[^\n]+)')
         $doneWhen = ''
         if ($doneMatches.Count -gt 0) { $doneWhen = $doneMatches[$doneMatches.Count - 1].Groups['Done'].Value.Trim() }
-        $result[$id] = [pscustomobject]@{ Text = $taskText; DoneWhen = $doneWhen }
+        $result[$declaration.Id] = [pscustomobject]@{ Text = $taskText; DoneWhen = $doneWhen }
     }
     return $result
 }
@@ -488,7 +540,15 @@ function New-EnginePrompt {
     $constraintLines.Add("- Authorized paths:`n$fileLines")
     $constraintLines.Add($Template.Scratch)
     if (-not [string]::IsNullOrWhiteSpace($hazards)) { $constraintLines.Add($hazards) }
-    $constraintLines.Add($Template.Autonomy)
+    $needle = 'run the verify recipe'
+    $autonomy = [string]$Template.Autonomy
+    $count = 0; $position = 0
+    while (($position = $autonomy.IndexOf($needle, $position, [System.StringComparison]::Ordinal)) -ge 0) {
+        $count++; $position += $needle.Length
+    }
+    if ($count -ne 1) { throw "live dispatch-pack.md autonomy drift: expected exact-once substring 'run the verify recipe'; found $count" }
+    $engineAutonomy = $autonomy.Replace($needle, "run only this task's tagged checks (never the repository verify recipe)")
+    $constraintLines.Add($engineAutonomy)
 
     $doneLines = New-Object 'System.Collections.Generic.List[string]'
     $doneLines.Add('- Done when: ' + $Task.done_when)
@@ -498,7 +558,11 @@ function New-EnginePrompt {
             $doneLines.Add("``````powershell apex-accept`n$($check.body)`n``````")
         }
     }
-    $doneLines.Add("- Verify: run the exact build-repo recipe commands:`n" + $VerifyFence)
+    if ($Task.PSObject.Properties['acceptance_checks'] -and @($Task.acceptance_checks).Count -gt 0) {
+        $doneLines.Add("- Verify: run only this task's tagged checks above; do not run the repository verify recipe (the Engine runs it after integration).")
+    } else {
+        $doneLines.Add('- Verify: this task has no tagged checks; do not run the repository verify recipe (the Engine runs it after integration).')
+    }
     if (-not [string]::IsNullOrEmpty($Template.Final)) { $doneLines.Add($Template.Final) }
 
     $prompt = @(
@@ -877,10 +941,13 @@ function Get-EnginePlan {
     $identityMatch = [regex]::Match($specText, '(?m)^(?<Line>.*\*\*Identity:\*\*.*)$')
     $identity = $name
     if ($identityMatch.Success) { $identity = $identityMatch.Groups['Line'].Value }
-    foreach ($task in $taskObjects) {
-        $task.prompt = New-EnginePrompt -Task $task -Identity $identity -RepoPath $repoRoot -Intent $intent -Assumptions $assumptions -SpecialistContext $specialist -VerifyFence $verifyFence -Template $template
-        $task.prompt_digest = Get-EngineSha256 -Text $task.prompt
+    try {
+        foreach ($task in $taskObjects) {
+            $task.prompt = New-EnginePrompt -Task $task -Identity $identity -RepoPath $repoRoot -Intent $intent -Assumptions $assumptions -SpecialistContext $specialist -VerifyFence $verifyFence -Template $template
+            $task.prompt_digest = Get-EngineSha256 -Text $task.prompt
+        }
     }
+    catch { return New-EngineRefusal -Reason $_.Exception.Message -Spec $planSpec }
 
     $remaining = New-Object 'System.Collections.Generic.HashSet[string]' ([System.StringComparer]::OrdinalIgnoreCase)
     foreach ($task in $taskObjects) { [void]$remaining.Add($task.id) }
