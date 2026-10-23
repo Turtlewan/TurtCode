@@ -221,6 +221,7 @@
                           }
                         },
                         "depends_on": { "type": "array", "items": { "type": "string" } },
+                        "members": { "type": "array", "items": { "type": "string" } },
                         "effort": { "enum": ["low", "medium", "high", "xhigh", "max", "ultra"] },
                         "coder_model": { "enum": ["gpt-6-sol", "gpt-6.1-sol"] },
                         "text": { "type": "string" },

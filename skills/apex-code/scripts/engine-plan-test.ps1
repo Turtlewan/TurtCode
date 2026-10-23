@@ -1,5 +1,5 @@
 [CmdletBinding()]
-param()
+param([switch]$ChainsOnly)
 
 $ErrorActionPreference = 'Stop'
 $planner = Join-Path $PSScriptRoot 'engine-plan.ps1'
@@ -173,9 +173,10 @@ function New-ManifestJson {
 }
 
 function New-Task {
-    param([string]$Id, [object[]]$Files, [string[]]$Depends = @(), [string]$Effort)
+    param([string]$Id, [object[]]$Files, [string[]]$Depends = @(), [string]$Effort, [object]$Chain)
     $task = [ordered]@{ id = $Id; repo = 'main'; files = @($Files); depends_on = @($Depends) }
     if (-not [string]::IsNullOrEmpty($Effort)) { $task['effort'] = $Effort }
+    if ($PSBoundParameters.ContainsKey('Chain')) { $task['chain'] = $Chain }
     return [pscustomobject]$task
 }
 
@@ -202,7 +203,9 @@ function New-SpecText {
         [switch]$OmitRisk,
         [string]$SpecIdentity,
         [switch]$NoManifest,
-        [switch]$DuplicateManifest
+        [switch]$DuplicateManifest,
+        [hashtable]$TaskTexts = @{},
+        [string]$AcceptanceText
     )
     $front = New-Object 'System.Collections.Generic.List[string]'
     [void]$front.Add('---')
@@ -217,16 +220,22 @@ function New-SpecText {
     [void]$front.Add('---')
 
     $fileRows = New-Object 'System.Collections.Generic.List[string]'
+    $listedFiles = New-Object 'System.Collections.Generic.HashSet[string]' ([System.StringComparer]::Ordinal)
     $taskRows = New-Object 'System.Collections.Generic.List[string]'
     $acceptanceRows = New-Object 'System.Collections.Generic.List[string]'
     $emDash = [string][char]0x2014
     if ([string]::IsNullOrEmpty($TaskFieldSeparator)) { $TaskFieldSeparator = $emDash }
     foreach ($task in $Tasks) {
-        foreach ($file in @($task.files)) { [void]$fileRows.Add('| ' + $file.path + ' | ' + $file.op + ' | fixture |') }
+        foreach ($file in @($task.files)) {
+            $spelling = $file.path.Replace([char]92, [char]47)
+            if ($listedFiles.Add($spelling)) { [void]$fileRows.Add('| ' + $spelling + ' | ' + $file.op + ' | fixture |') }
+        }
         $paths = @($task.files | ForEach-Object { $_.path }) -join ', '
-        [void]$taskRows.Add(('- [ ] **Task {0}** {1} Implement task {0} exactly. {2} files: {3} {2} done when: task {0} is complete.' -f $task.id, $TaskLabelSeparator, $TaskFieldSeparator, $paths))
+        if ($TaskTexts.ContainsKey([string]$task.id)) { [void]$taskRows.Add(('- [ ] **Task {0}** - {1}' -f $task.id, $TaskTexts[[string]$task.id])) }
+        else { [void]$taskRows.Add(('- [ ] **Task {0}** {1} Implement task {0} exactly. {2} files: {3} {2} done when: task {0} is complete.' -f $task.id, $TaskLabelSeparator, $TaskFieldSeparator, $paths)) }
         [void]$acceptanceRows.Add(('- [ ] Task {0} - task {0} is executable -> verify: run the fixture command.' -f $task.id))
     }
+    if ($PSBoundParameters.ContainsKey('AcceptanceText')) { $acceptanceRows.Clear(); $acceptanceRows.Add($AcceptanceText) }
     $manifestBlock = ''
     if (-not $NoManifest) {
         $fence = (([string][char]96) * 3) -join ''
@@ -325,6 +334,35 @@ function Assert-Case {
     }
 }
 
+function Assert-Equal {
+    param($Actual, $Expected, [string]$Label)
+    if ($Actual -cne $Expected) { throw ($Label + ': expected <' + $Expected + '>, got <' + $Actual + '>') }
+}
+
+function Get-PlannedTasks {
+    param($Plan)
+    if (-not $Plan.allowed) { throw $Plan.refusal }
+    return @($Plan.waves | ForEach-Object { $_.tasks })
+}
+
+function Initialize-FixtureFiles {
+    param($Fixture)
+    $paths = New-Object 'System.Collections.Generic.HashSet[string]' ([System.StringComparer]::OrdinalIgnoreCase)
+    foreach ($task in $Fixture.Tasks) {
+        foreach ($file in $task.files) {
+            if ($paths.Add($file.path) -and $file.op -cne 'create') { Write-Utf8 (Join-Path $Fixture.Repo $file.path) 'base' }
+        }
+    }
+    $tracked = @('AGENTS.md') + @($paths | Where-Object { Test-Path -LiteralPath (Join-Path $Fixture.Repo $_) -PathType Leaf })
+    Set-TestCommit $Fixture.Repo $tracked
+}
+
+function Assert-PlanRefusal {
+    param([object[]]$Tasks, [string]$Reason, [int]$MaxParallel = 2)
+    $plan = Invoke-Plan (New-Fixture -Tasks $Tasks) -MaxParallel $MaxParallel
+    if ($plan.allowed -or $plan.refusal -cnotmatch $Reason) { throw ('expected refusal /' + $Reason + '/, got: ' + $plan.refusal) }
+}
+
 try {
     [void](New-Item -ItemType Directory -Path $testRoot -Force)
     $env:APEX_STATE_DIR = Join-Path $testRoot 'state'
@@ -335,6 +373,285 @@ try {
     Write-Utf8 -Path $successValidator -Text "param([string]`$SpecPath)`nWrite-Output VALIDATOR-SEAM`nexit 0`n"
     Write-Utf8 -Path $failureValidator -Text "param([string]`$SpecPath)`nWrite-Output REFUSED-BY-SEAM`nexit 17`n"
     . $planner
+
+    Assert-Case 'chain shared create/modify union, unique file/delete, exact text and prompt/digest' {
+        $tasks = @(
+            (New-Task '1' @((New-File 'shared.txt'), (New-File 'unique.txt')) -Chain 'work'),
+            (New-Task '2' @((New-File 'shared.txt' 'modify'), (New-File 'old.txt' 'delete')) -Depends '1' -Chain 'work' -Effort 'high')
+        )
+        $member1Text = "First instructions.  `n  keep spaces. done when: first"
+        $member2Text = "Second instructions.`n done when: second"
+        $fixture = New-Fixture -Tasks $tasks -SpecOptions @{ TaskTexts = @{ '1' = $member1Text; '2' = $member2Text } }
+        Initialize-FixtureFiles $fixture
+        $plan = Invoke-Plan $fixture
+        $merged = @(Get-PlannedTasks $plan)
+        Assert-Equal $merged.Count 1 'merged count'
+        $task = $merged[0]
+        Assert-Equal ($task.members -join ',') '1,2' 'members'
+        Assert-Equal ($task.files.path -join ',') 'shared.txt,unique.txt,old.txt' 'union order'
+        Assert-Equal ($task.files.op -join ',') 'create,create,delete' 'union operations'
+        Assert-Equal $task.effort 'high' 'effort'
+        Assert-Equal $task.text ('Part 1 (Task 1):' + "`n" + $member1Text + "`n`n" + 'Part 2 (Task 2):' + "`n" + $member2Text) 'text bytes'
+        Assert-Equal $task.done_when 'first; then second' 'completion bytes'
+        Assert-Equal ($task.acceptance -join "`n") "- [ ] Task 1 - task 1 is executable -> verify: run the fixture command.`n- [ ] Task 2 - task 2 is executable -> verify: run the fixture command." 'acceptance order'
+        $template = Get-EngineTemplateParts (Join-Path (Split-Path -Parent $PSScriptRoot) 'references/dispatch-pack.md')
+        $expected = New-EnginePrompt -Task $task -Identity '**Identity:** Fixture identity for fixture-plan.' -RepoPath $fixture.Repo -Intent $plan.spec.intent -Assumptions $plan.spec.assumptions -SpecialistContext $plan.spec.specialist_context -VerifyFence (Get-EngineVerifyFence (Join-Path $fixture.Repo 'AGENTS.md')) -Template $template
+        Assert-Equal $task.prompt $expected 'generated prompt bytes'
+        Assert-Equal $task.prompt_digest (Get-EngineSha256 $task.prompt) 'raw digest'
+        Assert-Equal ([regex]::Matches([IO.File]::ReadAllText($fixture.Spec), '(?m)^\| shared\.txt \| create \| fixture \|$').Count) 1 'one shared Files-to-Change row with first op'
+        # Seed only the unique delete; the shared create must remain absent.
+        $reversed = New-Fixture -Tasks @($tasks[1], $tasks[0])
+        Write-Utf8 (Join-Path $reversed.Repo 'old.txt') 'base'
+        Set-TestCommit $reversed.Repo @('AGENTS.md', 'old.txt')
+        $reverseTask = @(Get-PlannedTasks (Invoke-Plan $reversed))[0]
+        Assert-Equal ($reverseTask.members -join ',') '1,2' 'reversed create/modify order'
+        Assert-Equal ($reverseTask.files.op -join ',') 'create,create,delete' 'chain-order first operation'
+        return -not $task.PSObject.Properties['chain']
+    }
+    Assert-Case 'shared modify/modify reversed manifest, late shared listing, stable emitted order' {
+        $tasks = @(
+            (New-Task '3' @((New-File 'shared.txt' 'modify'), (New-File 'tail.txt')) -Chain 'work' -Depends '2'),
+            (New-Task '8' @((New-File 'independent.txt'))),
+            (New-Task '1' @((New-File 'head.txt')) -Chain 'work'),
+            (New-Task '2' @((New-File 'shared.txt' 'modify'), (New-File 'middle.txt')) -Chain 'work' -Depends '1')
+        )
+        $fixture = New-Fixture -Tasks $tasks
+        Initialize-FixtureFiles $fixture
+        $planned = @(Get-PlannedTasks (Invoke-Plan $fixture))
+        Assert-Equal ($planned.id -join ',') '1,8' 'first manifest position'
+        Assert-Equal ($planned[0].members -join ',') '1,2,3' 'chain order'
+        Assert-Equal ($planned[0].files.path -join ',') 'head.txt,shared.txt,middle.txt,tail.txt' 'file order'
+        Assert-Equal $planned[0].files[1].op 'modify' 'first op'
+        return -not $planned[1].PSObject.Properties['members']
+    }
+    Assert-Case 'single-member and independent chains retain normalized IDs and resolved maximum effort' {
+        $tasks = @(
+            (New-Task '1A' @((New-File 'one.txt')) -Chain 'solo' -Effort 'low'),
+            (New-Task '2' @((New-File 'two.txt')) -Chain 'other' -Effort 'max'),
+            (New-Task '3' @((New-File 'three.txt')) -Chain 'other' -Depends '2')
+        )
+        $plan = Invoke-Plan (New-Fixture -Tasks $tasks -SpecOptions @{ CoderEffort = 'ultra' })
+        $planned = @(Get-PlannedTasks $plan)
+        Assert-Equal ($planned.id -join ',') '1a,2' 'IDs'
+        Assert-Equal ($planned[0].members -join ',') '1a' 'singleton'
+        Assert-Equal $planned[0].text "Part 1 (Task 1a):`nImplement task 1A exactly. $([char]0x2014) files: one.txt $([char]0x2014) done when: task 1A is complete." 'singleton text'
+        Assert-Equal $planned[1].effort 'ultra' 'default resolved before maximum'
+        Assert-Equal $plan.waves.Count 2 'slot weight creates separate waves'
+        Assert-Equal $plan.waves[1].tasks.Count 1 'ultra consumes two slots'
+        $plan = Invoke-Plan (New-Fixture -Tasks $tasks -SpecOptions @{ CoderEffort = 'ultra' }) -MaxParallel 1
+        return -not $plan.allowed -and $plan.refusal -ceq 'task 3 weight exceeds MaxParallel'
+    }
+    Assert-Case 'external prerequisites, head/non-head dependents and cross-chain dependencies rewrite stably' {
+        $tasks = @(
+            (New-Task '1' @((New-File '1.txt')) -Chain 'a' -Depends @('8','9')),
+            (New-Task '2' @((New-File '2.txt')) -Chain 'a' -Depends @('1','9','8')),
+            (New-Task '3' @((New-File '3.txt')) -Chain 'b' -Depends @('2','1','9')),
+            (New-Task '4' @((New-File '4.txt')) -Chain 'b' -Depends @('3','2')),
+            (New-Task '5' @((New-File '5.txt')) -Depends @('4','3','2','1')),
+            (New-Task '8' @((New-File '8.txt'))), (New-Task '9' @((New-File '9.txt')))
+        )
+        $planned = @(Get-PlannedTasks (Invoke-Plan (New-Fixture -Tasks $tasks)))
+        Assert-Equal (($planned | Where-Object id -eq '1').depends_on -join ',') '8,9' 'member union'
+        Assert-Equal (($planned | Where-Object id -eq '3').depends_on -join ',') '1,9' 'cross chain'
+        Assert-Equal (($planned | Where-Object id -eq '5').depends_on -join ',') '3,1' 'external dependents'
+        return $true
+    }
+    Assert-Case 'completion empty values and missing done-when matches preserve exact join bytes' {
+        foreach ($case in @(
+            @{ Values = @('first','second'); Expected = 'first; then second' },
+            @{ Values = @('','second'); Expected = 'second' },
+            @{ Values = @('first','','second'); Expected = 'first; then second' },
+            @{ Values = @('first',''); Expected = 'first' },
+            @{ Values = @('',''); Expected = '' }
+        )) {
+            $tasks = @(); $texts = @{}
+            for ($i = 0; $i -lt $case.Values.Count; $i++) {
+                $id = [string]($i + 1); $depends = @(); if ($i -gt 0) { $depends = @([string]$i) }
+                $tasks += New-Task $id @((New-File ($id + '.txt'))) -Chain 'done' -Depends $depends
+                # Empty members alternate an empty parsed match and no match at all.
+                $texts[$id] = if ($case.Values[$i] -ne '') { 'body done when: ' + $case.Values[$i] } elseif ($i % 2 -eq 0) { 'body done when:   ' } else { 'body with no completion field' }
+            }
+            $task = @(Get-PlannedTasks (Invoke-Plan (New-Fixture -Tasks $tasks -SpecOptions @{ TaskTexts = $texts })))[0]
+            Assert-Equal $task.done_when $case.Expected 'completion bytes'
+        }
+        return $true
+    }
+    Assert-Case 'acceptance stable union and distinct identical-body checks preserve IDs labels attribution' {
+        $tasks = @((New-Task '1' @((New-File 'one.txt')) -Chain 'checks'), (New-Task '2' @((New-File 'two.txt')) -Chain 'checks' -Depends '1'))
+        $criteria = @'
+- [ ] Task 1 and Task 2 shared host criterion
+- [ ] Task 1 - tagged one
+```powershell apex-accept
+Write-Output same
+```
+- [ ] Task 2 - tagged two
+```powershell apex-accept
+Write-Output same
+```
+- [ ] spec criterion
+```powershell apex-accept
+Write-Output spec
+```
+'@
+        $fixture = New-Fixture -Tasks $tasks -SpecOptions @{ AcceptanceText = $criteria }
+        $before = Get-EngineAcceptanceLines ([IO.File]::ReadAllText($fixture.Spec)) -ManifestIds @('1','2')
+        $plan = Invoke-Plan $fixture
+        $task = @(Get-PlannedTasks $plan)[0]
+        Assert-Equal $task.acceptance.Count 1 'stable host union'
+        Assert-Equal ($task.acceptance_checks.id -join ',') '1-1,2-1' 'distinct check IDs'
+        for ($i = 0; $i -lt 2; $i++) {
+            Assert-Equal $task.acceptance_checks[$i].task '1' 'merged attribution'
+            Assert-Equal $task.acceptance_checks[$i].label $before.checks[$i].label 'label unchanged'
+            Assert-Equal $task.acceptance_checks[$i].body $before.checks[$i].body 'body unchanged'
+        }
+        Assert-Equal ($plan.spec_acceptance_checks | ConvertTo-Json -Depth 5 -Compress) ($before.checks[2] | ConvertTo-Json -Depth 5 -Compress) 'spec-level check'
+        Assert-Equal $task.prompt_digest (Get-EngineSha256 $task.prompt) 'raw digest'
+        return ([regex]::Matches($task.prompt, 'Write-Output same').Count -eq 2) -and -not $task.prompt.Contains('Write-Output spec')
+    }
+    Assert-Case 'schema members array/string optional and all merged task properties admitted' {
+        $schema = Get-Content (Join-Path $PSScriptRoot '../references/engine-state-schema.json') -Raw | ConvertFrom-Json
+        $taskSchema = $schema.properties.plan.oneOf[0].properties.waves.items.properties.tasks.items
+        Assert-Equal $taskSchema.properties.members.type 'array' 'members type'
+        Assert-Equal $taskSchema.properties.members.items.type 'string' 'member type'
+        if ($taskSchema.required -contains 'members' -or $taskSchema.additionalProperties -ne $false) { throw 'schema strictness changed' }
+        $task = @(Get-PlannedTasks (Invoke-Plan (New-Fixture -Tasks @((New-Task '1' @((New-File 'one.txt')) -Chain 'solo')))))[0]
+        foreach ($property in $task.PSObject.Properties.Name) { if (-not $taskSchema.properties.PSObject.Properties[$property]) { throw ('unknown schema property ' + $property) } }
+        return $true
+    }
+    Assert-Case 'invalid chain metadata refuses without string coercion' {
+        foreach ($value in @($null, '', ' ', 'Upper', 'a_b', '-a', "a`n", @('a'), 1)) {
+            Assert-PlanRefusal @((New-Task '1' @((New-File 'one.txt')) -Chain $value)) '^task 1 chain is invalid$'
+        }
+        return $true
+    }
+    Assert-Case 'chain multiple heads, branch, join, disconnected, cycles and non-predecessor edges refuse under permissive validator' {
+        foreach ($edges in @(
+            @{ '1'=@(); '2'=@() },
+            @{ '1'=@(); '2'=@('1'); '3'=@('1') },
+            @{ '1'=@(); '2'=@('1'); '3'=@('1','2') },
+            @{ '1'=@(); '2'=@('3'); '3'=@('2') },
+            @{ '1'=@('2'); '2'=@('1') },
+            @{ '1'=@(); '2'=@('1'); '3'=@('2'); '4'=@('3','1') },
+            @{ '1'=@(); '2'=@('1','1') }
+        )) {
+            $tasks = @(); foreach ($id in @($edges.Keys | Sort-Object)) { $tasks += New-Task $id @((New-File ($id + '.txt'))) -Chain 'shape' -Depends $edges[$id] }
+            Assert-PlanRefusal $tasks '^(chain shape |execution manifest dependency graph contains a cycle$)'
+        }
+        return $true
+    }
+    Assert-Case 'shared operations reject first delete and later delete/create including case-variant identities' {
+        foreach ($ops in @(@('delete','modify'), @('create','delete'), @('modify','delete'), @('create','create'), @('modify','create'))) {
+            foreach ($laterPath in @('shared.txt','SHARED.TXT','shared.txt.')) {
+                Assert-PlanRefusal @((New-Task '1' @((New-File 'shared.txt' $ops[0])) -Chain 'ops'), (New-Task '2' @((New-File $laterPath $ops[1])) -Chain 'ops' -Depends '1')) '^chain ops has invalid shared-path operations:'
+            }
+        }
+        return $true
+    }
+    Assert-Case 'source duplicate paths and sharing outside a chain preserve ownership refusal' {
+        foreach ($laterPath in @('shared.txt','SHARED.TXT','shared.txt.')) {
+            Assert-PlanRefusal @((New-Task '1' @((New-File 'shared.txt'), (New-File $laterPath 'modify')) -Chain 'same')) '^canonical manifest path appears in more than one task:'
+        }
+        foreach ($chain in @($null, 'different')) {
+            $second = New-Task '2' @((New-File 'shared.txt' 'modify')) -Depends '1'
+            if ($null -ne $chain) { $second | Add-Member chain $chain }
+            Assert-PlanRefusal @((New-Task '1' @((New-File 'shared.txt')) -Chain 'same'), $second) '^canonical manifest path appears in more than one task:'
+        }
+        return $true
+    }
+    Assert-Case 'ancestor/descendant overlaps remain forbidden within merged tasks and across chains' {
+        foreach ($secondChain in @('same','other')) {
+            Assert-PlanRefusal @((New-Task '1' @((New-File 'parent')) -Chain 'same'), (New-Task '2' @((New-File 'parent/child')) -Chain $secondChain -Depends '1')) '^manifest paths overlap \(ancestor/descendant\): parent, parent/child$'
+        }
+        Assert-PlanRefusal @((New-Task '1' @((New-File 'parent'), (New-File 'parent/child')) -Chain 'same')) '^manifest paths overlap'
+        return $true
+    }
+    Assert-Case 'original unknown/self dependency validation precedes rewriting and shape checks' {
+        foreach ($invalid in @('9','2')) {
+            Assert-PlanRefusal @((New-Task '1' @((New-File 'parent')) -Chain 'original'), (New-Task '2' @((New-File 'parent/child')) -Chain 'original' -Depends @('1',$invalid))) ('^task 2 has an invalid dependency ' + $invalid + '$')
+        }
+        return $true
+    }
+    Assert-Case 'original cycle generic, acyclic contraction interleaving specific with encounter-order names' {
+        Assert-PlanRefusal @((New-Task '1' @((New-File '1.txt')) -Chain 'work'), (New-Task '2' @((New-File '2.txt')) -Chain 'work' -Depends @('1','3')), (New-Task '3' @((New-File '3.txt')) -Depends '1')) '^chain work requires interleaving with task 3$'
+        Assert-PlanRefusal @((New-Task '1' @((New-File '1.txt')) -Chain 'work' -Depends '3'), (New-Task '2' @((New-File '2.txt')) -Chain 'work' -Depends '1'), (New-Task '3' @((New-File '3.txt')) -Depends '2')) '^execution manifest dependency graph contains a cycle$'
+        Assert-PlanRefusal @((New-Task '4' @((New-File '4.txt')) -Chain 'b' -Depends '3'), (New-Task '2' @((New-File '2.txt')) -Chain 'a' -Depends @('1','3')), (New-Task '1' @((New-File '1.txt')) -Chain 'a'), (New-Task '3' @((New-File '3.txt')) -Chain 'b' -Depends '1')) '^chain b requires interleaving with task 2$'
+        return $true
+    }
+    Assert-Case 'unchained overlap precedes cycle and duplicate ownership precedes later ultra weight' {
+        Assert-PlanRefusal @((New-Task '1' @((New-File 'parent')) -Depends '2'), (New-Task '2' @((New-File 'parent/child')) -Depends '1')) '^manifest paths overlap \(ancestor/descendant\): parent, parent/child$'
+        Assert-PlanRefusal @((New-Task '1' @((New-File 'same.txt' 'modify'))), (New-Task '2' @((New-File 'same.txt' 'modify'))), (New-Task '3' @((New-File '3.txt')) -Effort 'ultra')) '^canonical manifest path appears in more than one task: same.txt$' -MaxParallel 1
+        return $true
+    }
+    Assert-Case 'chain pass-one path/op/effort/ID safety guards survive permissive validator' {
+        foreach ($path in @('../escape', '/absolute', 'src/../escape', '.git/config', 'src/.GiT/config', '.gitattributes')) {
+            Assert-PlanRefusal @((New-Task '1' @((New-File $path)) -Chain 'guard')) '(manifest path|\.gitattributes)'
+        }
+        Assert-PlanRefusal @((New-Task '1' @((New-File 'one.txt' 'rename')) -Chain 'guard')) '^manifest operation is invalid'
+        Assert-PlanRefusal @((New-Task '1' @((New-File 'one.txt')) -Chain 'guard' -Effort 'bogus')) '^task 1 effort is invalid$'
+        Assert-PlanRefusal @((New-Task '1' @((New-File 'one.txt')) -Chain 'guard'), (New-Task '1' @((New-File 'two.txt')) -Chain 'guard')) '^duplicate manifest task id: 1$'
+        Assert-PlanRefusal @((New-Task '1' @((New-File 'one.txt')) -Chain 'guard' -Effort 'ultra')) '^task 1 weight exceeds MaxParallel$' -MaxParallel 1
+        return $true
+    }
+    Assert-Case 'contracted file union preserves directory, regular-file-ancestor, create-existence and dirty guards' {
+        $fixture = New-Fixture -Tasks @((New-Task '1' @((New-File 'shared.txt')) -Chain 'guard'), (New-Task '2' @((New-File 'shared.txt' 'modify')) -Chain 'guard' -Depends '1'))
+        Write-Utf8 (Join-Path $fixture.Repo 'shared.txt') 'existing'
+        Assert-Equal (Invoke-Plan $fixture).refusal 'create path already exists (tracked or ignored): shared.txt' 'first op existence guard'
+        $fixture = New-Fixture -Tasks @((New-Task '1' @((New-File 'directory')) -Chain 'guard'), (New-Task '2' @((New-File 'directory' 'modify')) -Chain 'guard' -Depends '1'))
+        [void](New-Item -ItemType Directory -Path (Join-Path $fixture.Repo 'directory'))
+        Assert-Equal (Invoke-Plan $fixture).refusal 'manifest path is a directory: directory' 'directory guard'
+        $fixture = New-Fixture -Tasks @((New-Task '1' @((New-File 'parent/child.txt')) -Chain 'guard'))
+        Write-Utf8 (Join-Path $fixture.Repo 'parent') 'regular file'
+        Assert-Equal (Invoke-Plan $fixture).refusal 'manifest path ancestor is a file: parent/child.txt' 'file ancestor guard'
+        $fixture = New-Fixture -Tasks @((New-Task '1' @((New-File 'shared.txt' 'modify')) -Chain 'guard'), (New-Task '2' @((New-File 'shared.txt' 'modify')) -Chain 'guard' -Depends '1'))
+        Initialize-FixtureFiles $fixture
+        Write-Utf8 (Join-Path $fixture.Repo 'shared.txt') 'dirty'
+        Assert-Equal (Invoke-Plan $fixture).refusal 'modify/delete path is dirty: shared.txt' 'dirty guard'
+        return $true
+    }
+    Assert-Case 'Intent full-text comment removal handles same-line/multiline headings and preserves prompt metadata' {
+        foreach ($intent in @('<!-- risk: high --> safe <!-- risk: high --> prose', "<!-- risk: high`n## hidden heading`n-->`nPlain prose.", "Start <!-- risk: high`ncomment continues --> end", "Start <!-- risk:`nhigh --> end")) {
+            $fixture = New-Fixture -SpecOptions @{ Intent = $intent }
+            $plan = Invoke-Plan $fixture
+            $task = @(Get-PlannedTasks $plan)[0]
+            $originalIntent = Get-EngineSectionBody ([IO.File]::ReadAllText($fixture.Spec)) 'Intent'
+            Assert-Equal $plan.spec.intent $originalIntent 'original metadata'
+            if (-not $task.prompt.Contains("- Intent:`n$originalIntent")) { throw 'comment-bearing Intent changed in prompt' }
+            Assert-Equal $plan.spec.digest (Get-EngineSha256 ([IO.File]::ReadAllText($fixture.Spec))) 'original spec digest'
+        }
+        foreach ($intent in @('Visible risk: high', '<!-- unfinished risk: high', "<!-- risk: high -->`nVisible risk: high", "<!-- unfinished`nrisk: high")) {
+            $plan = Invoke-Plan (New-Fixture -SpecOptions @{ Intent = $intent })
+            Assert-Equal $plan.refusal 'Intent declares risk: high but frontmatter risk is not high' 'visible or unterminated risk'
+        }
+        return $true
+    }
+
+    Assert-Case 'embedded pre-change unchained serialized plan and prompt bytes, raw digests' {
+        # Captured before chain support. Only fixture-root substitutions vary; all other bytes are pinned.
+        $expectedJson = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('ew0KICAgICJhbGxvd2VkIjogIHRydWUsDQogICAgInJlZnVzYWwiOiAgbnVsbCwNCiAgICAic3BlYyI6ICB7DQogICAgICAgICAgICAgICAgICJuYW1lIjogICJmaXh0dXJlLXBsYW4iLA0KICAgICAgICAgICAgICAgICAicGF0aCI6ICAiPFNQRUM+IiwNCiAgICAgICAgICAgICAgICAgImRpZ2VzdCI6ICAiPFNQRUNfRElHRVNUPiIsDQogICAgICAgICAgICAgICAgICJyaXNrIjogICJtZWRpdW0iLA0KICAgICAgICAgICAgICAgICAiY29kZXJfbW9kZWwiOiAgImdwdC02LjEtc29sIiwNCiAgICAgICAgICAgICAgICAgImNvZGVyX2VmZm9ydCI6ICAibWVkaXVtIiwNCiAgICAgICAgICAgICAgICAgIm1heF9wYXJhbGxlbF9jb2RleCI6ICBudWxsLA0KICAgICAgICAgICAgICAgICAiaW50ZW50IjogICItICoqSW50ZW50OioqIEJ1aWxkIHRoZSBmaXh0dXJlLiIsDQogICAgICAgICAgICAgICAgICJhc3N1bXB0aW9ucyI6ICAiLSBUaGUgZml4dHVyZSBlbnZpcm9ubWVudCBpcyBhdmFpbGFibGUuIiwNCiAgICAgICAgICAgICAgICAgInNwZWNpYWxpc3RfY29udGV4dCI6ICBbDQogICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICIjIyMgU2VjdXJpdHlcbktlZXAgZml4dHVyZSB3cml0ZXMgc2NvcGVkLiINCiAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICBdDQogICAgICAgICAgICAgfSwNCiAgICAid2F2ZXMiOiAgWw0KICAgICAgICAgICAgICAgICAgew0KICAgICAgICAgICAgICAgICAgICAgICJudW1iZXIiOiAgMSwNCiAgICAgICAgICAgICAgICAgICAgICAidGFza3MiOiAgWw0KICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgew0KICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICJpZCI6ICAiMSIsDQogICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgInJlcG8iOiAgIm1haW4iLA0KICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICJmaWxlcyI6ICBbDQogICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICB7DQogICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgInBhdGgiOiAgInNyYy9uZXcudHh0IiwNCiAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAib3AiOiAgImNyZWF0ZSINCiAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgIH0NCiAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgXSwNCiAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAiZGVwZW5kc19vbiI6ICBbDQoNCiAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICBdLA0KICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICJlZmZvcnQiOiAgIm1lZGl1bSIsDQogICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgInRleHQiOiAgIkltcGxlbWVudCB0YXNrIDEgZXhhY3RseS4g4oCUIGZpbGVzOiBzcmMvbmV3LnR4dCDigJQgZG9uZSB3aGVuOiB0YXNrIDEgaXMgY29tcGxldGUuIiwNCiAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAiZG9uZV93aGVuIjogICJ0YXNrIDEgaXMgY29tcGxldGUuIiwNCiAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAiYWNjZXB0YW5jZSI6ICBbDQogICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICItIFsgXSBUYXNrIDEgLSB0YXNrIDEgaXMgZXhlY3V0YWJsZSAtXHUwMDNlIHZlcmlmeTogcnVuIHRoZSBmaXh0dXJlIGNvbW1hbmQuIg0KICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgIF0sDQogICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgImFjY2VwdGFuY2VfY2hlY2tzIjogIFsNCg0KICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICBdLA0KICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICJwcm9tcHQiOiAgIiMjIEdvYWxcbkltcGxlbWVudCB0YXNrIDEgZXhhY3RseS4g4oCUIGZpbGVzOiBzcmMvbmV3LnR4dCDigJQgZG9uZSB3aGVuOiB0YXNrIDEgaXMgY29tcGxldGUuXG5Eb25lIHdoZW46IHRhc2sgMSBpcyBjb21wbGV0ZS5cblxuIyMgQ29udGV4dFxuLSBTcGVjOiAqKklkZW50aXR5OioqIEZpeHR1cmUgaWRlbnRpdHkgZm9yIGZpeHR1cmUtcGxhbi5cbi0gUmVwbzogPFJFUE8+XG4tIEZpbGVzIGZvciB0aGlzIHRhc2sgKGF1dGhvcml6ZWQgc2V0IC0gdG91Y2ggbm90aGluZyBlbHNlKTpcbi0gc3JjL25ldy50eHQgKGNyZWF0ZSlcbi0gSW50ZW50OlxuLSAqKkludGVudDoqKiBCdWlsZCB0aGUgZml4dHVyZS5cbi0gQXNzdW1wdGlvbnM6XG4tIFRoZSBmaXh0dXJlIGVudmlyb25tZW50IGlzIGF2YWlsYWJsZS5cblxuIyMgQ29uc3RyYWludHNcbi0gU3VyZ2ljYWwgc2NvcGU6IG9ubHkgdGhlIGZpbGVzIGxpc3RlZCBhYm92ZTsgYGdpdCBzdGF0dXMgLS1wb3JjZWxhaW4gLXVhbGxgIG11c3Qgc2hvdyBubyBwYXRoIG91dHNpZGUgdGhlbSB0aGF0IHdhcyBub3QgYWxyZWFkeSBkaXJ0eSB3aGVuIHlvdSBzdGFydGVkLiAoTk9UIGBnaXQgZGlmZiAtLXN0YXRgIOKAlCBhIGZpbGUgeW91IENSRUFURSBpcyB1bnRyYWNrZWQsIHNvIGl0IG5ldmVyIGFwcGVhcnMgdGhlcmUsIGFuZCB5b3UgbWF5IG5vdCBgZ2l0IGFkZGAgaXQgaW50byB2aWV3Lilcbi0gQXV0aG9yaXplZCBwYXRoczpcbi0gc3JjL25ldy50eHQgKGNyZWF0ZSlcbi0gU2NyYXRjaDogaWYgeW91IG5lZWQgYSBzY3JhdGNoIGRpcmVjdG9yeSwgY3JlYXRlIGAuY29kZXgtc2NyYXRjaC9gIGF0IHRoZSByZXBvIHJvb3QgYW5kIG5vd2hlcmUgZWxzZSDigJQgaXQgaXMgdGhlIG9ubHkgc2FuY3Rpb25lZCBuYW1lLiBgLnNjcmF0Y2hgLCBgLmFwZXgtdG1wYCBhbmQgYC5zYW5kYm94LWNhY2hlYCBhcmUgREVQUkVDQVRFRDogdGhleSBhcmUgc3RpbGwgZXhjbHVkZWQgZnJvbSB0aGUgc2NvcGUgY2hlY2sgb24gZXhpc3RpbmcgcmVwb3MsIHNvIHRoZXkgcmFpc2Ugbm8gdmlvbGF0aW9uLCBidXQgdGhleSBtYXkgbG9zZSB0aGF0IGV4Y2x1c2lvbiBpbiBhIGZ1dHVyZSByZXZpc2lvbiDigJQgZG8gbm90IHVzZSB0aGVtIGZvciBuZXcgd29yay4gQW55IG90aGVyIGludmVudGVkIG9yIHRhc2stc3VmZml4ZWQgdmFyaWFudCAoYC5jb2RleC1zY3JhdGNoLXRhc2syYCkgSVMgcmVwb3J0ZWQgYXMgYW4gb3V0LW9mLXNjb3BlIHdyaXRlLiBJZiB0aGlzIHJlcG8gZG9lcyBub3QgZ2l0aWdub3JlIGAuY29kZXgtc2NyYXRjaC9gLCBpdCB3aWxsIGZsYWcgYXMgYSBzY29wZSB2aW9sYXRpb24g4oCUIHJlcG9ydCB0aGF0LCBhbmQgZG8gTk9UIGFkZCBnaXRpZ25vcmUgZW50cmllcyB5b3Vyc2VsZi5cbiMjIyBTZWN1cml0eVxuS2VlcCBmaXh0dXJlIHdyaXRlcyBzY29wZWQuXG5cIkZvbGxvdyBBR0VOVFMubWQuIFN1cmdpY2FsIHNjb3BlIOKAlCB0b3VjaCBvbmx5IHRoZSBsaXN0ZWQgZmlsZXMuIFdvcmsgYXV0b25vbW91c2x5IHRvXG5jb21wbGV0aW9uOiBydW4gb25seSB0aGlzIHRhc2tcdTAwMjdzIHRhZ2dlZCBjaGVja3MgKG5ldmVyIHRoZSByZXBvc2l0b3J5IHZlcmlmeSByZWNpcGUpLCBhbmQgaWYgYSB0ZXN0IGZhaWxzIC8gbGludCBlcnJvcnMgLyB5b3UgaGl0IGEgcHJvYmxlbSwgZml4IGl0XG5hbmQgcmUtcnVuIOKAlCBkbyBub3Qgc3RvcCB0byBhc2suIE9ubHkgZW5kIHdoZW4gdGhlIGFjY2VwdGFuY2UgY3JpdGVyaW9uIHBhc3Nlcywgb3IgeW91IGFyZVxuZ2VudWluZWx5IGJsb2NrZWQg4oCUIHRoZW4gc2F5IGV4YWN0bHkgd2hhdCBibG9ja2VkIHlvdS4gU2FmZSBsb2NhbCBjaG9pY2UgKG1ha2UgaXQsIGxvZyBpdCBpblxuZGV2aWF0aW9ucyk6IHdoaWNoIGV4aXN0aW5nIHBhdHRlcm4gdG8gbWlycm9yLCBhIGxvY2FsIG5hbWUuIEJsb2NrZXIgKHJlcG9ydCBpbiBgYmxvY2tlcmAsIGRvblx1MDAyN3RcbmltcHJvdmlzZSk6IGFuIGFjY2VwdGFuY2UgY3JpdGVyaW9uIHRoYXQgY2Fubm90IHBhc3MgYXMgd3JpdHRlbiwgYSBuZWVkZWQgZmlsZSBvdXRzaWRlIHRoZVxuYXV0aG9yaXplZCBzZXQsIGEgbWlzc2luZyBjcmVkZW50aWFsLlwiXG5cbiMjIERvbmUtd2hlblxuLSBEb25lIHdoZW46IHRhc2sgMSBpcyBjb21wbGV0ZS5cbi0gWyBdIFRhc2sgMSAtIHRhc2sgMSBpcyBleGVjdXRhYmxlIC1cdTAwM2UgdmVyaWZ5OiBydW4gdGhlIGZpeHR1cmUgY29tbWFuZC5cbi0gVmVyaWZ5OiB0aGlzIHRhc2sgaGFzIG5vIHRhZ2dlZCBjaGVja3M7IGRvIG5vdCBydW4gdGhlIHJlcG9zaXRvcnkgdmVyaWZ5IHJlY2lwZSAodGhlIEVuZ2luZSBydW5zIGl0IGFmdGVyIGludGVncmF0aW9uKS5cbi0gRmluYWwgbWVzc2FnZTogSlNPTiBwZXIgdGhlIGNvbXBsZXRpb24gY29udHJhY3QgKC0tb3V0cHV0LXNjaGVtYSk6IHN0YXR1cywgY2hhbmdlZF9maWxlcyxcbiAgY29tbWFuZHNfcnVuICgrcmVzdWx0cyksIGRldmlhdGlvbnMsIHVucmVzb2x2ZWQsIGJsb2NrZXIuIiwNCiAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAicHJvbXB0X2RpZ2VzdCI6ICAiPFBST01QVF9ESUdFU1Q+Ig0KICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgfQ0KICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICBdDQogICAgICAgICAgICAgICAgICB9DQogICAgICAgICAgICAgIF0sDQogICAgInNwZWNfYWNjZXB0YW5jZV9jaGVja3MiOiAgWw0KDQogICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgXSwNCiAgICAiaG9zdF9jaGVja3MiOiAgWw0KICAgICAgICAgICAgICAgICAgICAgICAgew0KICAgICAgICAgICAgICAgICAgICAgICAgICAgICJsYWJlbCI6ICAiLSBbIF0gVGFzayAxIC0iLA0KICAgICAgICAgICAgICAgICAgICAgICAgICAgICJ0ZXh0IjogICItIFsgXSBUYXNrIDEgLSB0YXNrIDEgaXMgZXhlY3V0YWJsZSAtXHUwMDNlIHZlcmlmeTogcnVuIHRoZSBmaXh0dXJlIGNvbW1hbmQuIg0KICAgICAgICAgICAgICAgICAgICAgICAgfQ0KICAgICAgICAgICAgICAgICAgICBdDQp9'))
+        $expectedPrompt = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('IyMgR29hbApJbXBsZW1lbnQgdGFzayAxIGV4YWN0bHkuIOKAlCBmaWxlczogc3JjL25ldy50eHQg4oCUIGRvbmUgd2hlbjogdGFzayAxIGlzIGNvbXBsZXRlLgpEb25lIHdoZW46IHRhc2sgMSBpcyBjb21wbGV0ZS4KCiMjIENvbnRleHQKLSBTcGVjOiAqKklkZW50aXR5OioqIEZpeHR1cmUgaWRlbnRpdHkgZm9yIGZpeHR1cmUtcGxhbi4KLSBSZXBvOiA8UkVQTz4KLSBGaWxlcyBmb3IgdGhpcyB0YXNrIChhdXRob3JpemVkIHNldCAtIHRvdWNoIG5vdGhpbmcgZWxzZSk6Ci0gc3JjL25ldy50eHQgKGNyZWF0ZSkKLSBJbnRlbnQ6Ci0gKipJbnRlbnQ6KiogQnVpbGQgdGhlIGZpeHR1cmUuCi0gQXNzdW1wdGlvbnM6Ci0gVGhlIGZpeHR1cmUgZW52aXJvbm1lbnQgaXMgYXZhaWxhYmxlLgoKIyMgQ29uc3RyYWludHMKLSBTdXJnaWNhbCBzY29wZTogb25seSB0aGUgZmlsZXMgbGlzdGVkIGFib3ZlOyBgZ2l0IHN0YXR1cyAtLXBvcmNlbGFpbiAtdWFsbGAgbXVzdCBzaG93IG5vIHBhdGggb3V0c2lkZSB0aGVtIHRoYXQgd2FzIG5vdCBhbHJlYWR5IGRpcnR5IHdoZW4geW91IHN0YXJ0ZWQuIChOT1QgYGdpdCBkaWZmIC0tc3RhdGAg4oCUIGEgZmlsZSB5b3UgQ1JFQVRFIGlzIHVudHJhY2tlZCwgc28gaXQgbmV2ZXIgYXBwZWFycyB0aGVyZSwgYW5kIHlvdSBtYXkgbm90IGBnaXQgYWRkYCBpdCBpbnRvIHZpZXcuKQotIEF1dGhvcml6ZWQgcGF0aHM6Ci0gc3JjL25ldy50eHQgKGNyZWF0ZSkKLSBTY3JhdGNoOiBpZiB5b3UgbmVlZCBhIHNjcmF0Y2ggZGlyZWN0b3J5LCBjcmVhdGUgYC5jb2RleC1zY3JhdGNoL2AgYXQgdGhlIHJlcG8gcm9vdCBhbmQgbm93aGVyZSBlbHNlIOKAlCBpdCBpcyB0aGUgb25seSBzYW5jdGlvbmVkIG5hbWUuIGAuc2NyYXRjaGAsIGAuYXBleC10bXBgIGFuZCBgLnNhbmRib3gtY2FjaGVgIGFyZSBERVBSRUNBVEVEOiB0aGV5IGFyZSBzdGlsbCBleGNsdWRlZCBmcm9tIHRoZSBzY29wZSBjaGVjayBvbiBleGlzdGluZyByZXBvcywgc28gdGhleSByYWlzZSBubyB2aW9sYXRpb24sIGJ1dCB0aGV5IG1heSBsb3NlIHRoYXQgZXhjbHVzaW9uIGluIGEgZnV0dXJlIHJldmlzaW9uIOKAlCBkbyBub3QgdXNlIHRoZW0gZm9yIG5ldyB3b3JrLiBBbnkgb3RoZXIgaW52ZW50ZWQgb3IgdGFzay1zdWZmaXhlZCB2YXJpYW50IChgLmNvZGV4LXNjcmF0Y2gtdGFzazJgKSBJUyByZXBvcnRlZCBhcyBhbiBvdXQtb2Ytc2NvcGUgd3JpdGUuIElmIHRoaXMgcmVwbyBkb2VzIG5vdCBnaXRpZ25vcmUgYC5jb2RleC1zY3JhdGNoL2AsIGl0IHdpbGwgZmxhZyBhcyBhIHNjb3BlIHZpb2xhdGlvbiDigJQgcmVwb3J0IHRoYXQsIGFuZCBkbyBOT1QgYWRkIGdpdGlnbm9yZSBlbnRyaWVzIHlvdXJzZWxmLgojIyMgU2VjdXJpdHkKS2VlcCBmaXh0dXJlIHdyaXRlcyBzY29wZWQuCiJGb2xsb3cgQUdFTlRTLm1kLiBTdXJnaWNhbCBzY29wZSDigJQgdG91Y2ggb25seSB0aGUgbGlzdGVkIGZpbGVzLiBXb3JrIGF1dG9ub21vdXNseSB0bwpjb21wbGV0aW9uOiBydW4gb25seSB0aGlzIHRhc2sncyB0YWdnZWQgY2hlY2tzIChuZXZlciB0aGUgcmVwb3NpdG9yeSB2ZXJpZnkgcmVjaXBlKSwgYW5kIGlmIGEgdGVzdCBmYWlscyAvIGxpbnQgZXJyb3JzIC8geW91IGhpdCBhIHByb2JsZW0sIGZpeCBpdAphbmQgcmUtcnVuIOKAlCBkbyBub3Qgc3RvcCB0byBhc2suIE9ubHkgZW5kIHdoZW4gdGhlIGFjY2VwdGFuY2UgY3JpdGVyaW9uIHBhc3Nlcywgb3IgeW91IGFyZQpnZW51aW5lbHkgYmxvY2tlZCDigJQgdGhlbiBzYXkgZXhhY3RseSB3aGF0IGJsb2NrZWQgeW91LiBTYWZlIGxvY2FsIGNob2ljZSAobWFrZSBpdCwgbG9nIGl0IGluCmRldmlhdGlvbnMpOiB3aGljaCBleGlzdGluZyBwYXR0ZXJuIHRvIG1pcnJvciwgYSBsb2NhbCBuYW1lLiBCbG9ja2VyIChyZXBvcnQgaW4gYGJsb2NrZXJgLCBkb24ndAppbXByb3Zpc2UpOiBhbiBhY2NlcHRhbmNlIGNyaXRlcmlvbiB0aGF0IGNhbm5vdCBwYXNzIGFzIHdyaXR0ZW4sIGEgbmVlZGVkIGZpbGUgb3V0c2lkZSB0aGUKYXV0aG9yaXplZCBzZXQsIGEgbWlzc2luZyBjcmVkZW50aWFsLiIKCiMjIERvbmUtd2hlbgotIERvbmUgd2hlbjogdGFzayAxIGlzIGNvbXBsZXRlLgotIFsgXSBUYXNrIDEgLSB0YXNrIDEgaXMgZXhlY3V0YWJsZSAtPiB2ZXJpZnk6IHJ1biB0aGUgZml4dHVyZSBjb21tYW5kLgotIFZlcmlmeTogdGhpcyB0YXNrIGhhcyBubyB0YWdnZWQgY2hlY2tzOyBkbyBub3QgcnVuIHRoZSByZXBvc2l0b3J5IHZlcmlmeSByZWNpcGUgKHRoZSBFbmdpbmUgcnVucyBpdCBhZnRlciBpbnRlZ3JhdGlvbikuCi0gRmluYWwgbWVzc2FnZTogSlNPTiBwZXIgdGhlIGNvbXBsZXRpb24gY29udHJhY3QgKC0tb3V0cHV0LXNjaGVtYSk6IHN0YXR1cywgY2hhbmdlZF9maWxlcywKICBjb21tYW5kc19ydW4gKCtyZXN1bHRzKSwgZGV2aWF0aW9ucywgdW5yZXNvbHZlZCwgYmxvY2tlci4='))
+        $expectedSpec = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('LS0tCnNwZWM6IGZpeHR1cmUtcGxhbgpyaXNrOiBtZWRpdW0KY29kZXJfZWZmb3J0OiBtZWRpdW0KLS0tCgojIFBsYW5uZXIgZml4dHVyZQoKKipJZGVudGl0eToqKiBGaXh0dXJlIGlkZW50aXR5IGZvciBmaXh0dXJlLXBsYW4uCgojIyBJbnRlbnQKLSAqKkludGVudDoqKiBCdWlsZCB0aGUgZml4dHVyZS4KCiMjIEFzc3VtcHRpb25zCi0gVGhlIGZpeHR1cmUgZW52aXJvbm1lbnQgaXMgYXZhaWxhYmxlLgoKIyMgUHJlcmVxdWlzaXRlcwotIFdpbmRvd3MgUG93ZXJTaGVsbCBpcyBhdmFpbGFibGUuCgojIyBGaWxlcyB0byBDaGFuZ2UKfCBGaWxlIHwgT3BlcmF0aW9uIHwgTm90ZXMgfAp8LS0tfC0tLXwtLS18Cnwgc3JjL25ldy50eHQgfCBjcmVhdGUgfCBmaXh0dXJlIHwKCiMjIEV4ZWN1dGlvbiBtYW5pZmVzdApgYGBqc29uIGFwZXgtbWFuaWZlc3QKew0KICAgICJ2ZXJzaW9uIjogIDEsDQogICAgInJlcG9zIjogIHsNCiAgICAgICAgICAgICAgICAgICJtYWluIjogICI8UkVQTz4iDQogICAgICAgICAgICAgIH0sDQogICAgInRhc2tzIjogIFsNCiAgICAgICAgICAgICAgICAgIHsNCiAgICAgICAgICAgICAgICAgICAgICAiaWQiOiAgIjEiLA0KICAgICAgICAgICAgICAgICAgICAgICJyZXBvIjogICJtYWluIiwNCiAgICAgICAgICAgICAgICAgICAgICAiZmlsZXMiOiAgWw0KICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgew0KICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICJwYXRoIjogICJzcmMvbmV3LnR4dCIsDQogICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgIm9wIjogICJjcmVhdGUiDQogICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICB9DQogICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgIF0sDQogICAgICAgICAgICAgICAgICAgICAgImRlcGVuZHNfb24iOiAgWw0KDQogICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgXQ0KICAgICAgICAgICAgICAgICAgfQ0KICAgICAgICAgICAgICBdDQp9CmBgYAoKIyMgVGFza3MKLSBbIF0gKipUYXNrIDEqKiAtIEltcGxlbWVudCB0YXNrIDEgZXhhY3RseS4g4oCUIGZpbGVzOiBzcmMvbmV3LnR4dCDigJQgZG9uZSB3aGVuOiB0YXNrIDEgaXMgY29tcGxldGUuCgojIyBXYXZlIHBsYW4KVGhpcyBwcm9zZSBpcyBkZWxpYmVyYXRlbHkgbm9uLWF1dGhvcml0YXRpdmUuCgojIyBQZXJtaXNzaW9ucwotIFRoZSBmaXh0dXJlIHBhdGhzIG1heSBiZSBjaGFuZ2VkLgoKIyMgU3BlY2lhbGlzdCBDb250ZXh0CiMjIyBTZWN1cml0eQpLZWVwIGZpeHR1cmUgd3JpdGVzIHNjb3BlZC4KCiMjIyBBY2Nlc3NpYmlsaXR5Cihub25lKQoKIyMgRG9jdW1lbnRhdGlvbgotIE5vIGRvY3VtZW50YXRpb24gY2hhbmdlcyBhcmUgcmVxdWlyZWQuCgojIyBBY2NlcHRhbmNlIENyaXRlcmlhCi0gWyBdIFRhc2sgMSAtIHRhc2sgMSBpcyBleGVjdXRhYmxlIC0+IHZlcmlmeTogcnVuIHRoZSBmaXh0dXJlIGNvbW1hbmQuCgojIyBQcm9ncmVzcwotIE5vdCBzdGFydGVkLgo='))
+        $fixture = New-Fixture
+        $repo = ConvertTo-ForwardPath $fixture.Repo
+        $expectedPrompt = $expectedPrompt.Replace('<REPO>', $repo)
+        $expectedSpec = $expectedSpec.Replace('<REPO>', $repo)
+        Assert-Equal ([IO.File]::ReadAllText($fixture.Spec)) $expectedSpec 'spec fixture bytes'
+        $plan = Invoke-Plan $fixture
+        $task = @(Get-PlannedTasks $plan)[0]
+        Assert-Equal $task.prompt $expectedPrompt 'pre-change prompt bytes'
+        Assert-Equal $task.prompt_digest (Get-EngineSha256 $expectedPrompt) 'raw pre-change prompt digest'
+        $expectedJson = $expectedJson.Replace('<SPEC_DIGEST>', (Get-EngineSha256 $expectedSpec)).Replace('<PROMPT_DIGEST>', (Get-EngineSha256 $expectedPrompt))
+        $actualJson = ($plan | ConvertTo-Json -Depth 30).Replace($repo, '<REPO>').Replace($fixture.Spec.Replace('\','\\'), '<SPEC>')
+        Assert-Equal $actualJson $expectedJson 'pre-change serialized bytes'
+        return $true
+    }
+
+    if (-not $ChainsOnly) {
+    Assert-Case 'real validator compatible shared modify/modify chain' {
+        $fixture = New-Fixture -Tasks @((New-Task '1' @((New-File 'shared.txt' 'modify')) -Chain 'real'), (New-Task '2' @((New-File 'shared.txt' 'modify')) -Chain 'real' -Depends '1'))
+        Initialize-FixtureFiles $fixture
+        $task = @(Get-PlannedTasks (Invoke-Plan $fixture -Validator $realValidator))[0]
+        return ($task.members -join ',') -ceq '1,2' -and $task.files.Count -eq 1
+    }
 
     # Shared in-memory prompt inputs: no payload quotes legacy instructions unless a case says so.
     $promptTemplate = [pscustomobject]@{ Surgical = '- Surgical scope: fixture'; Scratch = '- Scratch: local'; Autonomy = 'Follow AGENTS.md; run the verify recipe, then finish.'; Final = '- Final message: fixture' }
@@ -1202,6 +1519,7 @@ Set-Location C:/untagged
         if ($code -ne 0) { return $false }
         $parsed = ($json -join "`n") | ConvertFrom-Json
         return $parsed.allowed -and $parsed.spec.name -eq 'fixture-plan' -and @($parsed.waves).Count -eq 1
+    }
     }
 }
 finally {

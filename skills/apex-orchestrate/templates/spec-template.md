@@ -89,7 +89,7 @@ none
 | {path/to/d.ts} | delete | {what changes} |
 
 ## Execution manifest
-<!-- Include one entry per coder task. HOST/OWNER tasks stay outside the manifest.
+<!-- Include one entry per coder task. HOST/OWNER tasks stay outside the manifest. Tasks must be file-disjoint or use a declared chain when they must share a file.
      ## Wave plan remains human-readable, while manifest depends_on dependencies are authoritative to the Engine. -->
 ```json apex-manifest
 {

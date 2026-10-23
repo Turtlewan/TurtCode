@@ -30,7 +30,7 @@ param(
     [switch]$Version
 )
 
-$SpecContractVersion = '1.2.0'
+$SpecContractVersion = '1.3.0'
 $ErrorActionPreference = 'Stop'
 
 if ($Version) {
@@ -287,6 +287,16 @@ function ConvertTo-ManifestIdentity {
 
     $rootWithoutTrailingSlash = $Root.TrimEnd('/')
     return ('{0}/{1}' -f $rootWithoutTrailingSlash, $RelativePath).ToLowerInvariant()
+}
+
+# Used only by chain rules; existing validator identities deliberately stay unchanged.
+function ConvertTo-ChainCanonicalPath {
+    param([string]$Path)
+
+    $segments = @($Path.Split('/') | ForEach-Object {
+        $_.TrimEnd([char[]]@([char]46, [char]32)).ToLowerInvariant()
+    })
+    return ($segments -join '/')
 }
 
 function ConvertTo-AbsoluteManifestIdentity {
@@ -963,12 +973,23 @@ if ($executionManifestSectionPresent) {
                             $dependencies.Add($canonicalDependency)
                         }
 
+                        $chainValue = $null
+                        if (Test-ManifestObjectProperty -Object $taskValue -Name 'chain') {
+                            $chainValue = Get-ManifestObjectProperty -Object $taskValue -Name 'chain'
+                            # .NET's $ also matches before a final LF; the entire name must match.
+                            if (-not ($chainValue -is [string]) -or $chainValue -cnotmatch '^[a-z0-9][a-z0-9-]*$' -or $chainValue.Contains("`n")) {
+                                Add-Finding -Check 'EXEC-MANIFEST' -Evidence ('task {0} has invalid chain' -f $idValue)
+                                $chainValue = $null
+                            }
+                        }
+
                         $manifestTasks.Add([pscustomobject]@{
                             Id = $canonicalId
                             Repo = $repoValue
                             Files = $manifestFiles
                             DependsOn = $dependencies
                             Effort = $effortValue
+                            Chain = $chainValue
                         })
                     }
 
@@ -995,6 +1016,79 @@ if ($executionManifestSectionPresent) {
                         }
                     }
 
+                    # Derive chain order from known in-chain dependency edges, never JSON order.
+                    $chains = New-Object 'System.Collections.Generic.Dictionary[string,object]' ([System.StringComparer]::Ordinal)
+                    foreach ($task in $manifestTasks) {
+                        if ($null -eq $task.Chain) { continue }
+                        if (-not $chains.ContainsKey($task.Chain)) {
+                            $chains.Add($task.Chain, [pscustomobject]@{
+                                Members = (New-Object 'System.Collections.Generic.List[object]')
+                                Order = (New-Object 'System.Collections.Generic.List[object]')
+                                Valid = $true
+                                SharedOps = (New-Object 'System.Collections.Generic.Dictionary[string,string]' ([System.StringComparer]::Ordinal))
+                            })
+                        }
+                        $chains[$task.Chain].Members.Add($task)
+                    }
+                    foreach ($chainName in $chains.Keys) {
+                        $chain = $chains[$chainName]
+                        $heads = New-Object 'System.Collections.Generic.List[object]'
+                        $successors = @{}
+                        foreach ($member in $chain.Members) {
+                            $predecessors = @($member.DependsOn | Where-Object {
+                                $manifestTaskById.ContainsKey($_) -and $manifestTaskById[$_].Chain -ceq $chainName
+                            })
+                            if ($predecessors.Count -eq 0) { $heads.Add($member) }
+                            elseif ($predecessors.Count -ne 1) { $chain.Valid = $false }
+                            foreach ($predecessor in $predecessors) {
+                                if ($successors.ContainsKey($predecessor)) { $chain.Valid = $false }
+                                else { $successors[$predecessor] = $member }
+                            }
+                        }
+                        if ($heads.Count -ne 1) { $chain.Valid = $false }
+                        if ($chain.Valid) {
+                            $visited = New-Object 'System.Collections.Generic.HashSet[string]' ([System.StringComparer]::OrdinalIgnoreCase)
+                            $current = $heads[0]
+                            while ($null -ne $current -and $visited.Add($current.Id)) {
+                                $chain.Order.Add($current)
+                                if ($successors.ContainsKey($current.Id)) { $current = $successors[$current.Id] }
+                                else { $current = $null }
+                            }
+                            if ($null -ne $current -or $visited.Count -ne $chain.Members.Count) { $chain.Valid = $false }
+                        }
+                        if (-not $chain.Valid) {
+                            Add-Finding -Check 'EXEC-MANIFEST' -Evidence ('chain {0} must form one linear dependency path (one head, one predecessor per later member, no branching, all members visited)' -f $chainName)
+                            continue
+                        }
+
+                        $listings = New-Object 'System.Collections.Generic.Dictionary[string,object]' ([System.StringComparer]::Ordinal)
+                        foreach ($member in $chain.Order) {
+                            if (-not ($member.Repo -is [string]) -or -not $repoRoots.ContainsKey($member.Repo)) { continue }
+                            foreach ($file in $member.Files) {
+                                $identity = ConvertTo-ChainCanonicalPath -Path ($repoRoots[$member.Repo].TrimEnd('/') + '/' + $file.Path)
+                                if (-not $listings.ContainsKey($identity)) {
+                                    $listings.Add($identity, (New-Object 'System.Collections.Generic.List[object]'))
+                                }
+                                $listings[$identity].Add([pscustomobject]@{ TaskId = $member.Id; Path = $file.Path.Replace('\', '/'); Op = $file.Op })
+                            }
+                        }
+                        foreach ($identity in $listings.Keys) {
+                            $entries = $listings[$identity]
+                            if ($entries.Count -lt 2) { continue }
+                            $first = $entries[0]
+                            $chain.SharedOps.Add($identity, $first.Op)
+                            for ($i = 0; $i -lt $entries.Count; $i++) {
+                                $entry = $entries[$i]
+                                if (-not [string]::Equals($first.Path, $entry.Path, [System.StringComparison]::Ordinal)) {
+                                    Add-Finding -Check 'EXEC-MANIFEST' -Evidence ('chain {0} lists one file with different spellings: {1}, {2}' -f $chainName, $first.Path, $entry.Path)
+                                }
+                                if (($i -eq 0 -and $entry.Op -cnotmatch '^(create|modify)$') -or ($i -gt 0 -and $entry.Op -cne 'modify')) {
+                                    Add-Finding -Check 'EXEC-MANIFEST' -Evidence ('chain {0} shared path {1} requires first create|modify and later modify (task {2})' -f $chainName, $entry.Path, $entry.TaskId)
+                                }
+                            }
+                        }
+                    }
+
                     $coderOwnedIdentities = New-Object 'System.Collections.Generic.HashSet[string]' ([System.StringComparer]::OrdinalIgnoreCase)
                     $manifestFileRecords = New-Object 'System.Collections.Generic.List[object]'
                     foreach ($manifestTask in $manifestTasks) {
@@ -1010,7 +1104,23 @@ if ($executionManifestSectionPresent) {
                                 Path = $manifestFile.Path
                                 Op = $manifestFile.Op
                                 TaskId = $manifestTask.Id
+                                Chain = $manifestTask.Chain
+                                ChainIdentity = (ConvertTo-ChainCanonicalPath -Path ($taskRoot.TrimEnd('/') + '/' + $manifestFile.Path))
                             })
+                        }
+                    }
+
+                    for ($i = 0; $i -lt $manifestFileRecords.Count; $i++) {
+                        $left = $manifestFileRecords[$i]
+                        for ($j = $i + 1; $j -lt $manifestFileRecords.Count; $j++) {
+                            $right = $manifestFileRecords[$j]
+                            if ($null -eq $left.Chain -and $null -eq $right.Chain) { continue }
+                            if ($left.ChainIdentity.StartsWith($right.ChainIdentity + '/', [System.StringComparison]::OrdinalIgnoreCase) -or
+                                $right.ChainIdentity.StartsWith($left.ChainIdentity + '/', [System.StringComparison]::OrdinalIgnoreCase)) {
+                                $overlapChain = $left.Chain
+                                if ($null -eq $overlapChain) { $overlapChain = $right.Chain }
+                                Add-Finding -Check 'EXEC-MANIFEST' -Evidence ('chain {0} has ancestor/descendant path overlap: {1}, {2}' -f $overlapChain, $left.Path, $right.Path)
+                            }
                         }
                     }
 
@@ -1142,8 +1252,15 @@ if ($executionManifestSectionPresent) {
                             Add-Finding -Check 'EXEC-MANIFEST' -Evidence ('manifest path {0} is missing from Files to Change' -f $manifestFileRecord.Path)
                             continue
                         }
+                        $expectedOp = $manifestFileRecord.Op
+                        if ($null -ne $manifestFileRecord.Chain) {
+                            $chain = $chains[$manifestFileRecord.Chain]
+                            if ($chain.Valid -and $chain.SharedOps.ContainsKey($manifestFileRecord.ChainIdentity)) {
+                                $expectedOp = $chain.SharedOps[$manifestFileRecord.ChainIdentity]
+                            }
+                        }
                         foreach ($matchingRow in $matchingRows) {
-                            if (-not [string]::Equals($matchingRow.Op, $manifestFileRecord.Op, [System.StringComparison]::Ordinal)) {
+                            if (-not [string]::Equals($matchingRow.Op, $expectedOp, [System.StringComparison]::Ordinal)) {
                                 Add-Finding -Check 'EXEC-MANIFEST' -Evidence ('operation mismatch for manifest path {0}' -f $manifestFileRecord.Path)
                             }
                         }
@@ -1184,6 +1301,43 @@ if ($executionManifestSectionPresent) {
                     }
                     if ($remainingTasks.Count -gt 0) {
                         Add-Finding -Check 'EXEC-MANIFEST' -Evidence 'task dependencies contain a cycle'
+                    }
+
+                    # Contract valid chains only, dropping only edges internal to those chains.
+                    $nodeById = @{}
+                    $contractedDependencies = @{}
+                    foreach ($task in $manifestTasks) {
+                        $node = $task.Id
+                        if ($null -ne $task.Chain -and $chains[$task.Chain].Valid) { $node = 'chain:' + $task.Chain }
+                        $nodeById[$task.Id] = $node
+                        if (-not $contractedDependencies.ContainsKey($node)) {
+                            $contractedDependencies[$node] = New-Object 'System.Collections.Generic.HashSet[string]' ([System.StringComparer]::OrdinalIgnoreCase)
+                        }
+                    }
+                    foreach ($task in $manifestTasks) {
+                        $node = $nodeById[$task.Id]
+                        foreach ($dependency in $task.DependsOn) {
+                            if (-not $manifestTaskById.ContainsKey($dependency)) { continue }
+                            $dependencyNode = $nodeById[$dependency]
+                            if ($node -eq $dependencyNode -and $node.StartsWith('chain:')) { continue }
+                            [void]$contractedDependencies[$node].Add($dependencyNode)
+                        }
+                    }
+                    foreach ($chainName in $chains.Keys) {
+                        if (-not $chains[$chainName].Valid) { continue }
+                        $start = 'chain:' + $chainName
+                        $pending = New-Object 'System.Collections.Generic.Stack[string]'
+                        foreach ($dependency in $contractedDependencies[$start]) { $pending.Push($dependency) }
+                        $visited = New-Object 'System.Collections.Generic.HashSet[string]' ([System.StringComparer]::OrdinalIgnoreCase)
+                        while ($pending.Count -gt 0) {
+                            $node = $pending.Pop()
+                            if ($node -eq $start) {
+                                Add-Finding -Check 'EXEC-MANIFEST' -Evidence ('chain {0} has dependency interleaving after contraction' -f $chainName)
+                                break
+                            }
+                            if (-not $visited.Add($node)) { continue }
+                            foreach ($dependency in $contractedDependencies[$node]) { $pending.Push($dependency) }
+                        }
                     }
                 }
             }

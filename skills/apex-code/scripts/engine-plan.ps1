@@ -586,6 +586,129 @@ function New-EnginePrompt {
     return (ConvertTo-EngineLfText -Text $prompt).TrimEnd("`n")
 }
 
+function Test-EngineDependencyReachable {
+    param([string]$Start, [string]$Target, [hashtable]$TaskById)
+
+    $pending = New-Object 'System.Collections.Generic.Stack[string]'
+    foreach ($dependency in @($TaskById[$Start].depends_on)) { $pending.Push($dependency) }
+    $seen = New-Object 'System.Collections.Generic.HashSet[string]' ([System.StringComparer]::Ordinal)
+    while ($pending.Count -gt 0) {
+        $id = $pending.Pop()
+        if ($id -ceq $Target) { return $true }
+        if (-not $seen.Add($id)) { continue }
+        foreach ($dependency in @($TaskById[$id].depends_on)) { $pending.Push($dependency) }
+    }
+    return $false
+}
+
+function Merge-EnginePlanChains {
+    param([object[]]$Members, [hashtable]$MemberChains)
+
+    # Chain metadata stays local: durable tasks expose only ordered member IDs.
+    $groups = [ordered]@{}
+    foreach ($member in $Members) {
+        $chain = $MemberChains[$member.id]
+        if ([string]::IsNullOrEmpty($chain)) { continue }
+        if (-not $groups.Contains($chain)) { $groups[$chain] = New-Object 'System.Collections.Generic.List[object]' }
+        $groups[$chain].Add($member)
+    }
+    $mergedByChain = @{}
+    $memberToTask = @{}
+    foreach ($chain in $groups.Keys) {
+        $group = $groups[$chain]
+        $ids = New-Object 'System.Collections.Generic.HashSet[string]' ([System.StringComparer]::Ordinal)
+        foreach ($member in $group) { [void]$ids.Add($member.id) }
+        $heads = @(); $successors = @{}
+        foreach ($member in $group) {
+            $predecessors = @($member.depends_on | Where-Object { $ids.Contains($_) })
+            if ($predecessors.Count -eq 0) { $heads += $member }
+            elseif ($predecessors.Count -ne 1 -or $successors.ContainsKey($predecessors[0])) {
+                throw ('chain ' + $chain + ' must be a single sequential path')
+            }
+            else { $successors[$predecessors[0]] = $member }
+        }
+        if ($heads.Count -ne 1) { throw ('chain ' + $chain + ' must have exactly one head') }
+        $orderedMembers = New-Object 'System.Collections.Generic.List[object]'
+        $visited = New-Object 'System.Collections.Generic.HashSet[string]' ([System.StringComparer]::Ordinal)
+        $next = $heads[0]
+        while ($null -ne $next) {
+            if (-not $visited.Add($next.id)) { throw ('chain ' + $chain + ' must be a single sequential path') }
+            $orderedMembers.Add($next)
+            $next = $successors[$next.id]
+        }
+        if ($orderedMembers.Count -ne $group.Count) { throw ('chain ' + $chain + ' must be a single sequential path') }
+
+        $head = $heads[0]
+        $files = New-Object 'System.Collections.Generic.List[object]'
+        $firstFiles = New-Object 'System.Collections.Generic.Dictionary[string,object]' ([System.StringComparer]::OrdinalIgnoreCase)
+        $parts = New-Object 'System.Collections.Generic.List[string]'
+        $done = New-Object 'System.Collections.Generic.List[string]'
+        $acceptance = New-Object 'System.Collections.Generic.List[string]'
+        $acceptanceSeen = New-Object 'System.Collections.Generic.HashSet[string]' ([System.StringComparer]::Ordinal)
+        $checks = New-Object 'System.Collections.Generic.List[object]'
+        $checkIds = New-Object 'System.Collections.Generic.HashSet[string]' ([System.StringComparer]::Ordinal)
+        $dependencies = New-Object 'System.Collections.Generic.List[string]'
+        $efforts = @('low', 'medium', 'high', 'xhigh', 'max', 'ultra')
+        $mergedEffort = 'low'
+        foreach ($member in $orderedMembers) {
+            $memberToTask[$member.id] = $head.id
+            foreach ($file in @($member.files)) {
+                $canonical = ConvertTo-EngineCanonicalManifestPath $file.path
+                if ($firstFiles.ContainsKey($canonical)) {
+                    if ($firstFiles[$canonical].op -ceq 'delete' -or $file.op -cne 'modify') {
+                        throw ('chain ' + $chain + ' has invalid shared-path operations: ' + $file.path)
+                    }
+                }
+                else { $firstFiles[$canonical] = $file; $files.Add($file) }
+            }
+            $parts.Add(('Part {0} (Task {1}):' -f ($parts.Count + 1), $member.id) + "`n" + $member.text)
+            if (-not [string]::IsNullOrEmpty($member.done_when)) { $done.Add($member.done_when) }
+            if ($efforts.IndexOf($member.effort) -gt $efforts.IndexOf($mergedEffort)) { $mergedEffort = $member.effort }
+            foreach ($value in @($member.acceptance)) { if ($acceptanceSeen.Add($value)) { $acceptance.Add($value) } }
+            foreach ($check in @($member.acceptance_checks)) {
+                if ($checkIds.Add($check.id)) {
+                    $checks.Add([pscustomobject][ordered]@{ id = $check.id; task = $head.id; label = $check.label; body = $check.body })
+                }
+            }
+            foreach ($dependency in @($member.depends_on)) { if (-not $ids.Contains($dependency)) { $dependencies.Add($dependency) } }
+        }
+        $mergedByChain[$chain] = [pscustomobject][ordered]@{
+            id = $head.id
+            repo = $head.repo
+            files = $files.ToArray()
+            depends_on = $dependencies.ToArray()
+            effort = $mergedEffort
+            text = $parts.ToArray() -join "`n`n"
+            done_when = $done.ToArray() -join '; then '
+            acceptance = $acceptance.ToArray()
+            acceptance_checks = $checks.ToArray()
+            prompt = $null
+            prompt_digest = $null
+            members = @($orderedMembers | ForEach-Object { $_.id })
+        }
+    }
+    $result = New-Object 'System.Collections.Generic.List[object]'
+    $emitted = @{}
+    foreach ($member in $Members) {
+        $chain = $MemberChains[$member.id]
+        if ([string]::IsNullOrEmpty($chain)) { $result.Add($member); continue }
+        if ($emitted.ContainsKey($chain)) { continue }
+        $emitted[$chain] = $true
+        $result.Add($mergedByChain[$chain])
+    }
+    foreach ($task in $result) {
+        $dependencies = New-Object 'System.Collections.Generic.List[string]'
+        $seen = New-Object 'System.Collections.Generic.HashSet[string]' ([System.StringComparer]::Ordinal)
+        foreach ($dependency in @($task.depends_on)) {
+            $rewritten = $dependency
+            if ($memberToTask.ContainsKey($dependency)) { $rewritten = $memberToTask[$dependency] }
+            if ($seen.Add($rewritten)) { $dependencies.Add($rewritten) }
+        }
+        $task.depends_on = $dependencies.ToArray()
+    }
+    return [pscustomobject]@{ tasks = $result.ToArray(); member_to_task = $memberToTask }
+}
+
 function Get-EnginePlan {
     [CmdletBinding()]
     param(
@@ -698,7 +821,9 @@ function Get-EnginePlan {
     $emptySpec.assumptions = $assumptions
     $emptySpec.specialist_context = @($specialist)
     if ($null -ne $frontmatterRefusal) { return New-EngineRefusal -Reason $frontmatterRefusal -Spec $emptySpec }
-    foreach ($line in ($intent -split "`n")) {
+    $riskScanText = [regex]::Replace($specText, '(?s)<!--.*?-->', '')
+    $riskScanIntent = Get-EngineSectionBody -Text $riskScanText -Heading 'Intent'
+    foreach ($line in ($riskScanIntent -split "`n")) {
         if ($line -match '(?i)non-goals?' ) { continue }
         if ($line -match '(?i)(?<![A-Za-z0-9_])risk:[ \t]+high(?![A-Za-z0-9_])') {
             if ($risk -cne 'high') { return New-EngineRefusal -Reason 'Intent declares risk: high but frontmatter risk is not high' -Spec $emptySpec }
@@ -787,9 +912,9 @@ function Get-EnginePlan {
     catch { return New-EngineRefusal -Reason $_.Exception.Message -Spec $planSpec }
     $taskObjects = New-Object 'System.Collections.Generic.List[object]'
     $taskById = @{}
-    $pathOwner = @{}
-    $allPaths = New-Object 'System.Collections.Generic.List[string]'
-    $operations = @{}
+    $pathOwner = New-Object 'System.Collections.Generic.Dictionary[string,string]' ([System.StringComparer]::OrdinalIgnoreCase)
+    $memberChains = @{}
+    # Pass 1 validates each source member; ownership refusals stay inside this loop.
     foreach ($manifestTask in @($manifest.tasks)) {
         if (-not ($manifestTask -is [pscustomobject]) -or
             -not $manifestTask.PSObject.Properties['id'] -or
@@ -813,6 +938,15 @@ function Get-EnginePlan {
         if ($taskEffort -ceq 'ultra') { $weight = 2 }
         if ($weight -gt $MaxParallel) { return New-EngineRefusal -Reason ('task ' + $id + ' weight exceeds MaxParallel') -Spec $planSpec }
 
+        $chain = ''
+        if ($manifestTask.PSObject.Properties['chain']) {
+            if (-not ($manifestTask.chain -is [string]) -or $manifestTask.chain -cnotmatch '\A[a-z0-9][a-z0-9-]*\z') {
+                return New-EngineRefusal -Reason ('task ' + $id + ' chain is invalid') -Spec $planSpec
+            }
+            $chain = $manifestTask.chain
+        }
+        $memberChains[$id] = $chain
+        $memberPaths = New-Object 'System.Collections.Generic.HashSet[string]' ([System.StringComparer]::OrdinalIgnoreCase)
         $files = New-Object 'System.Collections.Generic.List[object]'
         foreach ($manifestFile in @($manifestTask.files)) {
             $relative = [string]$manifestFile.path
@@ -824,12 +958,11 @@ function Get-EnginePlan {
                 return New-EngineRefusal -Reason '.gitattributes is not an authorized manifest path' -Spec $planSpec
             }
             $canonical = ConvertTo-EngineCanonicalManifestPath -Path $relative
-            if ($pathOwner.ContainsKey($canonical)) {
+            if (-not $memberPaths.Add($canonical) -or ($pathOwner.ContainsKey($canonical) -and
+                ([string]::IsNullOrEmpty($chain) -or $memberChains[$pathOwner[$canonical]] -cne $chain))) {
                 return New-EngineRefusal -Reason ('canonical manifest path appears in more than one task: ' + $relative) -Spec $planSpec
             }
             $pathOwner[$canonical] = $id
-            $operations[$canonical] = $op
-            $allPaths.Add($relative)
             $files.Add([pscustomobject][ordered]@{ path = $relative; op = $op })
         }
         if ($files.Count -eq 0) { return New-EngineRefusal -Reason ('task ' + $id + ' has no manifest paths') -Spec $planSpec }
@@ -853,6 +986,63 @@ function Get-EnginePlan {
         $taskById[$id] = $taskObject
     }
     if ($taskObjects.Count -eq 0) { return New-EngineRefusal -Reason 'execution manifest has no tasks' -Spec $planSpec }
+
+    if (@($memberChains.Values | Where-Object { -not [string]::IsNullOrEmpty($_) }).Count -gt 0) {
+        # Validate original IDs and cycles before any contraction can conceal them.
+        foreach ($task in $taskObjects) {
+            foreach ($dependency in @($task.depends_on)) {
+                if (-not $taskById.ContainsKey($dependency) -or $dependency -eq $task.id) {
+                    return New-EngineRefusal -Reason ('task ' + $task.id + ' has an invalid dependency ' + $dependency) -Spec $planSpec
+                }
+            }
+        }
+        foreach ($task in $taskObjects) {
+            if (Test-EngineDependencyReachable $task.id $task.id $taskById) {
+                return New-EngineRefusal -Reason 'execution manifest dependency graph contains a cycle' -Spec $planSpec
+            }
+        }
+        $members = $taskObjects.ToArray()
+        try { $contraction = Merge-EnginePlanChains -Members $members -MemberChains $memberChains }
+        catch { return New-EngineRefusal -Reason $_.Exception.Message -Spec $planSpec }
+        $taskObjects = New-Object 'System.Collections.Generic.List[object]'
+        $contractedById = @{}
+        foreach ($task in $contraction.tasks) { $taskObjects.Add($task); $contractedById[$task.id] = $task }
+        # Pick an involved chain, then an original outside member, in manifest order.
+        $checkedChains = New-Object 'System.Collections.Generic.HashSet[string]' ([System.StringComparer]::Ordinal)
+        foreach ($member in $members) {
+            $chain = $memberChains[$member.id]
+            if ([string]::IsNullOrEmpty($chain) -or -not $checkedChains.Add($chain)) { continue }
+            $mergedId = $contraction.member_to_task[$member.id]
+            if (-not (Test-EngineDependencyReachable $mergedId $mergedId $contractedById)) { continue }
+            foreach ($outside in $members) {
+                if ($memberChains[$outside.id] -ceq $chain) { continue }
+                $outsideId = $outside.id
+                if ($contraction.member_to_task.ContainsKey($outsideId)) { $outsideId = $contraction.member_to_task[$outsideId] }
+                if ((Test-EngineDependencyReachable $mergedId $outsideId $contractedById) -and
+                    (Test-EngineDependencyReachable $outsideId $mergedId $contractedById)) {
+                    return New-EngineRefusal -Reason ('chain ' + $chain + ' requires interleaving with task ' + $outside.id) -Spec $planSpec
+                }
+            }
+        }
+    }
+
+    # Pass 2: rebuild every index in emitted task/file order, including unchained plans.
+    $taskById = @{}
+    $pathOwner = New-Object 'System.Collections.Generic.Dictionary[string,string]' ([System.StringComparer]::OrdinalIgnoreCase)
+    $operations = @{}
+    $allPaths = New-Object 'System.Collections.Generic.List[string]'
+    foreach ($task in $taskObjects) {
+        $taskById[$task.id] = $task
+        foreach ($file in @($task.files)) {
+            $canonical = ConvertTo-EngineCanonicalManifestPath $file.path
+            if ($pathOwner.ContainsKey($canonical)) {
+                return New-EngineRefusal -Reason ('canonical manifest path appears in more than one task: ' + $file.path) -Spec $planSpec
+            }
+            $pathOwner[$canonical] = $task.id
+            $operations[$canonical] = $file.op
+            $allPaths.Add($file.path)
+        }
+    }
 
     for ($leftIndex = 0; $leftIndex -lt $allPaths.Count; $leftIndex++) {
         for ($rightIndex = $leftIndex + 1; $rightIndex -lt $allPaths.Count; $rightIndex++) {

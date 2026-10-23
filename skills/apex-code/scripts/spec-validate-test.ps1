@@ -1,6 +1,7 @@
 [CmdletBinding()]
 param(
-    [string]$CorpusManifestPath = 'fixtures/spec-corpus/expected.tsv'
+    [string]$CorpusManifestPath = 'fixtures/spec-corpus/expected.tsv',
+    [switch]$ChainsOnly
 )
 
 $ErrorActionPreference = 'Stop'
@@ -168,12 +169,37 @@ function Assert-SuiteCase {
 
 function New-ManifestFixture {
     param(
-        [Parameter(Mandatory = $true)][string]$FilesRows,
-        [Parameter(Mandatory = $true)][string]$TaskRows,
-        [Parameter(Mandatory = $true)][string]$ManifestBody,
-        [Parameter(Mandatory = $true)][string]$AcceptanceRows,
-        [string]$Frontmatter = ''
+        [string]$FilesRows,
+        [string]$TaskRows,
+        [string]$ManifestBody,
+        [string]$AcceptanceRows,
+        [string]$Frontmatter = '',
+        [object[]]$ManifestTasks,
+        [hashtable]$FirstOps = @{},
+        [hashtable]$Repos = @{ alpha = 'C:/work/alpha' }
     )
+
+    if ($PSBoundParameters.ContainsKey('ManifestTasks')) {
+        $manifestJson = @{ version = 1; repos = $Repos; tasks = @($ManifestTasks) } | ConvertTo-Json -Depth 20
+        $ManifestBody = "~~~json apex-manifest`n$manifestJson`n~~~"
+        $TaskRows = (@($ManifestTasks | ForEach-Object {
+            $paths = @($_.files | ForEach-Object { '`' + $_.path + '`' }) -join ', '
+            '- **Task {0}** - files: {1} - Update the implementation.' -f $_.id, $paths
+        }) -join "`n")
+        $AcceptanceRows = (@($ManifestTasks | ForEach-Object { '- [ ] Task {0}: behavior is verified.' -f $_.id }) -join "`n")
+        if (-not $PSBoundParameters.ContainsKey('FilesRows')) {
+            $seen = New-Object 'System.Collections.Generic.HashSet[string]' ([System.StringComparer]::Ordinal)
+            $rows = @(foreach ($task in $ManifestTasks) {
+                foreach ($file in $task.files) {
+                    if (-not $seen.Add($file.path)) { continue }
+                    $op = $file.op
+                    if ($FirstOps.ContainsKey($file.path)) { $op = $FirstOps[$file.path] }
+                    '| `{0}` | {1} | Update implementation. |' -f $file.path, $op
+                }
+            })
+            $FilesRows = $rows -join "`n"
+        }
+    }
 
     $frontmatterBlock = ''
     if (-not [string]::IsNullOrWhiteSpace($Frontmatter)) {
@@ -221,6 +247,168 @@ $AcceptanceRows
 ## Progress
 Not started.
 "@).Replace("`r`n", "`n")
+}
+
+function New-ChainTask {
+    param(
+        [string]$Id,
+        [object]$Chain,
+        [string[]]$Depends = @(),
+        [string]$Path = 'src/shared.txt',
+        [string]$Op = 'modify',
+        [object[]]$Files,
+        [string]$Repo = 'alpha'
+    )
+
+    if (-not $PSBoundParameters.ContainsKey('Files')) { $Files = @(@{ path = $Path; op = $Op }) }
+    $task = @{ id = $Id; repo = $Repo; files = @($Files); depends_on = @($Depends) }
+    if ($PSBoundParameters.ContainsKey('Chain')) { $task.chain = $Chain }
+    return $task
+}
+
+function Assert-ChainFindings {
+    param([string]$Name, [string]$Content, [string[]]$Expected = @())
+
+    $result = Invoke-Validator -SpecPath (Write-Fixture -Name $Name -Content $Content)
+    # Pin the entire legacy output too, excluding only the explicitly bumped banner.
+    $actual = @($result.Output | Where-Object { $_ -cnotmatch '^\[spec-validate\] contract ' })
+    $expectedExit = 0
+    if ($Expected.Count -gt 0) { $expectedExit = 1 }
+    Assert-SuiteCase -Name $Name -Passed (
+        $result.ExitCode -eq $expectedExit -and
+        [string]::Equals(($actual -join "`n"), ($Expected -join "`n"), [System.StringComparison]::Ordinal)
+    ) -Details @('Expected:', ($Expected -join "`n"), 'Actual:', ($result.Output -join "`n"))
+}
+
+function Invoke-ChainRegressions {
+    $shape = 'FAIL EXEC-MANIFEST: chain edit must form one linear dependency path (one head, one predecessor per later member, no branching, all members visited)'
+    $one = New-ChainTask -Id 1 -Chain edit
+    $two = New-ChainTask -Id 2 -Chain edit -Depends 1
+    Assert-ChainFindings 'chain-optional-field-absent' (New-ManifestFixture -ManifestTasks @((New-ChainTask -Id 1)))
+    Assert-ChainFindings 'chain-singleton' (New-ManifestFixture -ManifestTasks @($one))
+    Assert-ChainFindings 'chain-shared-modify-modify' (New-ManifestFixture -ManifestTasks @($one, $two))
+    $create = New-ChainTask -Id 1 -Chain edit -Op create
+    Assert-ChainFindings 'chain-shared-create-modify' (New-ManifestFixture -ManifestTasks @($create, $two))
+    Assert-ChainFindings 'chain-reversed-manifest-order' (New-ManifestFixture -ManifestTasks @($two, $create) -FirstOps @{ 'src/shared.txt' = 'create' })
+    $laterFirst = @(
+        (New-ChainTask -Id 1 -Chain edit -Path 'src/unique.txt'),
+        (New-ChainTask -Id 2 -Chain edit -Depends 1 -Op create),
+        (New-ChainTask -Id 3 -Chain edit -Depends 2)
+    )
+    Assert-ChainFindings 'chain-first-listing-by-later-member' (New-ManifestFixture -ManifestTasks $laterFirst)
+    Assert-ChainFindings 'chain-independent-chains' (New-ManifestFixture -ManifestTasks @(
+        $one, $two,
+        (New-ChainTask -Id 3 -Chain other -Path 'src/other.txt' -Op create),
+        (New-ChainTask -Id 4 -Chain other -Depends 3 -Path 'src/other.txt')
+    ))
+    Assert-ChainFindings 'chain-outside-dependencies' (New-ManifestFixture -ManifestTasks @(
+        (New-ChainTask -Id 1 -Path 'src/outside.txt'),
+        (New-ChainTask -Id 2 -Chain edit -Depends 1),
+        (New-ChainTask -Id 3 -Chain edit -Depends 1,2)
+    ))
+    Assert-ChainFindings 'chain-unique-delete' (New-ManifestFixture -ManifestTasks @(
+        (New-ChainTask -Id 1 -Chain edit -Op delete -Path 'src/removed.txt'), $two
+    ))
+    Assert-ChainFindings 'chain-outside-owner-same-op' (New-ManifestFixture -ManifestTasks @($one, $two, (New-ChainTask -Id 3)))
+    Assert-ChainFindings 'chain-different-chains-exact-sharing' (New-ManifestFixture -ManifestTasks @($one, (New-ChainTask -Id 2 -Chain other)))
+    Assert-ChainFindings 'chain-component-boundary' (New-ManifestFixture -ManifestTasks @(
+        (New-ChainTask -Id 1 -Chain edit -Path 'src/a'), (New-ChainTask -Id 2 -Path 'src/ab/file.txt')
+    ))
+    Assert-ChainFindings 'chain-distinct-repo-roots' (New-ManifestFixture -ManifestTasks @(
+        $create, (New-ChainTask -Id 2 -Chain edit -Depends 1 -Repo beta -Op delete)
+    ) -Repos @{ alpha = 'C:/work/alpha'; beta = 'C:/work/beta' } -FilesRows (
+        '| `C:/work/alpha/src/shared.txt` | create | First root. |' + "`n" +
+        '| `C:/work/beta/src/shared.txt` | delete | Second root. |'
+    ))
+    Assert-ChainFindings 'chain-alias-repo-roots-share-identity' (New-ManifestFixture -ManifestTasks @(
+        $create, (New-ChainTask -Id 2 -Chain edit -Depends 1 -Repo beta)
+    ) -Repos @{ alpha = 'C:/work/alpha'; beta = 'C:/work/alpha' })
+
+    $invalidNames = @($null, '', ' ', 7, $false, @('edit'), @{ name = 'edit' }, 'Edit', '-edit', 'edit_name', "edit`n")
+    for ($i = 0; $i -lt $invalidNames.Count; $i++) {
+        Assert-ChainFindings ('chain-invalid-name-' + $i) (New-ManifestFixture -ManifestTasks @(
+            (New-ChainTask -Id 1 -Chain $invalidNames[$i])
+        )) @('FAIL EXEC-MANIFEST: task 1 has invalid chain')
+    }
+
+    $shapes = @(
+        @{ Name = 'two-heads-no-interleaving'; Tasks = @($one, (New-ChainTask -Id 2 -Chain edit)) },
+        @{ Name = 'branch'; Tasks = @($one, $two, (New-ChainTask -Id 3 -Chain edit -Depends 1)) },
+        @{ Name = 'join'; Tasks = @($one, (New-ChainTask -Id 2 -Chain edit), (New-ChainTask -Id 3 -Chain edit -Depends 1,2)) },
+        @{ Name = 'extra-earlier-dependency'; Tasks = @($one, $two, (New-ChainTask -Id 3 -Chain edit -Depends 1,2)) }
+    )
+    foreach ($case in $shapes) {
+        # Exact expected output also proves malformed chains produce no interleaving finding.
+        Assert-ChainFindings ('chain-shape-' + $case.Name) (New-ManifestFixture -ManifestTasks $case.Tasks) @($shape)
+    }
+    Assert-ChainFindings 'chain-shape-cyclic-group' (New-ManifestFixture -ManifestTasks @(
+        (New-ChainTask -Id 1 -Chain edit -Depends 2), $two
+    )) @($shape, 'FAIL EXEC-MANIFEST: task dependencies contain a cycle')
+    Assert-ChainFindings 'chain-shape-disconnected-cycle' (New-ManifestFixture -ManifestTasks @(
+        $one, (New-ChainTask -Id 2 -Chain edit -Depends 3), (New-ChainTask -Id 3 -Chain edit -Depends 2)
+    )) @($shape, 'FAIL EXEC-MANIFEST: task dependencies contain a cycle')
+    Assert-ChainFindings 'chain-shape-invalid-retains-operation-comparison' (New-ManifestFixture -ManifestTasks @(
+        $create, (New-ChainTask -Id 2 -Chain edit)
+    )) @($shape, 'FAIL EXEC-MANIFEST: operation mismatch for manifest path src/shared.txt')
+    foreach ($pair in @(@{ A = 'src./shared.txt'; B = 'src/shared.txt' }, @{ A = 'src/Shared.txt'; B = 'src/shared.txt' })) {
+        Assert-ChainFindings ('chain-spelling-' + $pair.A.Replace('/', '-')) (New-ManifestFixture -ManifestTasks @(
+            (New-ChainTask -Id 2 -Chain edit -Depends 1 -Path $pair.B),
+            (New-ChainTask -Id 1 -Chain edit -Path $pair.A)
+        )) @('FAIL EXEC-MANIFEST: chain edit lists one file with different spellings: {0}, {1}' -f $pair.A, $pair.B)
+    }
+    Assert-ChainFindings 'chain-shared-first-delete' (New-ManifestFixture -ManifestTasks @(
+        (New-ChainTask -Id 1 -Chain edit -Op delete), $two
+    )) @('FAIL EXEC-MANIFEST: chain edit shared path src/shared.txt requires first create|modify and later modify (task 1)')
+    foreach ($op in @('create', 'delete')) {
+        Assert-ChainFindings ('chain-shared-later-' + $op) (New-ManifestFixture -ManifestTasks @(
+            $one, (New-ChainTask -Id 2 -Chain edit -Depends 1 -Op $op)
+        )) @('FAIL EXEC-MANIFEST: chain edit shared path src/shared.txt requires first create|modify and later modify (task 2)')
+    }
+    Assert-ChainFindings 'chain-wrong-files-first-op' (New-ManifestFixture -ManifestTasks @($create, $two) -FirstOps @{ 'src/shared.txt' = 'modify' }) @(
+        'FAIL EXEC-MANIFEST: operation mismatch for manifest path src/shared.txt',
+        'FAIL EXEC-MANIFEST: operation mismatch for manifest path src/shared.txt'
+    )
+    foreach ($sameChain in @($true, $false)) {
+        $other = New-ChainTask -Id 2 -Path 'src/dir/file.txt'
+        if ($sameChain) { $other = New-ChainTask -Id 2 -Chain edit -Depends 1 -Path 'src/dir/file.txt' }
+        Assert-ChainFindings ('chain-ancestor-overlap-' + $sameChain) (New-ManifestFixture -ManifestTasks @(
+            (New-ChainTask -Id 1 -Chain edit -Path 'src/Dir.'), $other
+        )) @('FAIL EXEC-MANIFEST: chain edit has ancestor/descendant path overlap: src/Dir., src/dir/file.txt')
+    }
+    # Original DAG: 1 -> 2 -> 3, plus 1 -> 3. Contracting chain members 1 and 3 creates edit <-> 2.
+    Assert-ChainFindings 'chain-contracted-cycle-original-dag-valid' (New-ManifestFixture -ManifestTasks @(
+        $one, (New-ChainTask -Id 2 -Depends 1 -Path 'src/outside.txt'),
+        (New-ChainTask -Id 3 -Chain edit -Depends 1,2)
+    )) @('FAIL EXEC-MANIFEST: chain edit has dependency interleaving after contraction')
+
+    Assert-ChainFindings 'legacy-unchained-shared-same-op' (New-ManifestFixture -ManifestTasks @((New-ChainTask -Id 1), (New-ChainTask -Id 2)))
+    Assert-ChainFindings 'legacy-unchained-shared-different-op' (New-ManifestFixture -ManifestTasks @(
+        (New-ChainTask -Id 1 -Op create), (New-ChainTask -Id 2)
+    )) @('FAIL EXEC-MANIFEST: operation mismatch for manifest path src/shared.txt')
+    Assert-ChainFindings 'legacy-unchained-ancestor-overlap' (New-ManifestFixture -ManifestTasks @(
+        (New-ChainTask -Id 1 -Path 'src/dir'), (New-ChainTask -Id 2 -Path 'src/dir/file.txt')
+    ))
+    Assert-ChainFindings 'legacy-finding-order-outside-owner-mismatch' (New-ManifestFixture -ManifestTasks @(
+        $create, $two, (New-ChainTask -Id 3 -Depends 99)
+    )) @('FAIL EXEC-MANIFEST: operation mismatch for manifest path src/shared.txt', 'FAIL EXEC-MANIFEST: task 3 has unknown coder dependency 99')
+    Assert-ChainFindings 'legacy-unknown-dependency' (New-ManifestFixture -ManifestTasks @(
+        (New-ChainTask -Id 1 -Depends 99)
+    )) @('FAIL EXEC-MANIFEST: task 1 has unknown coder dependency 99')
+    Assert-ChainFindings 'legacy-ordinary-cycle' (New-ManifestFixture -ManifestTasks @(
+        (New-ChainTask -Id 1 -Depends 2), (New-ChainTask -Id 2 -Depends 1)
+    )) @('FAIL EXEC-MANIFEST: task dependencies contain a cycle')
+    Assert-ChainFindings 'legacy-self-cycle' (New-ManifestFixture -ManifestTasks @(
+        (New-ChainTask -Id 1 -Depends 1)
+    )) @('FAIL EXEC-MANIFEST: task dependencies contain a cycle')
+    $base = New-ManifestFixture -ManifestTasks @((New-ChainTask -Id 1))
+    Assert-ChainFindings 'legacy-files-completeness' ($base.Replace('Task 1: behavior is verified.', 'Task 1: `src/missing.txt` exists.')) @(
+        'FAIL FILES-COMPLETENESS: src/missing.txt not in Files to Change',
+        'FAIL FILES-COMPLETENESS: src/missing.txt not in Files to Change'
+    )
+    Assert-ChainFindings 'legacy-coder-manifest-id-equality' ($base.Replace('**Task 1**', '**Task 2**').Replace('Task 1:', 'Task 2:')) @(
+        'FAIL EXEC-MANIFEST: coder task 2 is missing from manifest',
+        'FAIL EXEC-MANIFEST: manifest task 1 is not a coder task'
+    )
 }
 
 $good = @'
@@ -367,6 +555,8 @@ $contractVersion = $versionMatch.Groups['Version'].Value
 try {
     New-Item -ItemType Directory -Path $fixtureRoot -Force | Out-Null
 
+    Invoke-ChainRegressions
+    if (-not $ChainsOnly) {
     Assert-Case 'good-minimal' $good 0
 
     $noManifestBaseline = [string]::Copy($good)
@@ -886,6 +1076,7 @@ try {
         -Name 'corpus-sweep-missing-root' `
         -Passed ($missingRootResult.ExitCode -eq 2) `
         -Details @('expected exit 2, got {0}' -f $missingRootResult.ExitCode)
+    }
 }
 finally {
     Remove-Item -LiteralPath $fixtureRoot -Recurse -Force -ErrorAction SilentlyContinue

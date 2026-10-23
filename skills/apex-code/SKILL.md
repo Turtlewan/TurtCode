@@ -58,7 +58,7 @@ not ambient project docs.
 
 ## Engine path (default, attended)
 
-Eligible attended builds use the Engine: one repo, an execution manifest, file-disjoint tasks, and Codex. No manifest, shared-file tasks, multi-repo, `coder_model: sonnet`, or owner-directed escalation/fixes use the attended HOST manual path (`references/parallel-codex.md`). AFK/unattended uses HOST mechanics below.
+Eligible attended builds use the Engine: one repo, an execution manifest, file-disjoint tasks or declared chains, and Codex. No manifest, undeclared shared-file tasks, multi-repo, `coder_model: sonnet`, or owner-directed escalation/fixes use the attended HOST manual path (`references/parallel-codex.md`). AFK/unattended uses HOST mechanics below.
 
 ```powershell
 & "$env:USERPROFILE\.claude\skills\apex-code\scripts\apex-engine.ps1" -SpecPath <absolute> -Repo <absolute> -Attended -MaxParallel 2
