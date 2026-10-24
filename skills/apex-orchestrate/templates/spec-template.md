@@ -197,17 +197,17 @@ docs/audit/ is different and stricter: TIER-1, refused outright on a path match.
 - [ ] {Step 1} → verify: {what to check — specific, observable}
 - [ ] {Step 2} → verify: {what to check — specific, observable}
 - [ ] {Step 3} → verify: {what to check — specific, observable}
-<!-- Scope check — use THIS form, never `git diff --stat`: a newly-created file is UNTRACKED, so it
-     never appears in a diff at all (and `git add` is not available — the coder may not touch the git
-     index), which makes "`git diff --stat` lists exactly N files" unsatisfiable for any spec that
-     creates one. `-uall` is required, or a new directory collapses to `dir/` and the file path never
-     shows. The output cannot separate your writes from the repo's normal dirty state, so assert the
-     LISTED paths — never a total file count.
+<!-- Scope check - HOST only: use `git diff --name-only --no-renames <base>` plus
+     `git ls-files --others --exclude-standard`, where `<base>` is the integration base SHA HOST
+     records before the build. HOST audits the union of tracked changes from that base and
+     untracked files against `## Files to Change`, accounts for every declared changed path,
+     and names pre-existing/concurrent-owner paths separately.
 This is a HOST check; never place it (or any git command) in a `powershell apex-accept` fence.
 -->
-- [ ] Scope — nothing written outside `## Files to Change` → verify: `git status --porcelain -uall`
-      lists every path in `## Files to Change` (`??` = created, ` M` = modified), and every other
-      path it shows was already dirty before this build (name them in the report).
+- [ ] Scope - HOST audits the union of `git diff --name-only --no-renames <base>` and
+      `git ls-files --others --exclude-standard` against `## Files to Change`, where `<base>` is
+      the integration base SHA HOST records before the build; account for every declared changed
+      path and name pre-existing/concurrent-owner paths separately.
 <!-- Reachability (readiness-gate item): SPEC-LEVEL, or one line per exposed boundary — never per
      task. Name the wiring, not the mechanism. Typed client/server boundary → ROUND-TRIP test.
      deny-unknown-fields is a per-repo choice, never mandated by this slot. -->

@@ -120,6 +120,18 @@ $testCases = @(
         Matches = @(@('CRITICAL', 'auth'))
     }
     [pscustomobject]@{
+        Name = 'Auth prefix - authorization file'
+        Paths = @('authorization.py')
+        ExitCode = 10
+        Matches = @(@('CRITICAL', 'auth'))
+    }
+    [pscustomobject]@{
+        Name = 'Auth prefix - authorize directory'
+        Paths = @('authorize/x.ts')
+        ExitCode = 10
+        Matches = @(@('CRITICAL', 'auth'))
+    }
+    [pscustomobject]@{
         Name = 'Auth prefix - authz'
         Paths = @('src/authz/guard.ts')
         ExitCode = 10
@@ -471,6 +483,36 @@ $testCases = @(
     [pscustomobject]@{
         Name = 'Non-match - IntelliJ workspace'
         Paths = @('.idea/workspace.xml')
+        ExitCode = 0
+        Matches = @()
+    }
+    [pscustomobject]@{
+        Name = 'Non-match - author pack document'
+        Paths = @('author-pack.md')
+        ExitCode = 0
+        Matches = @()
+    }
+    [pscustomobject]@{
+        Name = 'Non-match - authoring directory'
+        Paths = @('authoring/x.md')
+        ExitCode = 0
+        Matches = @()
+    }
+    [pscustomobject]@{
+        Name = 'Non-match - authority document'
+        Paths = @('authority.md')
+        ExitCode = 0
+        Matches = @()
+    }
+    [pscustomobject]@{
+        Name = 'Non-match - authority directory negative control'
+        Paths = @('authority/x.py')
+        ExitCode = 0
+        Matches = @()
+    }
+    [pscustomobject]@{
+        Name = 'Non-match - authorities directory negative control'
+        Paths = @('authorities/x.py')
         ExitCode = 0
         Matches = @()
     }

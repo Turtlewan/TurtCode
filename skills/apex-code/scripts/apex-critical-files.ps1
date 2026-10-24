@@ -147,7 +147,7 @@ foreach ($path in $Paths) {
                 $stem = $component
             }
 
-            if (($stem -ne 'author') -and ($stem -ne 'authors') -and
+            if (($stem -notmatch '^(author|authors|authoring|authority|authorities)([^a-z0-9]|$)') -and
                 ($stem -match '^(auth|oauth|crypto|middleware)')) {
                 $category = 'auth'
                 break

@@ -3236,6 +3236,11 @@ if ($script:capacityRefusal) {
             elseif ($critExit -eq 10) {
                 Write-Host "[dispatch] critical-file edit CONFIRMED (attended) -- note: $CriticalFilesConfirmedNote" -ForegroundColor Yellow
             }
+            elseif ($critExit -eq 0 -and $CriticalFilesConfirmed) {
+                Write-Host '[dispatch] -CriticalFilesConfirmed ignored: no critical path in -Authorized'
+                $CriticalFilesConfirmed = $false
+                $CriticalFilesConfirmedNote = ''
+            }
             elseif ($critExit -ne 0) {
                 Write-DispatchRefusalLine -Message "[dispatch] REFUSED (exit 76): critical-file classifier failed to return a valid verdict (got '$critExit') -- failing closed"
                 Exit-Dispatch 76
@@ -4433,6 +4438,10 @@ try {
         if ($criticalHardBlock) {
             $criticalPathText = if ($criticalPaths.Count -gt 0) { $criticalPaths -join ', ' } else { '(classifier named no paths)' }
             Write-Host "[dispatch] HARD-BLOCK critical path(s): $criticalPathText" -ForegroundColor Red
+        }
+        else {
+            $criticalPathText = if ($criticalPaths.Count -gt 0) { $criticalPaths -join ', ' } else { '(classifier named no paths)' }
+            Write-Host "[dispatch] critical path(s): $criticalPathText" -ForegroundColor Red
         }
         Exit-Dispatch 77
     }

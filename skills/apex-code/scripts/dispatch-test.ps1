@@ -539,8 +539,9 @@ exit 0
         -ExtraParameters @{ CriticalFilesConfirmed = $true; CriticalFilesConfirmedNote = 'attended test' } `
         -FakeEnvironment @{ FAKE_CODEX_INSCOPE_ONLY = '1'; FAKE_CODEX_EXTRA_WRITE = 'src/package-lock.json' }
     $row = @($result.Rows) | Select-Object -Last 1
-    Assert-Case -Label 'post-hoc exit-10 confirmed proceeds' `
-        -Condition ($result.ExitCode -eq 0 -and $row.critical_violation -eq $false) `
+    Assert-Case -Label 'post-hoc exit-10 directory grant ignores confirmation' `
+        -Condition ($result.ExitCode -eq 77 -and $row.critical_violation -eq $true -and
+            [regex]::Matches($result.Output, [regex]::Escape('[dispatch] -CriticalFilesConfirmed ignored: no critical path in -Authorized')).Count -eq 1) `
         -Detail ("exit={0}, critical={1}" -f $result.ExitCode, $row.critical_violation)
 
     $fixture = New-FixtureRepo -Name 'head-move'

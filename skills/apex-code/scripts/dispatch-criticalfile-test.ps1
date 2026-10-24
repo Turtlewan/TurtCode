@@ -340,13 +340,17 @@ exit 0
     # Create every repository before dispatching so no Git process can disturb the deliberate
     # case 3 to case 8 LASTEXITCODE adjacency below.
     $fixtures = @{}
-    foreach ($number in 1..19) {
+    foreach ($number in 1..25) {
         $extraFiles = @{}
         if ($number -eq 3) {
             $extraFiles['docs\changes\critfile-critical-confirmed.md'] = New-FixtureSpec -Spec 'critfile-critical-confirmed'
         }
         elseif ($number -eq 9) {
             $extraFiles['docs\changes\critfile-noncritical-build.md'] = New-FixtureSpec -Spec 'critfile-noncritical-build'
+        }
+        elseif ($number -ge 20) {
+            $fixtureSpec = "critfile-case-$number"
+            $extraFiles["docs\changes\$fixtureSpec.md"] = New-FixtureSpec -Spec $fixtureSpec
         }
         $fixtures[$number] = New-FixtureRepo -Name ("case-{0}" -f $number) -ExtraFiles $extraFiles
     }
@@ -388,9 +392,11 @@ exit 0
         } -FakeEnvironment @{ FAKE_CODEX_INSCOPE_ONLY = '1' }
     $row = @($result.Rows) | Select-Object -First 1
     Assert-Case -Label 'case 3 confirmed critical file proceeds and is recorded' `
-        -Condition ($result.ExitCode -ne 76 -and $result.Rows.Count -eq 1 -and
-            $row.critical_files_confirmed -eq $true -and
-            $row.critical_files_confirmed_note -eq 'attended tester') `
+        -Condition ($result.ExitCode -eq 0 -and $result.Rows.Count -eq 1 -and
+            $row.critical_files_confirmed -is [bool] -and $row.critical_files_confirmed -eq $true -and
+            $row.critical_files_confirmed_note -eq 'attended tester' -and
+            $result.Output.Contains('critical-file edit CONFIRMED (attended)') -and
+            -not $result.Output.Contains('[dispatch] -CriticalFilesConfirmed ignored: no critical path in -Authorized')) `
         -Detail ("exit={0}, rows={1}, confirmed={2}, note='{3}'" -f $result.ExitCode, $result.Rows.Count,
             $row.critical_files_confirmed, $row.critical_files_confirmed_note)
 
@@ -577,6 +583,8 @@ exit 0
     $row = @($result.Rows) | Select-Object -First 1
     Assert-Case -Label 'adopt live replay records digest and honors row confirmation' `
         -Condition ($result.ExitCode -eq 0 -and $row.status -eq 'adopted-done' -and
+            $row.critical_files_confirmed -is [bool] -and $row.critical_files_confirmed -eq $true -and
+            $row.critical_files_confirmed_note -eq 'recorded attended confirmation' -and
             $row.end_tree_digest -cmatch '^[0-9a-f]{64}$' -and $row.critical_violation -eq $false) `
         -Detail ("exit={0}, status={1}, digest={2}, critical={3}" -f $result.ExitCode, $row.status,
             $row.end_tree_digest, $row.critical_violation)
@@ -649,6 +657,104 @@ exit 0
             $row.critical_violation -eq $true) `
         -Detail ("exit={0}, status={1}, critical={2}" -f $result.ExitCode, $row.status,
             $row.critical_violation)
+    $ignoredLine = '[dispatch] -CriticalFilesConfirmed ignored: no critical path in -Authorized'
+    $spec = 'critfile-case-20'
+    $result = Invoke-DispatchCase -CaseName '20 ignored non-critical switch' -Spec $spec -Fixture $fixtures[20] `
+        -Authorized @('src/a.py') -ExtraParameters @{
+            CriticalFilesConfirmed = $true; CriticalFilesConfirmedNote = 'inapplicable attended note'
+        } -FakeEnvironment @{ FAKE_CODEX_INSCOPE_ONLY = '1' }
+    $rows = @(Get-LedgerRowsForSpec -Spec $spec | Where-Object { $_.row_kind -eq 'dispatch' })
+    $row = $rows | Select-Object -First 1
+    Assert-Case -Label 'case 20 non-critical confirmation is cleared before recording' `
+        -Condition ($result.ExitCode -eq 0 -and $rows.Count -eq 1 -and
+            $row.critical_files_confirmed -is [bool] -and $row.critical_files_confirmed -eq $false -and
+            $row.critical_files_confirmed_note -ceq '' -and
+            [regex]::Matches($result.Output, [regex]::Escape($ignoredLine)).Count -eq 1 -and
+            -not $result.Output.Contains('critical-file edit CONFIRMED (attended)')) `
+        -Detail ("exit={0}, dispatch rows={1}, confirmed={2}, note='{3}'" -f $result.ExitCode,
+            $rows.Count, $row.critical_files_confirmed, $row.critical_files_confirmed_note)
+
+    # Both directory grants must classify the actual written set, including the fake's extra write.
+    foreach ($number in 21..22) {
+        $spec = "critfile-case-$number"
+        $confirmation = @{}
+        if ($number -eq 22) {
+            $confirmation = @{ CriticalFilesConfirmed = $true; CriticalFilesConfirmedNote = 'directory attended note' }
+        }
+        $result = Invoke-DispatchCase -CaseName "$number directory grant critical descendant" -Spec $spec `
+            -Fixture $fixtures[$number] -Authorized @('src') -ExtraParameters $confirmation `
+            -FakeEnvironment @{ FAKE_CODEX_INSCOPE_ONLY = '1'; FAKE_CODEX_EXTRA_WRITE = 'src/auth.py' }
+        $rows = @(Get-LedgerRowsForSpec -Spec $spec | Where-Object { $_.row_kind -eq 'dispatch' })
+        $row = $rows | Select-Object -First 1
+        $output = $result.Output
+        $expectedIgnoredCount = if ($number -eq 22) { 1 } else { 0 }
+        Assert-Case -Label "case $number directory grant does not approve critical descendants" `
+            -Condition ($result.ExitCode -eq 77 -and $rows.Count -eq 1 -and $row.critical_violation -eq $true -and
+                $output -match 'CRITICAL src[\\/]auth\.py: auth' -and
+                $row.critical_files_confirmed -is [bool] -and $row.critical_files_confirmed -eq $false -and
+                $row.critical_files_confirmed_note -ceq '' -and
+                [regex]::Matches($output, [regex]::Escape($ignoredLine)).Count -eq $expectedIgnoredCount) `
+            -Detail ("exit={0}, dispatch rows={1}, critical={2}, confirmed={3}, note='{4}'" -f
+                $result.ExitCode, $rows.Count, $row.critical_violation,
+                $row.critical_files_confirmed, $row.critical_files_confirmed_note)
+    }
+
+    # An adopt-time switch cannot replace the false confirmation recorded by an ignored switch.
+    $spec = 'critfile-case-23'
+    $scopeTask = 'fabricated-adopt-ignored-replay'
+    & $scopeCheck -Snapshot -Worktree $fixtures[23].Path -Task $scopeTask -StateDirectory $gateState -Authorized @('src') | Out-Null
+    if ($LASTEXITCODE -ne 0) { throw "scope snapshot for ignored confirmation replay failed with exit $LASTEXITCODE" }
+    Write-Utf8NoBom -Path (Join-Path $fixtures[23].Path 'src\auth.py') -Content "adopted critical write`n"
+    $reportPath = Join-Path $testRoot 'adopt-ignored-confirmation-report.json'
+    Write-Utf8NoBom -Path $reportPath -Content '{"status":"done","changed_files":["src/auth.py"],"commands_run":[],"deviations":[],"unresolved":[],"blocker":null}'
+    Add-FabricatedLedgerRow -Row ([ordered]@{
+        run_id = 'fabricated-adopt-ignored-run'; pid = $null; launcher_pid = $null; worktree = $fixtures[23].Path
+        worktree_key = (Get-WorktreeKeyLocal $fixtures[23].Path); spec = $spec; task = 'critical-file-gate'
+        base_sha = $fixtures[23].BaseSha; phase = 'build'; started = '2026-01-01T00:00:00Z'
+        final_path = $reportPath; schema = 'completion'; sandbox = 'workspace-write'; status = 'running'
+        scope_armed = $true; scope_task = $scopeTask; authorized = @('src'); tree_pin_label = $null
+        critical_files_confirmed = $false; critical_files_confirmed_note = ''
+    })
+    $result = Invoke-DispatchCase -CaseName '23 adoption of ignored confirmation' -Spec $spec `
+        -Fixture $fixtures[23] -ExtraParameters @{
+            Adopt = $true; CriticalFilesScript = $criticalFiles
+            CriticalFilesConfirmed = $true; CriticalFilesConfirmedNote = 'new adopt-time attended note'
+        }
+    $rows = @(Get-LedgerRowsForSpec -Spec $spec)
+    $row = $rows | Select-Object -First 1
+    Assert-Case -Label 'case 23 adoption uses recorded false confirmation' `
+        -Condition ($result.ExitCode -eq 77 -and $rows.Count -eq 1 -and $row.status -eq 'adopted-done' -and
+            $row.critical_violation -eq $true -and
+            $row.critical_files_confirmed -is [bool] -and $row.critical_files_confirmed -eq $false -and
+            $row.critical_files_confirmed_note -ceq '' -and -not $result.Output.Contains($ignoredLine)) `
+        -Detail ("exit={0}, status={1}, critical={2}, confirmed={3}, note='{4}'" -f $result.ExitCode,
+            $row.status, $row.critical_violation, $row.critical_files_confirmed, $row.critical_files_confirmed_note)
+
+    $spec = 'critfile-case-24'
+    $result = Invoke-DispatchCase -CaseName '24 ScopeUnlocked unconfirmed retained' -Spec $spec `
+        -Fixture $fixtures[24] -Authorized @() `
+        -ExtraParameters @{ ScopeUnlocked = $true; ScopeUnlockedReason = 'attended scope fixture' }
+    Assert-Case -Label 'case 24 ScopeUnlocked still requires confirmation' `
+        -Condition ($result.ExitCode -eq 76 -and (Test-LeaseScopedRefusal -Result $result -ExitCode 76) -and
+            -not $result.Output.Contains($ignoredLine)) `
+        -Detail ("exit={0}, spec rows={1}" -f $result.ExitCode, $result.Rows.Count)
+
+    $spec = 'critfile-case-25'
+    $result = Invoke-DispatchCase -CaseName '25 ScopeUnlocked confirmed retained' -Spec $spec `
+        -Fixture $fixtures[25] -Authorized @() -ExtraParameters @{
+            ScopeUnlocked = $true; ScopeUnlockedReason = 'attended scope fixture'
+            CriticalFilesConfirmed = $true; CriticalFilesConfirmedNote = 'scope-unlocked attended tester'
+        } -FakeEnvironment @{ FAKE_CODEX_INSCOPE_ONLY = '1' }
+    $rows = @(Get-LedgerRowsForSpec -Spec $spec | Where-Object { $_.row_kind -eq 'dispatch' })
+    $row = $rows | Select-Object -First 1
+    Assert-Case -Label 'case 25 ScopeUnlocked retains attended confirmation and note' `
+        -Condition ($result.ExitCode -eq 0 -and $rows.Count -eq 1 -and
+            $row.critical_files_confirmed -is [bool] -and $row.critical_files_confirmed -eq $true -and
+            $row.critical_files_confirmed_note -ceq 'scope-unlocked attended tester' -and
+            $result.Output.Contains('-ScopeUnlocked build CONFIRMED (attended)') -and
+            -not $result.Output.Contains($ignoredLine)) `
+        -Detail ("exit={0}, dispatch rows={1}, confirmed={2}, note='{3}'" -f $result.ExitCode,
+            $rows.Count, $row.critical_files_confirmed, $row.critical_files_confirmed_note)
 }
 catch {
     $script:failureCount++
