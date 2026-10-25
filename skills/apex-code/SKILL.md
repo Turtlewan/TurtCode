@@ -1,7 +1,7 @@
 ---
 skill: apex-code
-version: 2.27.1
-last_updated: 2026-10-19
+version: 2.27.2
+last_updated: 2026-10-24
 sources:
   - docs/technical/adr/ADR-027-codex-primary-opus-fallback-deepseek-archived.md
   - docs/technical/adr/ADR-028-parallel-codex-dispatch.md
@@ -463,8 +463,8 @@ never changed, only what was inside it, so a `git status` check would have seen 
    mark complete. Non-zero (12 = same-family refusal; 13 = unverifiable) -- **REFUSE completion**
    until a cross-family review or build-bound attended human review exists. AFK -- park instead of
    blocking forever. A same-family automated review is advisory only and cannot satisfy this gate.
-7. **Before archiving, the host runs `codex-dispatch.ps1 -ListObligations` and discharges every
-   cleanup and branch-teardown obligation it reports.**
+7. **Before archiving, the host runs `apex-cleanup.ps1` in list mode.** An obligation of this spec is discharged when its item is GONE, or SAFE and applied by the owner via `apex-cleanup.ps1 -Apply` in the owner's administrator shell when no builds are running.
+   A build started after the final guard check and before a rename is not excluded: no shared cross-session lock exists, and adding one is out of scope; an Engine idling between coder launches inside a host launcher script whose command line names none of the matched scripts, with state under a StateRoot this invocation does not inventory, is also not detected; the owner runs Apply only when no builds are running and passes `-StateRoot` for any non-default state directory in use. Record every KEEP item and its reason in the handoff. `codex-dispatch.ps1 -ListObligations` remains available; its stale rows are not blocking. Interrupted quarantines and failed rollbacks are listed with their recorded origin or last-write time; the host asks the owner y/n for each, and on y the owner runs `apex-cleanup.ps1 -Apply -RemoveQuarantine <path>`.
 8. `apex-docs-technical-agent` -- writes the handoff and archives the spec to `docs/changes/done/`.
 9. **Host review of docs-agent output.** This review covers only `apex-docs-technical-agent`'s artifacts; the Scribe's edits are covered by its Critic gate and family gate. Before the session closes, the host reads what the docs agent wrote and either **accepts** it, or **rejects it and re-dispatches the agent with the findings so the agent REVISES its own artifacts in place**. All three artifacts are rewritable files, so revision is **idempotent by construction** — a re-dispatch overwrites the handoff and `docs/status.md` rather than appending. The one exception is the archival file move: once done it **stands and is not redone**; a re-dispatch skips it. **The host never edits the agent's output itself** — that would be a mechanical edit (ADR-046 D1). This is the control that makes the D6 AFK carve-out safe; without it the carve-out is unbacked.
 10. Report: handoff path; reviewer verdict; decisions count.

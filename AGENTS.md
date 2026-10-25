@@ -32,6 +32,7 @@ powershell.exe -NoProfile -File skills/apex-code/scripts/apex-drain-test.ps1 -Ca
 powershell.exe -NoProfile -File skills/apex-code/scripts/apex-drain-close-test.ps1
 powershell.exe -NoProfile -File skills/apex-plan/scripts/apex-map-check-test.ps1
 powershell.exe -NoProfile -File skills/apex-plan/scripts/apex-size-guard-test.ps1
+powershell.exe -NoProfile -File skills/apex-code/scripts/apex-cleanup-test.ps1
 powershell.exe -NoProfile -File skills/apex-code/scripts/engine-test.ps1
 ```
 
