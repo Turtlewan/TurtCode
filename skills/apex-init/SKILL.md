@@ -1,7 +1,7 @@
 ---
 skill: apex-init
-version: 1.8.0
-last_updated: 2026-10-13
+version: 1.9.0
+last_updated: 2026-11-11
 sources:
   - APEX Design Specification 2026-05-24
   - GSD (Get Shit Done) — github.com/gsd-build/get-shit-done
@@ -338,6 +338,14 @@ _Each: name · purpose · how it's reached._
 
 | Screen / route | Purpose | Reached from |
 |----------------|---------|--------------|
+
+## Data shape & on-demand inventory
+_Per screen: what it displays and each field's kind (fixed set · number · date/time series · long
+text · person); and what exists but is hidden at rest (hover actions, popovers, drawers, tooltips,
+first-run sequence)._
+
+| Screen | Data shown (field: kind) | Hidden at rest |
+|--------|--------------------------|----------------|
 
 ## Primary user journeys
 _The key end-to-end paths a user takes through the screens._

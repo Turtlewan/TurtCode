@@ -33,6 +33,11 @@ Confident and quiet — NOT a consumer marketing site, NOT playful, NOT gradient
 **Chosen feel → style library:** <none | minimalist-ui | industrial-brutalist-ui | high-end-visual-design | …>
 (If a style is named, install exactly one from ~/.claude/style-library/ per its INDEX.)
 
+## Component sources (picked from ~/.claude/style-library/COMPONENTS.md)
+- Look-setting library: <none | one name> · mechanism: <Base UI | Radix | its own | none>
+- Wrapper folder: <path, only when the library installs as a package>
+- Departures from single-job defaults: <job → library — reason> | none
+
 ## Forbidden patterns (project-specific don'ts — the highest-evidence lever)
 - no purple-on-white gradients / no gradient backgrounds
 - no glassmorphism used decoratively

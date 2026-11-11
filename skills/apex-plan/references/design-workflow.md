@@ -21,6 +21,11 @@ durable, inspectable build input, not ephemeral planning-side judgment.
 - **Capture early**, before per-screen feature specs: **screens/routes** (name · purpose · how
   reached), **primary user journeys** (key end-to-end paths), and **screen states + transitions**
   (empty / loading / error / loaded). Flow-level only.
+- **Per screen, also record** the **data shape** — what it displays and each field's kind (fixed
+  set · number · date/time series · long text · person) — and the **on-demand inventory**: what
+  exists on the screen but is hidden at rest (hover actions, popovers, drawers, tooltips, first-run
+  sequence). Before giving something its own route, check whether it belongs in an existing
+  screen's inventory. Kinds and existence only, never how they look.
 - **Flow only, not visual design.** Layout, spacing, colour, component styling and taste stay
   un-persisted judgment. Do not turn this into a visual spec — that boundary keeps it stable.
 - **Keep it current** — a new screen or journey updates it; a UI feature spec names which
@@ -56,12 +61,14 @@ Set the aesthetic **once**, when the brief is first filled. Per-screen work read
 **Open every UI workflow by asking:**
 
 > "Want me to **research UI suggestions** for this (reference apps + current patterns for this
-> surface), or would you rather give me **a few keywords / references** to design from directly?"
+> surface), would you rather give me **a few keywords / references** to design from directly, or
+> **compare libraries on the anchor screen**?"
 
 - **Research** → Path A, then **report findings back** (references + recommended direction) and
   confirm before locking them into the brief — never silently proceed to design.
 - **Keywords / a reference** → skip the research dispatch; seed the brief's feel + art-direction
   straight from those keywords (+ Path B if one shelf aesthetic clearly fits).
+- **Compare libraries** → § Component sources, the comparison.
 
 Either way the output is identical: concrete brief entries (tokens + art-direction + forbidden
 patterns), never vibes.
@@ -94,6 +101,33 @@ spec the coder traces.
 
 ---
 
+## Component sources — the owner's shelf
+
+The owner's approved libraries live in `~/.claude/style-library/COMPONENTS.md`. Read it when the
+brief is first filled; record the picks in the brief's **Component sources** block. The stack
+decides first: on a stack the shelf does not serve, the block says "none".
+
+- **One look-setting library per product.** Its mechanism comes with it; where the choice is free,
+  Base UI. Two areas that need different libraries are two products.
+- **Single-job defaults** are used silently when they fit. Depart from one only for a product need
+  it is weak at or because the project already uses another library (keep that one), and say why.
+- **Borrow-a-piece sources** supply single components restyled to brief tokens.
+- **A UI spec carries a `Parts used` list** — job · library · one-line reason — so the owner sees a
+  departure from a default before the build. Installs run on the host before dispatch; the
+  installed files go in Files-to-change.
+
+**The comparison (only when the owner picks it).** After the stack is chosen and `app-flow.md`
+lists the screens:
+1. The owner browses the look-setting libraries' own demo sites and strikes misfits. **Three
+   finalists at most.**
+2. The coder builds the product's anchor screen once per finalist, with the real library and one
+   shared mock-data file, in a throwaway folder. Never imitate a library in hand-written HTML.
+3. The owner judges side by side in browser tabs. No model screenshot review at this step.
+4. The winner's theme values seed the brief's tokens, the winning page becomes the locked anchor
+   screen, and the losing builds are deleted.
+
+---
+
 ## Design archetypes, not pages — the design→build handoff
 
 The unit of design is the *pattern*, not the page: design each archetype **once**, then the coder
@@ -121,7 +155,9 @@ card):
 shared component; an AI build inverts it — drafting a reusable piece is cheap, drift is the costly
 failure → the moment a piece *could* recur, lock it as the one definition. The locked contract must
 be **in-repo + inspectable** (local components / Storybook the coder can read) — never an imported
-lib it can't see; agents treat imported deps as "aspirational" and re-invent instead.
+lib it can't see; agents treat imported deps as "aspirational" and re-invent instead. When the
+product's look-setting library installs as a package, one local **wrapper folder** holds a thin
+shell per part the product uses; screens import the shells only, and review flags a direct import.
 
 ---
 
@@ -174,7 +210,8 @@ A generator rates its own UI as fine when it isn't, so visual defects are caught
 reviewer (evaluator-independence). After a UI build completes:
 
 1. **Capture** the rendered UI at target sizes — Web → Playwright screenshots (375/768/1024/1440);
-   Native SwiftUI → Xcode Preview captures (compact/regular), Mac-gated.
+   Native SwiftUI → Xcode Preview captures (compact/regular), Mac-gated. Open and capture each
+   on-demand inventory item `app-flow.md` lists for the screen.
 2. **Score** against the design brief: tokens honoured? forbidden patterns absent? art-direction met?
 3. **Turn findings into a focused fix-spec** for the coder. Typically 2–3 cycles.
 

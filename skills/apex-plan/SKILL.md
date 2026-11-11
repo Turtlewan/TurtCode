@@ -1,7 +1,7 @@
 ---
 skill: apex-plan
-version: 2.10.1
-last_updated: 2026-10-21
+version: 2.11.0
+last_updated: 2026-11-11
 sources:
   - docs/technical/adr/ADR-010-multi-pass-review.md
   - docs/technical/adr/ADR-011-instinct-loop-no-engine.md
@@ -217,7 +217,7 @@ the main argument for spec-everything-first is gone.
 that doesn't exist yet. That is the same test as `Batch-joinable` in the readiness gate — if a spec
 fails that, it is also too far ahead to write.
 
-**Three rules a bare model does not reliably apply:**
+**Four rules a bare model does not reliably apply:**
 
 1. **No *why* inline.** Litmus: does it change what gets built? **No** → cut it (home = an ADR).
    **Yes** → don't add the why, make the *what* explicit. One exception: the template's `## Intent`
@@ -232,6 +232,10 @@ fails that, it is also too far ahead to write.
    behaviour. This is the highest-yield spec defect and it hides behind plausible prose.
 3. **One concern layer per task** (API / DB / UI / test). Never manufacture thin tasks to raise
    worker count — spawn overhead exceeds the saving.
+4. **Pinned tests ride in the task's file list.** Before promotion, for every task, grep the
+   repository's tests for the selectors, user-visible copy and endpoint paths/shapes the task changes,
+   and list every test file that pins them in that task's file list as "adapt only the invalidated
+   assertion" entries, so the coder never hits a test outside its scope.
 
 For doc-only work, write acceptance criteria as presence/absence, version/date, cap, pointer, and
 verify-fence checks. Exact-line manifests and whole-tree hashes are reserved for High specs.
@@ -362,6 +366,8 @@ As the deterministic backstop to the prose Files-to-Change / Coverage / structur
 [ ] Batch-joinable— ## Files to Change disjoint from sibling pending specs; or each shared file
                     (types / barrel re-export / schema / route registry) owned by ONE spec, the
                     others declaring it in ## Prerequisites (ADR-029).
+[ ] Pinned tests  — per task, every test file pinning a selector, copy string or endpoint
+                    path/shape it changes is in that task's file list (rule 4 above).
 [ ] Wave plan     — present for ≥3 tasks; waves derived only from STATED dependencies.
 [ ] Permissions   — every file, command, git op, and env var the build touches is listed.
                     New packages verified: exact name (typosquat), actively maintained.

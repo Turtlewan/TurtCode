@@ -5,6 +5,8 @@ so none of them auto-loads. Always-on taste skills collide (mandated-vs-banned g
 Lucide, nested cards, infinite motion) and constraint-stacking taxes compliance (~30 pts,
 arXiv:2605.06445). Decoupled per ADR-017 / [[design-style-on-demand]].
 
+The owner's approved component libraries are a separate shelf: `COMPONENTS.md` in this folder.
+
 ## How this is used (Mechanism A)
 
 1. A project's **design brief** (`apex-ui-ux-design` owns `design-brief.md`) settles the *feel*
